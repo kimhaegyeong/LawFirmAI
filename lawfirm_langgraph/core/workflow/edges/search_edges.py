@@ -71,11 +71,16 @@ class SearchEdges:
         else:
             workflow.add_edge("expand_keywords", "prepare_search_query")
         
-        # 멀티 질의 에이전트 실행 후 문서 준비로 직접 연결
+        # 멀티 질의 에이전트 실행 후 결과 처리 노드로 연결 (병합 및 중복 제거를 위해)
         # 노드가 존재하는지 확인 (노드 이름 리스트로 확인)
         workflow_nodes = list(workflow.nodes.keys()) if hasattr(workflow, 'nodes') else []
         if "multi_query_search_agent" in workflow_nodes:
-            workflow.add_edge("multi_query_search_agent", "prepare_documents_and_terms")
+            # 🔥 multi-query 결과도 process_search_results_combined에서 처리하도록 연결
+            if "process_search_results_combined" in workflow_nodes:
+                workflow.add_edge("multi_query_search_agent", "process_search_results_combined")
+            else:
+                # process_search_results_combined가 없으면 prepare_documents_and_terms로 직접 연결
+                workflow.add_edge("multi_query_search_agent", "prepare_documents_and_terms")
         
         # 검색 쿼리 준비 후 조건부 검색 실행
         if self.should_skip_search_adaptive_func:

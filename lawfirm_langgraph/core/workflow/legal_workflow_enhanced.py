@@ -1740,10 +1740,32 @@ class EnhancedLegalQuestionWorkflow(
             start_time = time.time()
             self.logger.debug("📡 [STREAM NODE] 스트리밍 전용 답변 생성 시작 (콜백 방식)")
             
-            # 중요: retrieved_docs, query_type 등을 명시적으로 보존
-            # State reduction으로 인한 손실 방지
-            preserved_retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
-            preserved_structured_docs = self._get_state_value(state, "structured_documents", [])
+            # 🔥 개선: 검색 결과를 여러 위치에서 복구 (강화된 버전)
+            retrieved_docs = self._recover_retrieved_docs_comprehensive(state)
+            structured_docs = self._get_state_value(state, "structured_documents", [])
+            
+            # structured_docs가 없으면 retrieved_docs 사용
+            if not structured_docs and retrieved_docs:
+                structured_docs = retrieved_docs
+                self._set_state_value(state, "structured_documents", structured_docs)
+            
+            # 🔥 개선: 검색 결과가 없으면 경고 및 복구 시도
+            if not retrieved_docs or len(retrieved_docs) == 0:
+                self.logger.warning("⚠️ [STREAM NODE] retrieved_docs가 비어있음. 추가 복구 시도 중...")
+                retrieved_docs = self._recover_retrieved_docs_comprehensive(state)
+                
+                if not retrieved_docs or len(retrieved_docs) == 0:
+                    self.logger.error("❌ [STREAM NODE] retrieved_docs 복구 실패. 답변 생성이 제한될 수 있습니다.")
+            
+            # 검색 결과를 명시적으로 state에 저장 (다음 단계를 위해)
+            if retrieved_docs:
+                self._set_state_value(state, "retrieved_docs", retrieved_docs)
+                # 여러 위치에 저장
+                if "search" not in state:
+                    state["search"] = {}
+                state["search"]["retrieved_docs"] = retrieved_docs.copy()
+            
+            # 중요: query_type 보존
             preserved_query_type = self._get_state_value(state, "query_type") or (state.get("metadata", {}).get("query_type") if isinstance(state.get("metadata"), dict) else None)
             
             # 🔥 개선: state에서 콜백 추출 (스트리밍을 위해 필요)
@@ -1762,10 +1784,10 @@ class EnhancedLegalQuestionWorkflow(
             state = self.generate_answer_enhanced(state, callbacks=callbacks)
             
             # 보존된 필드 복원 (reduction으로 손실된 경우 대비)
-            if preserved_retrieved_docs and not self._get_state_value(state, "retrieved_docs"):
-                self._set_state_value(state, "retrieved_docs", preserved_retrieved_docs)
-            if preserved_structured_docs and not self._get_state_value(state, "structured_documents"):
-                self._set_state_value(state, "structured_documents", preserved_structured_docs)
+            if retrieved_docs and not self._get_state_value(state, "retrieved_docs"):
+                self._set_state_value(state, "retrieved_docs", retrieved_docs)
+            if structured_docs and not self._get_state_value(state, "structured_documents"):
+                self._set_state_value(state, "structured_documents", structured_docs)
             if preserved_query_type:
                 metadata = self._get_metadata_safely(state)
                 if "query_type" not in metadata:
@@ -3857,7 +3879,18 @@ class EnhancedLegalQuestionWorkflow(
             state: 워크플로우 상태
             callbacks: 콜백 핸들러 리스트 (스트리밍용, 선택적)
         """
+        # 🔥 개선: 검색 결과 복구를 먼저 수행
         self._recover_retrieved_docs_at_start(state)
+        
+        # 🔥 개선: 검색 결과가 없으면 추가 복구 시도
+        retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+        if not retrieved_docs or len(retrieved_docs) == 0:
+            self.logger.warning("⚠️ [GENERATE_ANSWER] retrieved_docs가 비어있음. 추가 복구 시도...")
+            retrieved_docs = self._recover_retrieved_docs_comprehensive(state)
+            
+            if retrieved_docs:
+                self._set_state_value(state, "retrieved_docs", retrieved_docs)
+        
         metadata = self._get_metadata_safely(state)
         
         # 🔥 개선: state에서 콜백 추출 (파라미터로 전달되지 않은 경우)
@@ -3869,7 +3902,10 @@ class EnhancedLegalQuestionWorkflow(
         try:
             is_retry, start_time = self._prepare_answer_generation(state)
             query_type = self._restore_query_type(state)
-            retrieved_docs = self._restore_retrieved_docs(state)
+            
+            # 🔥 개선: _restore_retrieved_docs 대신 이미 복구된 retrieved_docs 사용
+            if not retrieved_docs:
+                retrieved_docs = self._restore_retrieved_docs(state)
             
             query = self._get_state_value(state, "query", "")
             
@@ -5893,7 +5929,55 @@ class EnhancedLegalQuestionWorkflow(
         search_params = self._get_state_value(state, "search_params", {})
         extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
         
-        self.logger.debug(f"📥 [SEARCH RESULTS] 입력 데이터 - semantic: {len(semantic_results)}, keyword: {len(keyword_results)}, semantic_count: {semantic_count}, keyword_count: {keyword_count}")
+        # 🔥 디버그: state 직접 확인 (모든 가능한 위치 확인)
+        direct_semantic = state.get("semantic_results", []) if isinstance(state, dict) else []
+        direct_search_results = state.get("search", {}).get("results", []) if isinstance(state.get("search"), dict) else []
+        direct_search_semantic = state.get("search", {}).get("semantic_results", []) if isinstance(state.get("search"), dict) else []
+        direct_common_semantic = state.get("common", {}).get("search", {}).get("semantic_results", []) if isinstance(state.get("common", {}).get("search"), dict) else []
+        direct_retrieved_docs = state.get("retrieved_docs", []) if isinstance(state, dict) else []
+        
+        self.logger.info(f"📥 [SEARCH RESULTS] Debug - _get_state_value semantic: {len(semantic_results)}, direct state['semantic_results']: {len(direct_semantic)}, state['search']['results']: {len(direct_search_results)}, state['search']['semantic_results']: {len(direct_search_semantic)}, state['common']['search']['semantic_results']: {len(direct_common_semantic)}, retrieved_docs: {len(direct_retrieved_docs)}")
+        
+        # 🔥 multi-query 결과 찾기 (여러 위치에서 확인)
+        if not semantic_results:
+            # 1. state["search"]["semantic_results"] 확인
+            if direct_search_semantic:
+                semantic_results = direct_search_semantic
+                semantic_count = len(direct_search_semantic)
+                self.logger.info(f"📥 [SEARCH RESULTS] Found semantic_results in state['search']['semantic_results']: {len(semantic_results)} docs")
+            # 2. state["search"]["results"] 확인
+            elif direct_search_results:
+                # sub_query 필드가 있는 경우 multi-query 결과로 간주
+                has_sub_query = any(doc.get("sub_query") or doc.get("multi_query_source") for doc in direct_search_results if isinstance(doc, dict))
+                if has_sub_query:
+                    semantic_results = direct_search_results
+                    semantic_count = len(direct_search_results)
+                    self.logger.info(f"📥 [SEARCH RESULTS] Multi-query results found in state['search']['results']: {len(semantic_results)} docs")
+                else:
+                    # sub_query 필드가 없어도 multi-query 결과일 수 있음
+                    semantic_results = direct_search_results
+                    semantic_count = len(direct_search_results)
+                    self.logger.info(f"📥 [SEARCH RESULTS] Found results in state['search']['results'] (no sub_query): {len(semantic_results)} docs")
+            # 3. state["common"]["search"]["semantic_results"] 확인
+            elif direct_common_semantic:
+                semantic_results = direct_common_semantic
+                semantic_count = len(direct_common_semantic)
+                self.logger.info(f"📥 [SEARCH RESULTS] Found semantic_results in state['common']['search']['semantic_results']: {len(semantic_results)} docs")
+            # 4. state["semantic_results"] 확인
+            elif direct_semantic:
+                semantic_results = direct_semantic
+                semantic_count = len(direct_semantic)
+                self.logger.info(f"📥 [SEARCH RESULTS] Found semantic_results in state: {len(semantic_results)} docs")
+            # 5. retrieved_docs에서 확인 (multi-query 결과가 여기에만 있을 수 있음)
+            elif direct_retrieved_docs:
+                # sub_query 필드가 있는 경우 multi-query 결과로 간주
+                has_sub_query = any(doc.get("sub_query") or doc.get("multi_query_source") for doc in direct_retrieved_docs if isinstance(doc, dict))
+                if has_sub_query:
+                    semantic_results = direct_retrieved_docs
+                    semantic_count = len(direct_retrieved_docs)
+                    self.logger.info(f"📥 [SEARCH RESULTS] Multi-query results found in retrieved_docs: {len(semantic_results)} docs")
+        
+        self.logger.info(f"📥 [SEARCH RESULTS] 최종 입력 데이터 - semantic: {len(semantic_results)}, keyword: {len(keyword_results)}, semantic_count: {semantic_count}, keyword_count: {keyword_count}")
         
         return {
             "semantic_results": semantic_results,
@@ -8069,6 +8153,13 @@ class EnhancedLegalQuestionWorkflow(
                 )
                 # 🔥 확장된 쿼리 결과 병합 및 중복 제거 (최소 변경)
                 if semantic_results:
+                    # 디버그: sub_query 필드 확인
+                    has_sub_query = any(
+                        doc.get("sub_query") or doc.get("multi_query_source") or doc.get("expanded_query_id")
+                        for doc in semantic_results if isinstance(doc, dict)
+                    )
+                    if has_sub_query:
+                        self.logger.debug(f"🔄 [MERGE EXPANDED] Found expanded query results: {len(semantic_results)} docs with sub_query fields")
                     semantic_results = self._consolidate_expanded_query_results(semantic_results, query)
                 # 재검색 생략하고 바로 병합 진행
                 merged_docs = self._merge_and_rerank_results(
@@ -8082,6 +8173,13 @@ class EnhancedLegalQuestionWorkflow(
 
             # 🔥 확장된 쿼리 결과 병합 및 중복 제거 (최소 변경)
             if semantic_results:
+                # 디버그: sub_query 필드 확인
+                has_sub_query = any(
+                    doc.get("sub_query") or doc.get("multi_query_source") or doc.get("expanded_query_id")
+                    for doc in semantic_results if isinstance(doc, dict)
+                )
+                if has_sub_query:
+                    self.logger.debug(f"🔄 [MERGE EXPANDED] Found expanded query results: {len(semantic_results)} docs with sub_query fields")
                 semantic_results = self._consolidate_expanded_query_results(semantic_results, query)
 
             merged_docs = self._merge_and_rerank_results(
@@ -8390,6 +8488,20 @@ class EnhancedLegalQuestionWorkflow(
                 semantic_count, keyword_count, needs_retry, start_time,
                 query=query, query_type_str=query_type_str, extracted_keywords=extracted_keywords
             )
+            
+            # 🔥 개선: 검색 결과를 여러 위치에 명시적으로 저장 (reduction 방지)
+            # metadata에도 명시적으로 저장 (reduction으로부터 보호)
+            metadata = self._get_metadata_safely(state)
+            if "search" not in metadata:
+                metadata["search"] = {}
+            metadata["search"]["retrieved_docs"] = final_docs.copy() if final_docs else []
+            metadata["retrieved_docs"] = final_docs.copy() if final_docs else []
+            self._set_state_value(state, "metadata", metadata)
+            
+            # top-level에 명시적으로 저장 (가장 안전한 위치)
+            if final_docs:
+                state["retrieved_docs"] = final_docs.copy()
+                state["structured_documents"] = final_docs.copy()
 
         except Exception as e:
             # 개선 1: 예외 발생 시에도 로깅 보장
@@ -11104,35 +11216,65 @@ class EnhancedLegalQuestionWorkflow(
                     f"coverage: {coverage_score:.2f}, document references: {has_document_references}"
                 )
     
-    def _recover_retrieved_docs_at_start(self, state: LegalWorkflowState) -> None:
-        """답변 생성 시작 시 retrieved_docs 복구 (강화된 버전)"""
+    def _recover_retrieved_docs_comprehensive(self, state: LegalWorkflowState) -> List[Dict[str, Any]]:
+        """검색 결과를 모든 가능한 위치에서 복구 (강화된 버전)
+        
+        Args:
+            state: 워크플로우 상태
+            
+        Returns:
+            복구된 검색 결과 리스트
+        """
+        # 1. 최상위 레벨 확인
         retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
-        
         if retrieved_docs and len(retrieved_docs) > 0:
-            self.logger.debug(f"✅ [RESTORE] 최상위 레벨에서 복원: {len(retrieved_docs)}개")
-            return
+            self.logger.debug(f"✅ [RECOVER] 최상위 레벨에서 복구: {len(retrieved_docs)}개")
+            return retrieved_docs
         
-        self.logger.warning("⚠️ [GENERATE_ANSWER] No retrieved_docs available at start. Attempting to recover...")
-        
-        # 1. search 그룹에서 확인
+        # 2. search.retrieved_docs 확인
         if "search" in state and isinstance(state.get("search"), dict):
             search_docs = state["search"].get("retrieved_docs", [])
             if search_docs and len(search_docs) > 0:
-                self.logger.debug(f"✅ [RESTORE] search 그룹에서 복원: {len(search_docs)}개")
+                self.logger.debug(f"✅ [RECOVER] search.retrieved_docs에서 복구: {len(search_docs)}개")
                 self._set_state_value(state, "retrieved_docs", search_docs)
-                return
+                return search_docs
         
-        # 2. common 그룹에서 확인
+        # 3. search.results 확인 (multi-query 결과일 수 있음)
+        if "search" in state and isinstance(state.get("search"), dict):
+            search_results = state["search"].get("results", [])
+            if search_results and len(search_results) > 0:
+                self.logger.debug(f"✅ [RECOVER] search.results에서 복구: {len(search_results)}개")
+                self._set_state_value(state, "retrieved_docs", search_results)
+                return search_results
+        
+        # 4. common.search.retrieved_docs 확인
         if "common" in state and isinstance(state.get("common"), dict):
             common_search = state["common"].get("search", {})
             if isinstance(common_search, dict):
                 common_docs = common_search.get("retrieved_docs", [])
                 if common_docs and len(common_docs) > 0:
-                    self.logger.debug(f"✅ [RESTORE] common 그룹에서 복원: {len(common_docs)}개")
+                    self.logger.debug(f"✅ [RECOVER] common.search.retrieved_docs에서 복구: {len(common_docs)}개")
                     self._set_state_value(state, "retrieved_docs", common_docs)
-                    return
+                    return common_docs
         
-        # 3. 전역 캐시에서 확인
+        # 5. metadata.search.retrieved_docs 확인
+        metadata = self._get_metadata_safely(state)
+        if "search" in metadata and isinstance(metadata.get("search"), dict):
+            metadata_docs = metadata["search"].get("retrieved_docs", [])
+            if metadata_docs and len(metadata_docs) > 0:
+                self.logger.debug(f"✅ [RECOVER] metadata.search.retrieved_docs에서 복구: {len(metadata_docs)}개")
+                self._set_state_value(state, "retrieved_docs", metadata_docs)
+                return metadata_docs
+        
+        # 6. metadata.retrieved_docs 확인
+        if "retrieved_docs" in metadata:
+            metadata_docs = metadata["retrieved_docs"]
+            if metadata_docs and len(metadata_docs) > 0:
+                self.logger.debug(f"✅ [RECOVER] metadata.retrieved_docs에서 복구: {len(metadata_docs)}개")
+                self._set_state_value(state, "retrieved_docs", metadata_docs)
+                return metadata_docs
+        
+        # 7. 전역 캐시 확인
         try:
             from core.shared.wrappers.node_wrappers import _global_search_results_cache
             if _global_search_results_cache:
@@ -11142,36 +11284,31 @@ class EnhancedLegalQuestionWorkflow(
                     _global_search_results_cache.get("common", {}).get("search", {}).get("retrieved_docs", [])
                 )
                 if cached_docs and len(cached_docs) > 0:
-                    self.logger.debug(f"✅ [RESTORE] 전역 캐시에서 복원: {len(cached_docs)}개")
+                    self.logger.debug(f"✅ [RECOVER] 전역 캐시에서 복구: {len(cached_docs)}개")
                     self._set_state_value(state, "retrieved_docs", cached_docs)
-                    if "search" not in state:
-                        state["search"] = {}
-                    state["search"]["retrieved_docs"] = cached_docs
-                    return
-        except Exception as e:
-            self.logger.debug(f"전역 캐시 복원 실패: {e}")
+                    return cached_docs
+        except (ImportError, AttributeError) as e:
+            self.logger.debug(f"전역 캐시 복구 실패: {e}")
         
-        # 4. semantic_results + keyword_results에서 재구성
+        # 8. semantic_results + keyword_results에서 재구성
         semantic_results = self._get_state_value(state, "semantic_results", [])
         keyword_results = self._get_state_value(state, "keyword_results", [])
-        if semantic_results or keyword_results:
-            combined = (semantic_results or []) + (keyword_results or [])
-            if combined:
-                seen_ids = set()
-                unique_docs = []
-                for doc in combined:
-                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id")
-                    if doc_id and doc_id not in seen_ids:
-                        seen_ids.add(doc_id)
-                        unique_docs.append(doc)
-                
-                if unique_docs:
-                    self.logger.debug(
-                        f"✅ [RESTORE] semantic/keyword 결과에서 재구성: {len(unique_docs)}개 "
-                        f"(semantic={len(semantic_results)}, keyword={len(keyword_results)})"
-                    )
-                    self._set_state_value(state, "retrieved_docs", unique_docs)
-                    return
         
-        self.logger.warning("⚠️ [RESTORE] retrieved_docs 복원 실패")
+        if semantic_results or keyword_results:
+            combined_docs = (semantic_results or []) + (keyword_results or [])
+            if combined_docs:
+                self.logger.debug(f"✅ [RECOVER] semantic_results + keyword_results에서 재구성: {len(combined_docs)}개")
+                self._set_state_value(state, "retrieved_docs", combined_docs)
+                return combined_docs
+        
+        self.logger.warning("⚠️ [RECOVER] 모든 위치에서 retrieved_docs를 찾을 수 없음")
+        return []
+    
+    def _recover_retrieved_docs_at_start(self, state: LegalWorkflowState) -> None:
+        """답변 생성 시작 시 retrieved_docs 복구 (기존 메서드, _recover_retrieved_docs_comprehensive 사용)"""
+        retrieved_docs = self._recover_retrieved_docs_comprehensive(state)
+        if retrieved_docs:
+            self.logger.debug(f"✅ [RESTORE] retrieved_docs 복구 완료: {len(retrieved_docs)}개")
+        else:
+            self.logger.warning("⚠️ [RESTORE] retrieved_docs 복원 실패")
 

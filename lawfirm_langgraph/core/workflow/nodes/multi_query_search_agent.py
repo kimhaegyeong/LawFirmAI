@@ -615,13 +615,31 @@ class MultiQuerySearchAgentNode:
             ranked_results = self._rerank_multi_query_results(all_results, query)
             retrieved_docs = self._convert_to_retrieved_docs(ranked_results)
             
+            # 🔥 LangGraph state 업데이트: 직접 설정 (LangGraph는 반환된 state를 병합함)
+            # 최상위 레벨에 저장
             state["retrieved_docs"] = retrieved_docs
-            state["search"] = {
-                "results": ranked_results,
-                "total_results": len(ranked_results)
-            }
+            state["semantic_results"] = ranked_results
+            state["semantic_count"] = len(ranked_results)
             
+            # search 그룹에도 저장 (여러 위치에 저장하여 안전성 확보)
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["results"] = ranked_results
+            state["search"]["total_results"] = len(ranked_results)
+            state["search"]["semantic_results"] = ranked_results
+            state["search"]["semantic_count"] = len(ranked_results)
+            
+            # common 그룹에도 저장 (복구를 위해)
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["semantic_results"] = ranked_results
+            state["common"]["search"]["semantic_count"] = len(ranked_results)
+            
+            # 🔥 디버그: state 저장 확인
             self.logger.info(f"✅ [MULTI-QUERY] Direct search completed, {len(retrieved_docs)} docs")
+            self.logger.info(f"📥 [MULTI-QUERY] State 저장 확인 - semantic_results: {len(state.get('semantic_results', []))}, search.results: {len(state.get('search', {}).get('results', []))}, search.semantic_results: {len(state.get('search', {}).get('semantic_results', []))}")
             return state
             
         except Exception as e:
