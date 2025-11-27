@@ -12,12 +12,24 @@ except ImportError:
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
-from core.workflow.state.state_adapter import (
-    StateAdapter,
-    validate_state_for_node,
-)
-from core.workflow.state.state_reduction import StateReducer
-from core.workflow.node_input_output_spec import validate_node_input
+try:
+    from lawfirm_langgraph.core.workflow.state.state_adapter import (
+        StateAdapter,
+        validate_state_for_node,
+    )
+except ImportError:
+    from core.workflow.state.state_adapter import (
+        StateAdapter,
+        validate_state_for_node,
+    )
+try:
+    from lawfirm_langgraph.core.workflow.state.state_reduction import StateReducer
+except ImportError:
+    from core.workflow.state.state_reduction import StateReducer
+try:
+    from lawfirm_langgraph.core.workflow.node_input_output_spec import validate_node_input
+except ImportError:
+    from core.workflow.node_input_output_spec import validate_node_input
 
 logger = get_logger(__name__)
 

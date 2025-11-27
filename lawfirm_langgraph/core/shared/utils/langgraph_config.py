@@ -24,7 +24,6 @@ logger = get_logger(__name__)
 
 class CheckpointStorageType(Enum):
     """체크포인트 저장소 타입"""
-    SQLITE = "sqlite"
     POSTGRES = "postgres"
     REDIS = "redis"
 
@@ -34,7 +33,7 @@ class LangGraphConfig:
     """LangGraph 설정 클래스"""
 
     # 체크포인트 설정
-    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.SQLITE
+    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.POSTGRES
     checkpoint_db_path: str = "./data/checkpoints/langgraph.db"
     checkpoint_ttl: int = 3600  # 1시간
 
@@ -98,13 +97,15 @@ class LangGraphConfig:
         config.langgraph_enabled = os.getenv("LANGGRAPH_ENABLED", "true").lower() == "true"
 
         # 체크포인트 설정
-        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "sqlite")
-        if checkpoint_storage == "sqlite":
-            config.checkpoint_storage = CheckpointStorageType.SQLITE
-        elif checkpoint_storage == "postgres":
+        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "postgres")
+        if checkpoint_storage == "postgres":
             config.checkpoint_storage = CheckpointStorageType.POSTGRES
         elif checkpoint_storage == "redis":
             config.checkpoint_storage = CheckpointStorageType.REDIS
+        else:
+            # 알 수 없는 타입은 postgres로 폴백
+            logger.warning(f"Unknown checkpoint storage type: {checkpoint_storage}, using postgres")
+            config.checkpoint_storage = CheckpointStorageType.POSTGRES
 
         config.checkpoint_db_path = os.getenv("LANGGRAPH_CHECKPOINT_DB", config.checkpoint_db_path)
         config.checkpoint_ttl = int(os.getenv("CHECKPOINT_TTL", config.checkpoint_ttl))

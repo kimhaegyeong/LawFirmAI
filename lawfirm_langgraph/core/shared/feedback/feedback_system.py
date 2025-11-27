@@ -16,8 +16,20 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from enum import Enum
 from pathlib import Path
-import sqlite3
+import os
 from contextlib import contextmanager
+
+# Database adapter import
+try:
+    from core.data.db_adapter import DatabaseAdapter
+    from core.data.sql_adapter import SQLAdapter
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+        from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+    except ImportError:
+        DatabaseAdapter = None
+        SQLAdapter = None
 
 logger = get_logger(__name__)
 
@@ -55,15 +67,36 @@ class Feedback:
 class FeedbackCollector:
     """피드백 수집 클래스"""
     
-    def __init__(self, db_path: str = "data/feedback.db"):
+    def __init__(self, db_path: str = "data/feedback.db", database_url: Optional[str] = None):
         """
         피드백 수집기 초기화
         
         Args:
             db_path: 데이터베이스 경로
+            database_url: 데이터베이스 URL (우선 사용)
         """
-        self.db_path = db_path
+        # database_url 필수
+        if database_url:
+            self.database_url = database_url
+            self.db_path = None
+        else:
+            if db_path and (db_path.startswith('postgresql://') or db_path.startswith('postgres://')):
+                self.database_url = db_path
+                self.db_path = None
+            else:
+                raise ValueError(f"Invalid database path: {db_path}. PostgreSQL URL is required (e.g., postgresql://user:password@host:port/database)")
+        
+        # DatabaseAdapter 초기화 (필수)
+        if not DatabaseAdapter:
+            raise ImportError("DatabaseAdapter is required. PostgreSQL support is mandatory.")
+        
         self.logger = get_logger(__name__)
+        try:
+            self._db_adapter = DatabaseAdapter(self.database_url)
+            self.logger.info(f"DatabaseAdapter initialized: type={self._db_adapter.db_type}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize DatabaseAdapter: {e}") from e
+        
         self._init_database()
     
     def _init_database(self):
@@ -102,12 +135,10 @@ class FeedbackCollector:
     @contextmanager
     def _get_db_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
+        if not self._db_adapter:
+            raise RuntimeError("DatabaseAdapter is required")
+        with self._db_adapter.get_connection_context() as conn:
             yield conn
-        finally:
-            conn.close()
     
     def submit_feedback(self, 
                        feedback_type: FeedbackType,
@@ -230,7 +261,7 @@ class FeedbackCollector:
             self.logger.error(f"Failed to get feedback list: {e}")
             return []
     
-    def _row_to_feedback(self, row: sqlite3.Row) -> Feedback:
+    def _row_to_feedback(self, row) -> Feedback:
         """데이터베이스 행을 Feedback 객체로 변환"""
         return Feedback(
             id=row["id"],

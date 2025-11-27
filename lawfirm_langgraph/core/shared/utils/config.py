@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
+from .environment import Environment
 
 # 한글 출력을 위한 인코딩 설정
 if sys.platform == "win32":
@@ -38,9 +39,23 @@ if sys.platform == "win32":
 _warned_env_vars = set()
 
 class Config(BaseSettings):
-    """설정 관리 클래스"""
+    """
+    설정 관리 클래스 (레거시)
+    
+    ⚠️ DEPRECATED: 이 클래스는 레거시입니다.
+    새로운 코드에서는 `lawfirm_langgraph.config.app_config.Config`를 사용하세요.
+    
+    이 클래스는 하위 호환성을 위해 유지되지만, SQLite는 더 이상 지원하지 않습니다.
+    PostgreSQL만 지원합니다.
+    """
     
     model_config = ConfigDict(protected_namespaces=('settings_',))
+
+    # Environment Configuration
+    environment: Environment = Field(
+        default=Environment.DEVELOPMENT,
+        env="ENVIRONMENT"
+    )
 
     # LAW OPEN API Configuration
     law_open_api_oc: str = Field(default="{OC}", env="LAW_OPEN_API_OC")
@@ -138,16 +153,34 @@ class Config(BaseSettings):
         """설정 값 조회"""
         return getattr(self, key, default)
 
+    def is_local(self) -> bool:
+        """로컬 환경 여부"""
+        return self.environment.is_local()
+    
     def is_development(self) -> bool:
         """개발 환경 여부"""
-        return self.debug
+        return self.environment.is_development()
 
     def is_production(self) -> bool:
         """프로덕션 환경 여부"""
-        return not self.debug
+        return self.environment.is_production()
 
     def __init__(self, **kwargs):
-        """초기화 시 환경변수 파일 로딩"""
+        """
+        초기화 시 환경변수 파일 로딩
+        
+        ⚠️ DEPRECATED: 이 클래스는 레거시입니다.
+        새로운 코드에서는 `lawfirm_langgraph.config.app_config.Config`를 사용하세요.
+        """
+        import warnings
+        warnings.warn(
+            "core.shared.utils.config.Config is deprecated. "
+            "Use lawfirm_langgraph.config.app_config.Config instead. "
+            "This class will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         # lawfirm_langgraph 디렉토리의 .env 파일 찾기
         config_file_path = Path(__file__).resolve()
         # lawfirm_langgraph/core/shared/utils/config.py -> lawfirm_langgraph/
@@ -160,6 +193,15 @@ class Config(BaseSettings):
         else:
             # 현재 디렉토리의 .env 파일도 시도
             self.Settings._load_env_file(".env")
+        
+        # ENVIRONMENT 환경 변수에서 자동 설정
+        if "environment" not in kwargs:
+            kwargs["environment"] = Environment.get_current()
+        
+        # 환경에 따른 자동 설정
+        if kwargs.get("environment", Environment.DEVELOPMENT).is_debug_enabled():
+            if "debug" not in kwargs:
+                kwargs["debug"] = True
         
         # CORS_ORIGINS 환경 변수 처리 (빈 문자열이거나 잘못된 형식인 경우 기본값 사용)
         cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
@@ -193,34 +235,75 @@ class Config(BaseSettings):
         
         super().__init__(**kwargs)
 
-        # 데이터베이스 URL/경로 설정 (환경변수 우선 사용, 하드코딩 제거)
+        # 데이터베이스 URL 설정 (PostgreSQL 전용, SQLite 지원 제거)
         # 1. DATABASE_URL이 환경변수에 있으면 우선 사용
-        if self.database_url is None:
-            # 2. DATABASE_PATH가 있으면 그것을 기반으로 DATABASE_URL 생성
-            if self.database_path:
-                # 상대 경로를 절대 경로로 변환
-                db_path = self.database_path
-                if not os.path.isabs(db_path):
-                    # 상대 경로인 경우 lawfirm_langgraph 디렉토리 기준으로 처리
-                    db_path = str(lawfirm_langgraph_dir / db_path.lstrip("./"))
-                self.database_url = f"sqlite:///{db_path}"
-            else:
-                # 3. 둘 다 없으면 경고만 출력 (하드코딩된 기본값 제거)
-                if "DATABASE_URL" not in _warned_env_vars and "DATABASE_PATH" not in _warned_env_vars:
-                    _warned_env_vars.add("DATABASE_URL")
-                    _warned_env_vars.add("DATABASE_PATH")
-                    print("⚠️ DATABASE_URL 또는 DATABASE_PATH 환경변수가 설정되지 않았습니다.")
-                    print(f"   .env 파일 위치: {env_file_path}")
-                    print("   .env 파일에 DATABASE_URL 또는 DATABASE_PATH를 설정해주세요.")
-                    print("   예시: DATABASE_URL=sqlite:///./data/lawfirm_v2.db")
-                    print("   또는: DATABASE_PATH=./data/lawfirm_v2.db")
+        if not self.database_url:
+            # 2. PostgreSQL 환경변수 조합 (DATABASE_URL이 없을 때 사용)
+            # 프로젝트 루트 .env 파일의 설정을 우선 사용 (21-29줄)
+            postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+            postgres_port = os.getenv("POSTGRES_PORT", "5432")
+            postgres_db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+            postgres_user = os.getenv("POSTGRES_USER", "lawfirmai")
+            postgres_password = os.getenv("POSTGRES_PASSWORD", "local_password")
+            
+            # URL 인코딩 (특수문자 처리)
+            from urllib.parse import quote_plus
+            encoded_password = quote_plus(postgres_password)
+            
+            # PostgreSQL URL 생성
+            self.database_url = f"postgresql://{postgres_user}:{encoded_password}@{postgres_host}:{postgres_port}/{postgres_db}"
         
-        # DATABASE_URL에서 DATABASE_PATH 추출 (DATABASE_PATH가 없고 DATABASE_URL이 있는 경우)
-        if self.database_path is None and self.database_url:
-            # sqlite:/// 경로에서 파일 경로 추출
-            if self.database_url.startswith("sqlite:///"):
-                db_path = self.database_url.replace("sqlite:///", "")
-                # 절대 경로가 아니면 lawfirm_langgraph 디렉토리 기준으로 처리
-                if not os.path.isabs(db_path):
-                    db_path = str(lawfirm_langgraph_dir / db_path.lstrip("./"))
-                self.database_path = db_path
+        # SQLite URL이 설정되어 있으면 무시하고 PostgreSQL 환경변수로 조합
+        if self.database_url and self.database_url.startswith("sqlite://"):
+            import warnings
+            import logging
+            logger = logging.getLogger(__name__)
+            warnings.warn(
+                f"SQLite URL detected and will be ignored: {self.database_url}. "
+                "SQLite is no longer supported. Using PostgreSQL configuration from POSTGRES_* environment variables.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            logger.warning(
+                f"SQLite URL detected and will be ignored: {self.database_url}. "
+                "Using PostgreSQL configuration from POSTGRES_* environment variables."
+            )
+            # SQLite URL 무시
+            self.database_url = ""
+        
+        # database_url이 없거나 비어있는 경우 PostgreSQL 환경변수로 조합
+        if not self.database_url or self.database_url.strip() == "":
+            from urllib.parse import quote_plus
+            postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+            postgres_port = os.getenv("POSTGRES_PORT", "5432")
+            postgres_db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+            postgres_user = os.getenv("POSTGRES_USER", "lawfirmai")
+            postgres_password = os.getenv("POSTGRES_PASSWORD", "local_password")
+            
+            encoded_password = quote_plus(postgres_password)
+            self.database_url = f"postgresql://{postgres_user}:{encoded_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Database URL generated from POSTGRES_* environment variables: postgresql://{postgres_user}:***@{postgres_host}:{postgres_port}/{postgres_db}")
+        
+        # 최종 검증: SQLite URL이 여전히 있으면 에러
+        if self.database_url and self.database_url.startswith("sqlite://"):
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"SQLite URL detected: {self.database_url}")
+            raise ValueError(
+                "SQLite is no longer supported. Please use PostgreSQL. "
+                "Set DATABASE_URL to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database) "
+                "or configure POSTGRES_* environment variables in .env file (lines 21-29)."
+            )
+        
+        # DATABASE_PATH는 더 이상 사용하지 않음 (레거시 호환성 유지)
+        # DATABASE_PATH가 설정되어 있으면 무시하고 경고만 출력
+        if self.database_path:
+            import warnings
+            warnings.warn(
+                "DATABASE_PATH is deprecated. Use DATABASE_URL or POSTGRES_* environment variables instead. "
+                "SQLite is no longer supported. Please use PostgreSQL.",
+                DeprecationWarning,
+                stacklevel=2
+            )

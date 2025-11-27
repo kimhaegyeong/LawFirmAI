@@ -7,7 +7,7 @@ prepare_search_query, execute_searches_parallel 등의 결과를 캐싱
 import hashlib
 import time
 from typing import Dict, List, Any, Optional
-from lawfirm_langgraph.core.services.integrated_cache_system import (
+from lawfirm_langgraph.core.shared.cache.integrated_cache_system import (
     LRUCache, PersistentCache, IntegratedCacheSystem
 )
 
