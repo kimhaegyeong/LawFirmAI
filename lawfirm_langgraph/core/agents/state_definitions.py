@@ -10,12 +10,27 @@ from operator import add
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 # Configuration constants
-from .state_utils import (
-    MAX_CONVERSATION_HISTORY,
-    MAX_DOCUMENT_CONTENT_LENGTH,
-    MAX_PROCESSING_STEPS,
-    MAX_RETRIEVED_DOCS,
-)
+try:
+    from lawfirm_langgraph.core.workflow.state.state_utils import (
+        MAX_CONVERSATION_HISTORY,
+        MAX_DOCUMENT_CONTENT_LENGTH,
+        MAX_PROCESSING_STEPS,
+        MAX_RETRIEVED_DOCS,
+    )
+except ImportError:
+    try:
+        from core.workflow.state.state_utils import (
+            MAX_CONVERSATION_HISTORY,
+            MAX_DOCUMENT_CONTENT_LENGTH,
+            MAX_PROCESSING_STEPS,
+            MAX_RETRIEVED_DOCS,
+        )
+    except ImportError:
+        # Fallback: 기본값 설정
+        MAX_CONVERSATION_HISTORY = 10
+        MAX_DOCUMENT_CONTENT_LENGTH = 50000
+        MAX_PROCESSING_STEPS = 50
+        MAX_RETRIEVED_DOCS = 100
 
 # Re-export configuration constants
 __all__ = [

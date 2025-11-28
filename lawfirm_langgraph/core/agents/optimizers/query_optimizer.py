@@ -37,7 +37,7 @@ class QueryOptimizer:
             logger.warning("LegalKeywordMapper not available")
 
         try:
-            from core.services.semantic_domain_classifier import LegalTermsDatabase
+            from core.classification.classifiers.semantic_domain_classifier import LegalTermsDatabase
             self.terms_db = LegalTermsDatabase()
         except ImportError:
             self.terms_db = None

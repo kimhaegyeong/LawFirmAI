@@ -20,7 +20,7 @@ try:
 except ImportError:
     # 호환성을 위한 fallback
     try:
-        from core.services.conversation_manager import ConversationContext, ConversationTurn
+        from core.conversation.conversation_manager import ConversationContext, ConversationTurn
     except ImportError:
         ConversationContext = None
         ConversationTurn = None

@@ -165,8 +165,8 @@ class AnswerFormatterHandler:
                             QuestionType as QType,
                         )
                     except ImportError:
-                        # 호환성을 위한 fallback
-                        from core.services.question_classifier import (
+                        # 호환성을 위한 fallback (더 이상 services에 없음)
+                        from core.classification.classifiers.question_classifier import (
                             QuestionType as QType,
                         )
                     question_type_mapping = {
@@ -429,7 +429,7 @@ class AnswerFormatterHandler:
         formatted_answer = structured_answer
         if self.answer_formatter:
             try:
-                from core.services.question_classifier import (
+                from core.classification.classifiers.question_classifier import (
                     QuestionType as QType,
                 )
                 question_type_mapping = {

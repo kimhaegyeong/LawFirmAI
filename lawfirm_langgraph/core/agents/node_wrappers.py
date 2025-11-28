@@ -574,18 +574,26 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 restored_keyword = len(result["search"].get("keyword_results", []))
                                 print(f"[DEBUG] node_wrappers ({node_name}): Restored from cache - semantic={restored_semantic}, keyword={restored_keyword}")
 
-                    # 중요: execute_searches_parallel의 경우 search 그룹 보존
-                    # LangGraph는 TypedDict를 병합할 때 SearchState에 없는 필드가 손실될 수 있음
-                    # 따라서 result에 search 그룹이 있으면 항상 보존
-                    if node_name == "execute_searches_parallel":
+                    # 🔥 개선: 모든 검색 관련 노드에서 검색 결과 보존 강화
+                    # 검색 결과가 포함된 노드 목록 확장
+                    search_result_nodes = [
+                        "execute_searches_parallel",
+                        "process_search_results_combined",
+                        "multi_query_search_agent",
+                        "merge_expanded_results"
+                    ]
+                    
+                    if node_name in search_result_nodes:
                         result_search = result.get("search") if isinstance(result.get("search"), dict) else {}
                         state_search = state.get("search") if isinstance(state.get("search"), dict) else {}
+                        working_search = working_state.get("search") if isinstance(working_state.get("search"), dict) else {}
 
                         # result에 search 그룹이 있으면 확인 및 로깅
                         if result_search:
                             semantic_count = len(result_search.get("semantic_results", []))
                             keyword_count = len(result_search.get("keyword_results", []))
-                            print(f"[DEBUG] node_wrappers ({node_name}): result has search group - semantic_results={semantic_count}, keyword_results={keyword_count}")
+                            retrieved_docs_count = len(result_search.get("retrieved_docs", []))
+                            print(f"[DEBUG] node_wrappers ({node_name}): result has search group - semantic_results={semantic_count}, keyword_results={keyword_count}, retrieved_docs={retrieved_docs_count}")
                             # result에 명시적으로 보존 (LangGraph 병합 보장)
                             if "search" not in result or not isinstance(result.get("search"), dict):
                                 result["search"] = {}
@@ -593,10 +601,31 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             result["search"]["keyword_results"] = result_search.get("keyword_results", [])
                             result["search"]["semantic_count"] = result_search.get("semantic_count", semantic_count)
                             result["search"]["keyword_count"] = result_search.get("keyword_count", keyword_count)
+                            if result_search.get("retrieved_docs"):
+                                result["search"]["retrieved_docs"] = result_search.get("retrieved_docs")
+                            if result_search.get("merged_documents"):
+                                result["search"]["merged_documents"] = result_search.get("merged_documents")
                         elif state_search:
                             # state에 search 그룹이 있으면 result에도 복사
                             print(f"[DEBUG] node_wrappers ({node_name}): Copying search group from state to result")
                             result["search"] = state_search.copy()
+                        elif working_search:
+                            # working_state에 search 그룹이 있으면 result에도 복사
+                            print(f"[DEBUG] node_wrappers ({node_name}): Copying search group from working_state to result")
+                            result["search"] = working_search.copy()
+                        
+                        # 🔥 개선: 최상위 레벨에도 검색 결과 보존 (flat 구조 호환)
+                        if isinstance(result, dict):
+                            if result.get("search", {}).get("semantic_results") and not result.get("semantic_results"):
+                                result["semantic_results"] = result["search"]["semantic_results"]
+                            if result.get("search", {}).get("keyword_results") and not result.get("keyword_results"):
+                                result["keyword_results"] = result["search"]["keyword_results"]
+                            if result.get("search", {}).get("retrieved_docs") and not result.get("retrieved_docs"):
+                                result["retrieved_docs"] = result["search"]["retrieved_docs"]
+                            if result.get("search", {}).get("merged_documents") and not result.get("merged_documents"):
+                                result["merged_documents"] = result["search"]["merged_documents"]
+                            if result.get("search", {}).get("structured_documents") and not result.get("structured_documents"):
+                                result["structured_documents"] = result["search"]["structured_documents"]
 
                     # processing_steps 전역 캐시에 저장 (state reduction 손실 방지)
                     if isinstance(result, dict):

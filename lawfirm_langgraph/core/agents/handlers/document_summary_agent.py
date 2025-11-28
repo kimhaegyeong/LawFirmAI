@@ -120,7 +120,7 @@ class DocumentSummaryAgent:
         use_llm: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        배치 요약 생성
+        배치 요약 생성 (Task 패턴 사용 - 프롬프트 길이 제한 고려)
         
         Args:
             docs: 문서 리스트
@@ -131,6 +131,46 @@ class DocumentSummaryAgent:
         Returns:
             요약 결과 리스트
         """
+        # Task 패턴 사용 시도 (프롬프트 길이 제한 고려한 배치 분할 포함)
+        if use_llm and self.llm_fast:
+            try:
+                from lawfirm_langgraph.core.workflow.tasks.document_summary_tasks import (
+                    DocumentSummaryTask,
+                    SummaryStrategy
+                )
+                
+                # 배치 요약 Task 생성
+                summary_task = DocumentSummaryTask(
+                    llm_fast=self.llm_fast,
+                    logger_instance=self.logger,
+                    strategy=SummaryStrategy.BATCH,
+                    max_summary_length=max_summary_length,
+                    max_prompt_length=8000  # 프롬프트 최대 길이
+                )
+                
+                # Task 실행
+                summaries, metadata = summary_task.execute(
+                    docs=docs,
+                    query=query,
+                    use_llm=use_llm
+                )
+                
+                self.logger.info(
+                    f"[DocumentSummaryAgent] Task 배치 요약 완료: "
+                    f"문서={len(docs)}, LLM 호출={metadata.get('llm_calls', 0)}, "
+                    f"배치 수={metadata.get('batches', 1)}"
+                )
+                
+                # Task 결과를 기존 형식으로 변환
+                return summaries
+                
+            except ImportError:
+                # Task를 사용할 수 없는 경우 기존 방식으로 폴백
+                self.logger.debug("Task를 사용할 수 없습니다, 기존 방식으로 폴백")
+            except Exception as e:
+                self.logger.warning(f"Task 요약 실패: {e}, 기존 방식으로 폴백")
+        
+        # 기존 방식 (개별 요약)
         return [
             self.summarize_document(doc, query, max_summary_length, use_llm)
             for doc in docs
