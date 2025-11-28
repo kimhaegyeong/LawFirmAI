@@ -45,7 +45,13 @@ postgresql://lawfirmai:local_password@localhost:5432/lawfirmai_local
 
 이 설정은 다음 PostgreSQL 확장을 자동으로 설치합니다:
 
-### pg_trgm (한국어 텍스트 검색)
+### PGroonga (한국어 전문 검색) ⭐
+- **한국어 형태소 분석 지원**: `to_tsvector('korean', ...)` 사용 시 형태소 분석
+- **정확한 검색**: 조사, 어미 제거로 핵심 키워드 추출
+- **성능 최적화**: GIN 인덱스 및 `text_search_vector` 컬럼 지원
+- **자세한 내용**: [PGroonga 및 tsvector 사용 가이드](../../10_technical_reference/pgroonga_tsvector_guide.md)
+
+### pg_trgm (한국어 텍스트 검색, 보조)
 - Trigram 기반 텍스트 검색
 - 유사도 검색 지원
 - GIN 인덱스 지원
@@ -152,7 +158,32 @@ docker exec -it lawfirmai-postgres-local psql -U lawfirmai -d lawfirmai_local
 \dx
 
 # 또는 SQL로 확인
-SELECT * FROM pg_extension WHERE extname IN ('pg_trgm', 'vector');
+SELECT * FROM pg_extension WHERE extname IN ('pgroonga', 'pg_trgm', 'vector');
+
+# PGroonga 함수 확인
+SELECT proname FROM pg_proc WHERE proname LIKE '%pgroonga%';
+```
+
+### 한국어 텍스트 검색 테스트
+```sql
+-- PGroonga를 사용한 한국어 검색 테스트
+SELECT 
+    to_tsvector('korean', '계약을 해지할 수 있다') as tsvector_result,
+    plainto_tsquery('korean', '계약 해지') as tsquery_result;
+
+-- 실제 검색 테스트 (statutes_articles 테이블이 있는 경우)
+SELECT 
+    sa.id,
+    sa.article_content,
+    ts_rank_cd(
+        to_tsvector('korean', sa.article_content),
+        plainto_tsquery('korean', '계약 해지')
+    ) as rank_score
+FROM statutes_articles sa
+WHERE to_tsvector('korean', sa.article_content) 
+      @@ plainto_tsquery('korean', '계약 해지')
+ORDER BY rank_score DESC
+LIMIT 10;
 ```
 
 ### 데이터베이스 백업

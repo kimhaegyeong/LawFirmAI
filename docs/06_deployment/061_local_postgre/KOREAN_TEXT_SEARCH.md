@@ -2,7 +2,30 @@
 
 ## 개요
 
-LawFirmAI 프로젝트에서 PostgreSQL의 한국어 텍스트 검색 기능을 활용하기 위해 `pg_trgm` 확장을 사용합니다.
+LawFirmAI 프로젝트에서 PostgreSQL의 한국어 텍스트 검색 기능을 활용하기 위해 **PGroonga**와 **pg_trgm** 확장을 사용합니다.
+
+**PGroonga**는 한국어 형태소 분석을 지원하여 더 정확한 검색이 가능하며, Docker 환경에서는 자동으로 설치됩니다.
+
+## PGroonga 확장 (권장)
+
+**PGroonga**는 한국어 전문 검색을 위한 PostgreSQL 확장입니다.
+
+### 주요 기능
+
+- **한국어 형태소 분석**: `to_tsvector('korean', ...)` 사용 시 형태소 분석 수행
+- **정확한 검색**: 조사, 어미 제거로 핵심 키워드 추출
+- **성능 최적화**: GIN 인덱스 활용 및 `text_search_vector` 컬럼 지원
+
+### 설치
+
+**Docker 환경**: 자동으로 설치됩니다 (별도 작업 불필요)
+
+**로컬 환경**:
+```sql
+CREATE EXTENSION IF NOT EXISTS pgroonga;
+```
+
+자세한 내용은 [PGroonga 및 tsvector 사용 가이드](../../10_technical_reference/pgroonga_tsvector_guide.md)를 참조하세요.
 
 ## pg_trgm 확장
 
@@ -61,18 +84,23 @@ python scripts/migrations/init_open_law_schema.py
 
 ## 검색 예시
 
-### Full-Text Search 사용
+### Full-Text Search 사용 (PGroonga)
 
 ```sql
--- 법령명 검색
+-- 법령명 검색 (PGroonga 사용, 'korean' 설정)
 SELECT * FROM statutes
-WHERE to_tsvector('simple', law_name_kr || ' ' || COALESCE(law_abbrv, ''))
-      @@ to_tsquery('simple', '민법');
+WHERE to_tsvector('korean', law_name_kr || ' ' || COALESCE(law_abbrv, ''))
+      @@ to_tsquery('korean', '민법');
 
--- 조문 내용 검색
+-- 조문 내용 검색 (text_search_vector 컬럼 활용, 권장)
 SELECT * FROM statutes_articles
-WHERE to_tsvector('simple', article_content)
-      @@ to_tsquery('simple', '계약 & 해지');
+WHERE text_search_vector @@ plainto_tsquery('korean', '계약 해지')
+ORDER BY ts_rank_cd(text_search_vector, plainto_tsquery('korean', '계약 해지')) DESC;
+
+-- 조문 내용 검색 (text_search_vector 컬럼이 없는 경우)
+SELECT * FROM statutes_articles
+WHERE to_tsvector('korean', article_content)
+      @@ plainto_tsquery('korean', '계약 해지');
 ```
 
 ### Trigram 유사도 검색 사용
@@ -92,13 +120,13 @@ WHERE law_name_kr % '민법';  -- % 연산자는 유사도 검색
 ### 복합 검색
 
 ```sql
--- Full-Text Search와 Trigram 검색 결합
+-- Full-Text Search와 Trigram 검색 결합 (PGroonga 사용)
 SELECT * FROM statutes_articles
 WHERE (
-    to_tsvector('simple', article_content) @@ to_tsquery('simple', '계약')
+    text_search_vector @@ plainto_tsquery('korean', '계약')
     OR article_content % '계약'
 )
-ORDER BY similarity(article_content, '계약') DESC;
+ORDER BY ts_rank_cd(text_search_vector, plainto_tsquery('korean', '계약')) DESC;
 ```
 
 ## 성능 최적화
@@ -124,6 +152,16 @@ ANALYZE precedent_contents;
 
 ## 참고 자료
 
+### 프로젝트 내 문서
+
+- **[PGroonga 및 tsvector 사용 가이드](../../10_technical_reference/pgroonga_tsvector_guide.md)**: 상세한 사용 방법 및 예시
+- [tsvector 사용 현황 검토 보고서](../../10_technical_reference/tsvector_review_report.md)
+- [Rank Score 계산 가이드](../../10_technical_reference/rank_score_calculation_guide.md)
+
+### 공식 문서
+
+- [PGroonga 공식 문서](https://pgroonga.github.io/)
+- [PGroonga 설치 가이드](https://pgroonga.github.io/install/)
 - [PostgreSQL pg_trgm 문서](https://www.postgresql.org/docs/current/pgtrgm.html)
 - [PostgreSQL Full-Text Search 문서](https://www.postgresql.org/docs/current/textsearch.html)
 - [PostgreSQL GIN 인덱스 문서](https://www.postgresql.org/docs/current/gin.html)
