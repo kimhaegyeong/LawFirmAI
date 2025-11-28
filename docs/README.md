@@ -6,15 +6,17 @@
 
 LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 처리, 문서 분석, 판례 검색 등의 기능을 제공합니다.
 
-**현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI
+**현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI + OAuth2
 
 **핵심 아키텍처**: 
+- `api/` - FastAPI 서버 (라우터, 서비스, 미들웨어)
 - `lawfirm_langgraph/core/workflow/` - LangGraph 워크플로우 (메인)
 - `lawfirm_langgraph/core/search/` - 하이브리드 검색 시스템
 - `lawfirm_langgraph/core/generation/` - 답변 생성 및 검증
 - `lawfirm_langgraph/core/classification/` - 질문 분류 시스템
 - `lawfirm_langgraph/core/processing/` - 데이터 처리
 - `lawfirm_langgraph/core/conversation/` - 대화 관리
+- `lawfirm_langgraph/core/data/` - 데이터베이스 및 벡터 스토어 (연결 풀링 지원)
 
 ## 📁 문서 디렉토리
 
@@ -90,6 +92,7 @@ API 문서 및 통합 가이드
 기술 상세 참고 문서
 - [Core 모듈 가이드](10_technical_reference/core_modules_guide.md)
 - [데이터베이스 스키마](10_technical_reference/database_schema.md)
+- [PGroonga 및 tsvector 사용 가이드](10_technical_reference/pgroonga_tsvector_guide.md) ⭐
 - [LangGraph Node I/O](10_technical_reference/langgraph_node_io.md)
 - [개발 규칙](10_technical_reference/development_rules.md)
 - [인코딩 개발 규칙](10_technical_reference/encoding_development_rules.md)
