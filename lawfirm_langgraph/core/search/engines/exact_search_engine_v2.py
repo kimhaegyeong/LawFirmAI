@@ -11,8 +11,14 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
-from core.utils.config import Config
-from core.search.connectors.legal_data_connector import LegalDataConnectorV2
+try:
+    from lawfirm_langgraph.core.utils.config import Config
+except ImportError:
+    from core.utils.config import Config
+try:
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+except ImportError:
+    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
 logger = get_logger(__name__)
 

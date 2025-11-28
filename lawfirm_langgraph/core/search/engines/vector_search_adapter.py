@@ -6,6 +6,8 @@ pgvector와 FAISS를 통합 인터페이스로 제공
 """
 
 import os
+import sys
+import threading
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
@@ -90,6 +92,11 @@ class VectorSearchAdapter(ABC):
         pass
 
 
+# 🔥 개선: 연결별 등록 상태 추적 (클래스 레벨, 스레드 안전)
+_registered_connections = set()
+_connection_lock = threading.Lock()
+
+
 class PgVectorAdapter(VectorSearchAdapter):
     """pgvector 기반 벡터 검색"""
     
@@ -117,6 +124,9 @@ class PgVectorAdapter(VectorSearchAdapter):
         self.id_column = id_column
         self.vector_column = vector_column
         
+        # 🔥 개선: 연결 ID 생성 (연결 객체의 고유 식별자)
+        connection_id = id(connection)
+        
         # pgvector 등록 (안전하게 처리)
         try:
             # 연결이 닫혔는지 확인
@@ -132,17 +142,40 @@ class PgVectorAdapter(VectorSearchAdapter):
             if not has_extension:
                 raise RuntimeError("pgvector extension is not installed in the database. Run: CREATE EXTENSION IF NOT EXISTS vector;")
             
-            # register_vector 호출 (이미 등록되었을 수 있으므로 예외 처리)
-            try:
-                register_vector(connection)
-                logger.info(f"✅ PgVectorAdapter initialized: table={table_name}")
-            except Exception as reg_error:
-                # 이미 등록되었거나 다른 오류인 경우 경고만 출력
-                if "already" in str(reg_error).lower() or "registered" in str(reg_error).lower():
-                    logger.debug(f"pgvector already registered: {reg_error}")
-                else:
-                    # vector 타입을 찾을 수 없는 경우에도 계속 진행 (타입이 이미 로드되었을 수 있음)
-                    logger.warning(f"⚠️ pgvector registration warning: {reg_error}, continuing anyway")
+            # 🔥 개선: 이미 등록된 연결인지 확인 (스레드 안전)
+            with _connection_lock:
+                is_registered = connection_id in _registered_connections
+            
+            if is_registered:
+                logger.debug(f"pgvector already registered for connection {connection_id}")
+            else:
+                # register_vector 호출 (이미 등록되었을 수 있으므로 예외 처리)
+                try:
+                    register_vector(connection)
+                    # 등록 성공 시 추적에 추가
+                    with _connection_lock:
+                        _registered_connections.add(connection_id)
+                    logger.info(f"✅ PgVectorAdapter initialized: table={table_name}")
+                except Exception as reg_error:
+                    # 이미 등록되었거나 다른 오류인 경우
+                    error_str = str(reg_error).lower()
+                    if "already" in error_str or "registered" in error_str:
+                        # 이미 등록된 경우 추적에 추가
+                        with _connection_lock:
+                            _registered_connections.add(connection_id)
+                        logger.debug(f"pgvector already registered: {reg_error}")
+                    elif "vector type not found" in error_str:
+                        # 🔥 개선: vector 타입을 찾을 수 없는 경우 - 확장은 설치되어 있지만 타입 인식 실패
+                        # 실제로는 작동할 수 있으므로 디버그 레벨로 처리
+                        with _connection_lock:
+                            _registered_connections.add(connection_id)
+                        logger.debug(
+                            f"pgvector type not found (extension installed, may work anyway): {reg_error}. "
+                            f"Continuing as pgvector extension is installed."
+                        )
+                    else:
+                        # 기타 오류는 경고만 출력하고 계속 진행
+                        logger.warning(f"⚠️ pgvector registration warning: {reg_error}, continuing anyway")
         except Exception as e:
             error_msg = str(e).lower()
             if "closed" in error_msg or "extension" in error_msg:
@@ -173,7 +206,8 @@ class PgVectorAdapter(VectorSearchAdapter):
             for key, values in filters.items():
                 if isinstance(values, list):
                     if len(values) > 0:
-                        where_clauses.append(f"{key} = ANY(%s)")
+                        # PostgreSQL 배열로 변환하여 ANY 절 사용
+                        where_clauses.append(f"{key} = ANY(%s::int[])")
                         params.append(values)
                 else:
                     where_clauses.append(f"{key} = %s")

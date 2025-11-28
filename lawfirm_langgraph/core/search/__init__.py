@@ -6,7 +6,7 @@ Search Domain Module
 
 from .engines.semantic_search_engine_v2 import SemanticSearchEngineV2
 from .engines.hybrid_search_engine_v2 import HybridSearchEngineV2
-from .connectors.legal_data_connector import LegalDataConnectorV2
+from .connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from .optimizers.query_enhancer import QueryEnhancer
 
 __all__ = [

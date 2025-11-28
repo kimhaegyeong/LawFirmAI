@@ -5,6 +5,7 @@ lawfirm_v2.db의 embeddings 테이블을 사용한 벡터 검색 엔진
 """
 
 import gc
+import heapq
 import logging
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
@@ -814,6 +815,9 @@ logger = get_logger(__name__)
 
 class SemanticSearchEngineV2:
     """lawfirm_v2.db 기반 의미적 검색 엔진"""
+    
+    # 클래스 상수: relaxed_threshold 계산 비율
+    RELAXED_THRESHOLD_RATIO = float(os.getenv("RELAXED_THRESHOLD_RATIO", "0.7"))
 
     def __init__(self,
                  db_path: Optional[str] = None,
@@ -967,39 +971,45 @@ class SemanticSearchEngineV2:
             self.index_path = str(possible_paths[0])
             self.logger.info(f"No FAISS index found, will use: {self.index_path}")
         
-        # 벡터 검색 방법 선택 (pgvector 또는 FAISS)
+        # 벡터 검색 방법 선택 (pgvector만 사용하도록 강제)
         import os
         vector_search_method = os.getenv("VECTOR_SEARCH_METHOD", "").lower()
         if not vector_search_method:
             try:
                 from ..utils.config import Config
                 config = Config()
-                vector_search_method = getattr(config, 'vector_search_method', 'faiss').lower()
+                vector_search_method = getattr(config, 'vector_search_method', 'pgvector').lower()
             except Exception:
-                vector_search_method = 'faiss'  # 기본값: FAISS
+                vector_search_method = 'pgvector'  # 기본값: pgvector
         
-        # 유효한 값: 'pgvector', 'faiss', 'hybrid'
-        if vector_search_method not in ['pgvector', 'faiss', 'hybrid']:
-            self.logger.warning(f"Invalid VECTOR_SEARCH_METHOD: {vector_search_method}, using 'faiss'")
-            vector_search_method = 'faiss'
+        # pgvector만 사용하도록 강제
+        if vector_search_method not in ['pgvector']:
+            self.logger.warning(
+                f"⚠️ VECTOR_SEARCH_METHOD={vector_search_method} is not supported. "
+                f"Only 'pgvector' is allowed. Forcing to 'pgvector'."
+            )
+            vector_search_method = 'pgvector'
         
         self.vector_search_method = vector_search_method
-        self.logger.info(f"🔍 Vector search method: {self.vector_search_method}")
+        self.logger.info(f"🔍 Vector search method: {self.vector_search_method} (pgvector only)")
         
-        # pgvector 어댑터 초기화 (pgvector 또는 hybrid 사용 시)
+        # pgvector 어댑터 초기화 (pgvector만 사용)
         self.pgvector_adapter = None
-        if self.vector_search_method in ['pgvector', 'hybrid']:
-            if not PGVECTOR_AVAILABLE:
-                self.logger.warning("⚠️ pgvector not available, falling back to FAISS")
-                self.vector_search_method = 'faiss'
-            else:
-                try:
-                    # 연결 풀에서 연결 가져오기 (나중에 실제 검색 시 사용)
-                    # 여기서는 어댑터만 초기화하지 않고, 검색 시마다 생성
-                    self.logger.info("✅ pgvector will be used for vector search")
-                except Exception as e:
-                    self.logger.warning(f"⚠️ Failed to initialize pgvector adapter: {e}, falling back to FAISS")
-                    self.vector_search_method = 'faiss'
+        if not PGVECTOR_AVAILABLE:
+            raise RuntimeError(
+                "❌ pgvector is required but not available. "
+                "Please install pgvector: pip install pgvector psycopg2-binary"
+            )
+        else:
+            try:
+                # 연결 풀에서 연결 가져오기 (나중에 실제 검색 시 사용)
+                # 여기서는 어댑터만 초기화하지 않고, 검색 시마다 생성
+                self.logger.info("✅ pgvector will be used for vector search (pgvector only mode)")
+            except Exception as e:
+                raise RuntimeError(
+                    f"❌ Failed to initialize pgvector adapter: {e}. "
+                    "pgvector is required for this configuration."
+                ) from e
         
         self.index = None
         self._chunk_ids = []  # 인덱스와 chunk_id 매핑
@@ -1024,7 +1034,12 @@ class SemanticSearchEngineV2:
         self._metadata_cache = {}  # key -> {'data': metadata, 'timestamp': time.time()}
         self._metadata_cache_max_size = 1000  # 최대 캐시 크기
         self._metadata_cache_ttl = 3600  # TTL: 1시간 (초 단위)
-        self._metadata_cache_hits = 0  # 캐시 히트 수
+        self._metadata_cache_hits = 0
+        
+        # pgvector 연결 풀 워밍업 (환경 변수로 제어 가능)
+        warmup_enabled = os.getenv("PGVECTOR_WARMUP", "true").lower() == "true"
+        if warmup_enabled:
+            self._warmup_pgvector_connections()  # 캐시 히트 수
         self._metadata_cache_misses = 0  # 캐시 미스 수
         self._metadata_cache_last_cleanup = time.time()  # 마지막 정리 시간
         self._metadata_cache_cleanup_interval = 300  # 정리 간격: 5분
@@ -1206,8 +1221,13 @@ class SemanticSearchEngineV2:
         elif not db_path:
             self.logger.debug("Using PostgreSQL database (db_path is None)")
 
+        # 🔥 개선: pgvector를 사용하는 경우 FAISS 인덱스 로드 건너뛰기
+        # pgvector는 DB에서 직접 검색하므로 FAISS 인덱스가 필요 없음
+        if PGVECTOR_AVAILABLE and self.vector_search_method == 'pgvector':
+            self.logger.info("✅ Using pgvector - skipping FAISS index load during initialization")
+            self.index = None
         # FAISS 인덱스 로드 (MLflow만 사용)
-        if FAISS_AVAILABLE and self.embedder:
+        elif FAISS_AVAILABLE and self.embedder:
             if self.use_mlflow_index:
                 # MLflow 벡터 스토어 사용 (기본값)
                 if not self.mlflow_manager:
@@ -1440,10 +1460,13 @@ class SemanticSearchEngineV2:
         
         return diagnosis
 
-    def _get_active_embedding_version_id(self) -> Optional[int]:
+    def _get_active_embedding_version_id(self, data_type: Optional[str] = None) -> Optional[int]:
         """
-        활성 임베딩 버전 ID 조회
-
+        활성 임베딩 버전 ID 조회 (data_type별)
+        
+        Args:
+            data_type: 'statutes' 또는 'precedents' (None이면 첫 번째 활성 버전)
+        
         Returns:
             활성 버전 ID 또는 None
         """
@@ -1470,15 +1493,27 @@ class SemanticSearchEngineV2:
             with self._get_connection_context() as conn:
                 cursor = conn.cursor()
 
+                # 🔥 개선: data_type별로 활성 버전 조회
                 # 실제 스키마: version (integer), data_type (varchar) 컬럼 사용
                 # 005_add_embedding_version_management_postgresql.sql 스키마 기준
-                cursor.execute("""
-                    SELECT id, version, data_type, is_active
-                    FROM embedding_versions
-                    WHERE is_active = TRUE
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """)
+                if data_type:
+                    cursor.execute("""
+                        SELECT id, version, data_type, is_active
+                        FROM embedding_versions
+                        WHERE is_active = TRUE AND data_type = %s
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """, (data_type,))
+                else:
+                    # data_type이 지정되지 않은 경우 첫 번째 활성 버전 반환 (하위 호환성)
+                    cursor.execute("""
+                        SELECT id, version, data_type, is_active
+                        FROM embedding_versions
+                        WHERE is_active = TRUE
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """)
+                
                 row = cursor.fetchone()
 
                 if row:
@@ -1486,14 +1521,20 @@ class SemanticSearchEngineV2:
                     # PostgreSQL Row는 dict-like 또는 tuple로 반환됨
                     # 실제 스키마: version (integer), data_type (varchar) 컬럼 사용
                     version_num = row.get('version') if hasattr(row, 'get') else (row[1] if len(row) > 1 else version_id)
-                    data_type = row.get('data_type') if hasattr(row, 'get') else (row[2] if len(row) > 2 else None)
+                    row_data_type = row.get('data_type') if hasattr(row, 'get') else (row[2] if len(row) > 2 else None)
                     version_name = f'v{version_num}' if version_num else f'v{version_id}'
-                    if data_type:
-                        version_name = f'{version_name}-{data_type}'
-                    self.logger.info(f"✅ Active embedding version detected: ID={version_id}, version={version_num}, data_type={data_type}, name={version_name}")
+                    if row_data_type:
+                        version_name = f'{version_name}-{row_data_type}'
+                    self.logger.info(
+                        f"✅ Active embedding version detected: ID={version_id}, "
+                        f"version={version_num}, data_type={row_data_type}, name={version_name}"
+                    )
                     return version_id
                 else:
-                    self.logger.warning("⚠️  No active embedding version found in database")
+                    if data_type:
+                        self.logger.warning(f"⚠️  No active embedding version found for data_type={data_type} in database")
+                    else:
+                        self.logger.warning("⚠️  No active embedding version found in database")
                     return None
 
         except Exception as e:
@@ -1503,9 +1544,42 @@ class SemanticSearchEngineV2:
                 self.logger.warning(f"⚠️  Error getting active embedding version: {e}")
             return None
 
+    def _determine_data_type_from_source_types(self, source_types: Optional[List[str]]) -> Optional[str]:
+        """
+        source_types에서 data_type 결정
+        
+        Args:
+            source_types: source_type 목록
+        
+        Returns:
+            'statutes', 'precedents', 또는 None (혼합된 경우)
+        """
+        if not source_types:
+            return None
+        
+        # source_type -> data_type 매핑
+        statute_types = {'statute_article', 'statute_articles'}
+        precedent_types = {
+            'case_paragraph', 'precedent_content', 'case',
+            'decision_paragraph', 'interpretation_paragraph'
+        }
+        
+        has_statutes = any(st in statute_types for st in source_types)
+        has_precedents = any(st in precedent_types for st in source_types)
+        
+        if has_statutes and not has_precedents:
+            return 'statutes'
+        elif has_precedents and not has_statutes:
+            return 'precedents'
+        else:
+            # 혼합된 경우 None 반환 (모든 버전 검색)
+            return None
+    
     def _get_version_chunk_count(self, version_id: int) -> int:
         """
-        특정 버전의 청크 수 조회
+        특정 버전의 청크 수 조회 (모든 벡터 테이블 확인)
+        
+        🔥 개선: precedent_chunks만 확인하던 것을 모든 벡터 테이블을 확인하도록 수정
 
         Args:
             version_id: 임베딩 버전 ID
@@ -1524,22 +1598,69 @@ class SemanticSearchEngineV2:
 
             with self._get_connection_context() as conn:
                 cursor = conn.cursor()
-
-                cursor.execute("""
-                    SELECT COUNT(*) as count
-                    FROM precedent_chunks
-                    WHERE embedding_version = %s
-                """, (version_id,))
-                row = cursor.fetchone()
-
-                if row:
-                    return row['count'] if hasattr(row, 'get') else row[0]
-                else:
-                    return 0
+                
+                # 🔥 개선: 모든 벡터 테이블 확인
+                tables_to_check = [
+                    'precedent_chunks',
+                    'statute_embeddings',
+                    'statute_articles',
+                    'interpretation_paragraphs',
+                    'decision_paragraphs',
+                    'precedent_contents'
+                ]
+                
+                total_count = 0
+                
+                for table_name in tables_to_check:
+                    try:
+                        # 테이블 존재 확인
+                        cursor.execute("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM information_schema.tables 
+                                WHERE table_name = %s
+                            )
+                        """, (table_name,))
+                        table_exists = cursor.fetchone()
+                        if not table_exists or (isinstance(table_exists, tuple) and not table_exists[0]) or (hasattr(table_exists, 'get') and not table_exists.get('exists', False)):
+                            continue
+                        
+                        # embedding_version 컬럼 존재 확인
+                        cursor.execute("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name = %s AND column_name = 'embedding_version'
+                            )
+                        """, (table_name,))
+                        has_version_col = cursor.fetchone()
+                        has_version = (isinstance(has_version_col, tuple) and has_version_col[0]) or (hasattr(has_version_col, 'get') and has_version_col.get('exists', False))
+                        
+                        if has_version:
+                            # embedding_version으로 필터링
+                            cursor.execute(f"""
+                                SELECT COUNT(*) as count
+                                FROM {table_name}
+                                WHERE embedding_version = %s
+                            """, (version_id,))
+                        else:
+                            # embedding_version 컬럼이 없으면 전체 카운트 (버전 구분 없음)
+                            cursor.execute(f"SELECT COUNT(*) as count FROM {table_name}")
+                        
+                        row = cursor.fetchone()
+                        if row:
+                            count = row['count'] if hasattr(row, 'get') else row[0]
+                            total_count += count
+                            if count > 0:
+                                self.logger.debug(f"Found {count} chunks in {table_name} for version {version_id}")
+                    except Exception as table_error:
+                        # 테이블이 없거나 오류가 발생해도 계속 진행
+                        self.logger.debug(f"Error checking {table_name}: {table_error}")
+                        continue
+                
+                return total_count
 
         except Exception as e:
             if "no such table" in str(e).lower():
-                self.logger.debug(f"precedent_chunks table not found: {e}")
+                self.logger.debug(f"Table not found: {e}")
             else:
                 self.logger.debug(f"Error getting version chunk count: {e}")
             return 0
@@ -1671,105 +1792,312 @@ class SemanticSearchEngineV2:
     def _load_chunk_vectors(self,
                            source_types: Optional[List[str]] = None,
                            limit: Optional[int] = None,
-                           embedding_version_id: Optional[int] = None) -> Dict[int, np.ndarray]:
+                           embedding_version_id: Optional[int] = None,
+                           chunk_ids: Optional[List[int]] = None) -> Dict[int, np.ndarray]:
         """
-        precedent_chunks 테이블에서 벡터 로드 (text_chunks 대신 사용)
+        source_types에 따라 올바른 테이블에서 벡터 로드
+        
+        - statute_article → statute_embeddings 테이블
+        - case_paragraph, precedent_content → precedent_chunks 테이블
 
         Args:
-            source_types: 필터링할 source_type 목록 (None이면 전체, 현재는 precedent_chunks만 지원)
+            source_types: 필터링할 source_type 목록 (None이면 전체)
             limit: 최대 로드 개수 (None이면 전체)
             embedding_version_id: 임베딩 버전 ID 필터 (None이면 활성 버전만)
+            chunk_ids: 로드할 특정 chunk_id 목록 (None이면 전체, 성능 최적화용)
 
         Returns:
             {chunk_id: vector} 딕셔너리
         """
         try:
+            # data_type 결정
+            data_type = self._determine_data_type_from_source_types(source_types)
+            
             with self._get_connection_context() as conn:
                 cursor = conn.cursor()
-
-                # precedent_chunks에서 직접 벡터 로드 (embedding_vector 컬럼 사용)
-                query = """
-                    SELECT
-                        pc.id,
-                        pc.embedding_vector,
-                        pc.chunk_content,
-                        pc.precedent_content_id,
-                        pc.chunk_index,
-                        pc.metadata,
-                        pc.embedding_version
-                    FROM precedent_chunks pc
-                    WHERE pc.embedding_vector IS NOT NULL
-                """
-                params = []
-
-                # 버전 필터링
-                if embedding_version_id is not None:
-                    query += " AND pc.embedding_version = %s"
-                    params.append(embedding_version_id)
-                else:
-                    # 활성 버전만 조회
-                    query += """
-                        AND pc.embedding_version IN (
-                            SELECT version FROM embedding_versions WHERE is_active = TRUE AND data_type = 'precedents'
-                        )
-                    """
-
-                if limit:
-                    query += " LIMIT %s"
-                    params.append(limit)
-
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-
                 chunk_vectors = {}
-                chunk_metadata = {}  # 나중에 사용
+                chunk_metadata = {}
 
-                for row in rows:
-                    # PostgreSQL의 경우 dict-like row 또는 tuple 반환
-                    if hasattr(row, 'keys'):  # dict-like (RealDictRow)
-                        chunk_id = row['id']
-                        embedding_vector = row['embedding_vector']
-                        row_dict = dict(row)
-                    else:  # tuple
-                        chunk_id = row[0]
-                        embedding_vector = row[1]
-                        row_dict = {
-                            'chunk_content': row[2] if len(row) > 2 else None,
-                            'precedent_content_id': row[3] if len(row) > 3 else None,
-                            'chunk_index': row[4] if len(row) > 4 else None,
-                            'metadata': row[5] if len(row) > 5 else None,
-                            'embedding_version': row[6] if len(row) > 6 else None
+                # statutes 타입인 경우 statute_embeddings 테이블에서 로드
+                # ⚠️ 중요: statute_embeddings는 article_id를 키로 사용 (id가 아님)
+                if data_type == 'statutes' or (source_types and any(st in ['statute_article', 'statute_articles'] for st in source_types)):
+                    query = """
+                        SELECT
+                            se.article_id,
+                            se.embedding_vector,
+                            se.embedding_version,
+                            se.metadata
+                        FROM statute_embeddings se
+                        WHERE se.embedding_vector IS NOT NULL
+                    """
+                    params = []
+                    
+                    # 🔥 성능 최적화: chunk_ids가 제공되면 해당 ID만 로드
+                    if chunk_ids:
+                        # statute_embeddings는 article_id를 사용하므로 chunk_ids를 article_id로 사용
+                        placeholders = ','.join(['%s'] * len(chunk_ids))
+                        query += f" AND se.article_id IN ({placeholders})"
+                        params.extend(chunk_ids)
+                        self.logger.debug(f"📋 [OPTIMIZED] Loading only {len(chunk_ids)} specific chunk vectors from statute_embeddings")
+
+                    # 버전 필터링
+                    if PGVECTOR_AVAILABLE and self.vector_search_method == 'pgvector':
+                        # pgvector 사용 시 버전 필터링 건너뛰고 모든 버전 로드
+                        self.logger.debug(
+                            f"📋 [PGVECTOR] Loading chunk vectors from statute_embeddings (all versions) "
+                            f"(requested version_id={embedding_version_id}, but loading all for matching)"
+                        )
+                    elif embedding_version_id is not None:
+                        query += " AND se.embedding_version = %s"
+                        params.append(embedding_version_id)
+                    else:
+                        # 활성 버전만 조회
+                        query += """
+                            AND se.embedding_version IN (
+                                SELECT version FROM embedding_versions WHERE is_active = TRUE AND data_type = 'statutes'
+                            )
+                        """
+
+                    if limit:
+                        query += " LIMIT %s"
+                        params.append(limit)
+
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
+
+                    for row in rows:
+                        if hasattr(row, 'keys'):
+                            article_id = row['article_id']  # ⚠️ 키로 사용
+                            embedding_vector = row['embedding_vector']
+                            embedding_version = row.get('embedding_version')
+                            metadata = row.get('metadata')
+                        else:
+                            article_id = row[0]  # ⚠️ 키로 사용
+                            embedding_vector = row[1]
+                            embedding_version = row[2] if len(row) > 2 else None
+                            metadata = row[3] if len(row) > 3 else None
+
+                        if embedding_vector is None:
+                            continue
+
+                        # 벡터 파싱
+                        try:
+                            if isinstance(embedding_vector, (list, tuple)):
+                                vector = np.array(embedding_vector, dtype=np.float32)
+                            elif hasattr(embedding_vector, 'tolist'):
+                                vector = np.array(embedding_vector.tolist(), dtype=np.float32)
+                            elif isinstance(embedding_vector, str):
+                                if embedding_vector.startswith('[') and embedding_vector.endswith(']'):
+                                    import json
+                                    try:
+                                        vector_list = json.loads(embedding_vector)
+                                        vector = np.array(vector_list, dtype=np.float32)
+                                    except json.JSONDecodeError:
+                                        cleaned = embedding_vector.strip('[]')
+                                        vector_list = [float(x.strip()) for x in cleaned.split(',') if x.strip()]
+                                        vector = np.array(vector_list, dtype=np.float32)
+                                else:
+                                    vector_list = [float(x.strip()) for x in embedding_vector.split(',') if x.strip()]
+                                    vector = np.array(vector_list, dtype=np.float32)
+                            else:
+                                vector = np.array(embedding_vector, dtype=np.float32)
+                            
+                            # 차원 검증
+                            expected_dim = 768
+                            if len(vector) != expected_dim:
+                                self.logger.warning(f"Dimension mismatch for article_id {article_id}: expected {expected_dim}, got {len(vector)}")
+                                continue
+                        except (ValueError, TypeError) as parse_error:
+                            self.logger.warning(
+                                f"Failed to parse embedding_vector for article_id {article_id}: {parse_error}. "
+                                f"Type: {type(embedding_vector).__name__}"
+                            )
+                            continue
+
+                        # ⚠️ 중요: article_id를 키로 사용 (pgvector 검색 결과와 일치)
+                        chunk_vectors[article_id] = vector
+                        chunk_metadata[article_id] = {
+                            'source_type': 'statute_article',
+                            'source_id': article_id,
+                            'metadata': metadata,
+                            'embedding_version_id': embedding_version
                         }
 
-                    # pgvector VECTOR 타입을 numpy 배열로 변환
-                    if embedding_vector is None:
-                        continue
+                    self.logger.info(f"Loaded {len([k for k in chunk_vectors.keys() if chunk_metadata.get(k, {}).get('source_type') == 'statute_article'])} chunk vectors from statute_embeddings")
+
+                # precedents 타입이거나 data_type이 None인 경우 precedent_chunks 테이블에서 로드
+                if data_type != 'statutes':
+                    query = """
+                        SELECT
+                            pc.id,
+                            pc.embedding_vector,
+                            pc.chunk_content,
+                            pc.precedent_content_id,
+                            pc.chunk_index,
+                            pc.metadata,
+                            pc.embedding_version
+                        FROM precedent_chunks pc
+                        WHERE pc.embedding_vector IS NOT NULL
+                    """
+                    params = []
                     
-                    # pgvector는 이미 numpy 배열로 반환되거나, array로 변환 필요
-                    if isinstance(embedding_vector, (list, tuple)):
-                        vector = np.array(embedding_vector, dtype=np.float32)
-                    elif hasattr(embedding_vector, 'tolist'):
-                        vector = np.array(embedding_vector.tolist(), dtype=np.float32)
+                    # 🔥 성능 최적화: chunk_ids가 제공되면 해당 ID만 로드
+                    if chunk_ids:
+                        placeholders = ','.join(['%s'] * len(chunk_ids))
+                        query += f" AND pc.id IN ({placeholders})"
+                        params.extend(chunk_ids)
+                        self.logger.debug(f"📋 [OPTIMIZED] Loading only {len(chunk_ids)} specific chunk vectors from precedent_chunks")
+
+                    # 버전 필터링
+                    if PGVECTOR_AVAILABLE and self.vector_search_method == 'pgvector':
+                        # 🔥 개선: precedent_chunks는 embedding_versions.version 값을 사용
+                        # embedding_version_id가 지정된 경우, 해당 버전의 version 번호를 조회
+                        if embedding_version_id is not None:
+                            # embedding_version_id로 version 번호 조회
+                            cursor.execute("""
+                                SELECT version FROM embedding_versions WHERE id = %s
+                            """, (embedding_version_id,))
+                            version_row = cursor.fetchone()
+                            if version_row:
+                                version_num = version_row[0] if isinstance(version_row, (tuple, list)) else version_row.get('version', embedding_version_id)
+                                query += " AND pc.embedding_version = %s"
+                                params.append(version_num)
+                                self.logger.debug(
+                                    f"📋 [PGVECTOR] Loading chunk vectors from precedent_chunks "
+                                    f"with version={version_num} (from version_id={embedding_version_id})"
+                                )
+                            else:
+                                # version_id를 찾을 수 없으면 그대로 사용 (하위 호환성)
+                                query += " AND pc.embedding_version = %s"
+                                params.append(embedding_version_id)
+                                self.logger.warning(
+                                    f"⚠️ [PGVECTOR] version_id={embedding_version_id} not found, "
+                                    f"using as-is for precedent_chunks"
+                                )
+                        else:
+                            # 활성 버전 조회 후 version 번호 사용
+                            active_version_id = self._get_active_embedding_version_id(data_type='precedents')
+                            if active_version_id:
+                                # 활성 버전의 version 번호 조회
+                                cursor.execute("""
+                                    SELECT version FROM embedding_versions WHERE id = %s
+                                """, (active_version_id,))
+                                version_row = cursor.fetchone()
+                                if version_row:
+                                    version_num = version_row[0] if isinstance(version_row, (tuple, list)) else version_row.get('version', 1)
+                                    query += " AND pc.embedding_version = %s"
+                                    params.append(version_num)
+                                    self.logger.debug(
+                                        f"📋 [PGVECTOR] Loading chunk vectors from precedent_chunks "
+                                        f"with active version={version_num} (from version_id={active_version_id})"
+                                    )
+                                else:
+                                    # 활성 버전이 없으면 버전 1 사용 (하위 호환성)
+                                    query += " AND pc.embedding_version = 1"
+                                    self.logger.warning(
+                                        f"⚠️ [PGVECTOR] Active version_id={active_version_id} not found, "
+                                        f"falling back to version=1 for precedent_chunks"
+                                    )
+                            else:
+                                # 활성 버전이 없으면 버전 1 사용 (하위 호환성)
+                                query += " AND pc.embedding_version = 1"
+                                self.logger.warning(
+                                    f"⚠️ [PGVECTOR] No active version found, "
+                                    f"falling back to version=1 for precedent_chunks"
+                                )
+                    elif embedding_version_id is not None:
+                        # 🔥 개선: embedding_version_id를 version 번호로 변환
+                        cursor.execute("""
+                            SELECT version FROM embedding_versions WHERE id = %s
+                        """, (embedding_version_id,))
+                        version_row = cursor.fetchone()
+                        if version_row:
+                            version_num = version_row[0] if isinstance(version_row, (tuple, list)) else version_row.get('version', embedding_version_id)
+                            query += " AND pc.embedding_version = %s"
+                            params.append(version_num)
+                        else:
+                            query += " AND pc.embedding_version = %s"
+                            params.append(embedding_version_id)
                     else:
-                        vector = np.array(embedding_vector, dtype=np.float32)
+                        query += """
+                            AND pc.embedding_version IN (
+                                SELECT version FROM embedding_versions WHERE is_active = TRUE AND data_type = 'precedents'
+                            )
+                        """
 
-                    # 차원 검증 (기본 768)
-                    expected_dim = 768
-                    if len(vector) != expected_dim:
-                        self.logger.warning(f"Dimension mismatch for chunk {chunk_id}: expected {expected_dim}, got {len(vector)}")
-                        continue
+                    if limit:
+                        query += " LIMIT %s"
+                        params.append(limit)
 
-                    chunk_vectors[chunk_id] = vector
-                    chunk_metadata[chunk_id] = {
-                        'source_type': 'precedent_content',
-                        'text': row_dict.get('chunk_content'),
-                        'source_id': row_dict.get('precedent_content_id'),
-                        'chunk_index': row_dict.get('chunk_index'),
-                        'metadata': row_dict.get('metadata'),
-                        'embedding_version_id': row_dict.get('embedding_version')
-                    }
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
 
-                self.logger.info(f"Loaded {len(chunk_vectors)} chunk vectors from precedent_chunks")
+                    for row in rows:
+                        if hasattr(row, 'keys'):
+                            chunk_id = row['id']
+                            embedding_vector = row['embedding_vector']
+                            row_dict = dict(row)
+                        else:
+                            chunk_id = row[0]
+                            embedding_vector = row[1]
+                            row_dict = {
+                                'chunk_content': row[2] if len(row) > 2 else None,
+                                'precedent_content_id': row[3] if len(row) > 3 else None,
+                                'chunk_index': row[4] if len(row) > 4 else None,
+                                'metadata': row[5] if len(row) > 5 else None,
+                                'embedding_version': row[6] if len(row) > 6 else None
+                            }
+
+                        if embedding_vector is None:
+                            continue
+
+                        # 벡터 파싱
+                        try:
+                            if isinstance(embedding_vector, (list, tuple)):
+                                vector = np.array(embedding_vector, dtype=np.float32)
+                            elif hasattr(embedding_vector, 'tolist'):
+                                vector = np.array(embedding_vector.tolist(), dtype=np.float32)
+                            elif isinstance(embedding_vector, str):
+                                if embedding_vector.startswith('[') and embedding_vector.endswith(']'):
+                                    import json
+                                    try:
+                                        vector_list = json.loads(embedding_vector)
+                                        vector = np.array(vector_list, dtype=np.float32)
+                                    except json.JSONDecodeError:
+                                        cleaned = embedding_vector.strip('[]')
+                                        vector_list = [float(x.strip()) for x in cleaned.split(',') if x.strip()]
+                                        vector = np.array(vector_list, dtype=np.float32)
+                                else:
+                                    vector_list = [float(x.strip()) for x in embedding_vector.split(',') if x.strip()]
+                                    vector = np.array(vector_list, dtype=np.float32)
+                            else:
+                                vector = np.array(embedding_vector, dtype=np.float32)
+                            
+                            # 차원 검증
+                            expected_dim = 768
+                            if len(vector) != expected_dim:
+                                self.logger.warning(f"Dimension mismatch for chunk {chunk_id}: expected {expected_dim}, got {len(vector)}")
+                                continue
+                        except (ValueError, TypeError) as parse_error:
+                            self.logger.warning(
+                                f"Failed to parse embedding_vector for chunk {chunk_id}: {parse_error}. "
+                                f"Type: {type(embedding_vector).__name__}"
+                            )
+                            continue
+
+                        chunk_vectors[chunk_id] = vector
+                        chunk_metadata[chunk_id] = {
+                            'source_type': 'precedent_content',
+                            'text': row_dict.get('chunk_content'),
+                            'source_id': row_dict.get('precedent_content_id'),
+                            'chunk_index': row_dict.get('chunk_index'),
+                            'metadata': row_dict.get('metadata'),
+                            'embedding_version_id': row_dict.get('embedding_version')
+                        }
+
+                    precedent_count = sum(1 for meta in chunk_metadata.values() if meta.get('source_type') == 'precedent_content')
+                    if precedent_count > 0:
+                        self.logger.info(f"Loaded {precedent_count} chunk vectors from precedent_chunks")
 
                 # 메타데이터를 인스턴스 변수로 저장
                 self._chunk_metadata = chunk_metadata
@@ -1778,14 +2106,14 @@ class SemanticSearchEngineV2:
 
         except Exception as e:
             error_msg = str(e).lower()
-            if "no such table" in error_msg or "precedent_chunks" in error_msg:
+            if "no such table" in error_msg:
                 self.logger.error(
-                    f"❌ precedent_chunks table not found in database. "
+                    f"❌ Table not found in database: {e}. "
                     f"Semantic search will not work. "
-                    f"Please ensure precedent chunks are generated and stored in the database."
+                    f"Please ensure embeddings are generated and stored in the database."
                 )
             else:
-                self.logger.error(f"Error loading chunk vectors from precedent_chunks: {e}")
+                self.logger.error(f"Error loading chunk vectors: {e}")
             return {}
 
     def _normalize_query(self, query: str) -> str:
@@ -2176,36 +2504,84 @@ class SemanticSearchEngineV2:
             f"(length={len(query)}, normalized will be applied)"
         )
         
-        # 활성 버전 정보 로깅 및 데이터 존재 여부 확인
-        active_version_id = self._get_active_embedding_version_id()
-        if active_version_id:
-            self.logger.info(f"🔍 Semantic search starting - Active embedding version ID: {active_version_id}")
-            
-            # 활성 버전의 데이터 존재 여부 확인
-            chunk_count = self._get_version_chunk_count(active_version_id)
-            if chunk_count > 0:
-                self.logger.info(f"✅ Active version has {chunk_count} chunks available")
-            else:
-                self.logger.warning(f"⚠️  Active version (ID={active_version_id}) has no chunks! Searching all versions instead.")
-                active_version_id = None
-        else:
-            self.logger.warning("⚠️  No active embedding version found - using all versions")
+        # 🔥 개선: source_types에서 data_type 결정하여 적절한 활성 버전 조회
+        data_type = self._determine_data_type_from_source_types(source_types)
         
-        # embedding_version_id가 지정되지 않은 경우 활성 버전 사용
-        if embedding_version_id is None:
-            embedding_version_id = active_version_id
-        
-        if embedding_version_id:
-            # 지정된 버전의 데이터 존재 여부 확인
-            chunk_count = self._get_version_chunk_count(embedding_version_id)
-            if chunk_count > 0:
-                self.logger.info(f"📊 Using embedding version ID: {embedding_version_id} for search ({chunk_count} chunks)")
+        # 🔥 개선: pgvector를 사용하는 경우 버전 체크 및 폴백 로직
+        # pgvector는 DB에서 직접 검색하므로 버전 필터링 실패 시 모든 버전 검색
+        if PGVECTOR_AVAILABLE and self.vector_search_method == 'pgvector':
+            # pgvector를 사용하는 경우 버전 체크는 선택적으로만 수행 (로깅용)
+            # 🔥 개선: data_type별 활성 버전 조회
+            active_version_id = self._get_active_embedding_version_id(data_type=data_type)
+            if active_version_id:
+                chunk_count = self._get_version_chunk_count(active_version_id)
+                if chunk_count > 0:
+                    self.logger.info(
+                        f"🔍 Semantic search starting - Active embedding version ID: {active_version_id} "
+                        f"({chunk_count} chunks, data_type={data_type or 'mixed'})"
+                    )
+                    # embedding_version_id가 지정되지 않은 경우 활성 버전 사용 (선택적)
+                    if embedding_version_id is None:
+                        embedding_version_id = active_version_id
+                else:
+                    # 🔥 개선: 활성 버전에 벡터가 없으면 모든 버전 검색
+                    self.logger.warning(
+                        f"⚠️ Active version (ID={active_version_id}, data_type={data_type}) has no chunks, "
+                        f"falling back to search all versions"
+                    )
+                    # pgvector는 버전 필터 없이도 검색 가능하므로 None으로 설정
+                    embedding_version_id = None
             else:
-                self.logger.warning(f"⚠️  Specified version (ID={embedding_version_id}) has no chunks! Falling back to all versions.")
+                if data_type:
+                    self.logger.debug(
+                        f"⚠️ No active embedding version found for data_type={data_type}, "
+                        f"but pgvector will search all versions"
+                    )
+                else:
+                    self.logger.debug("⚠️ No active embedding version found, but pgvector will search all versions")
                 embedding_version_id = None
+        else:
+            # FAISS를 사용하는 경우 기존 버전 체크 로직 유지
+            # 🔥 개선: data_type별 활성 버전 조회
+            active_version_id = self._get_active_embedding_version_id(data_type=data_type)
+            if active_version_id:
+                self.logger.info(f"🔍 Semantic search starting - Active embedding version ID: {active_version_id}")
+                
+                # 활성 버전의 데이터 존재 여부 확인
+                chunk_count = self._get_version_chunk_count(active_version_id)
+                if chunk_count > 0:
+                    self.logger.info(f"✅ Active version has {chunk_count} chunks available")
+                else:
+                    self.logger.warning(f"⚠️  Active version (ID={active_version_id}) has no chunks! Searching all versions instead.")
+                    active_version_id = None
+            else:
+                self.logger.warning("⚠️  No active embedding version found - using all versions")
+            
+            # embedding_version_id가 지정되지 않은 경우 활성 버전 사용
+            if embedding_version_id is None:
+                embedding_version_id = active_version_id
+            
+            if embedding_version_id:
+                # 지정된 버전의 데이터 존재 여부 확인
+                chunk_count = self._get_version_chunk_count(embedding_version_id)
+                if chunk_count > 0:
+                    self.logger.info(f"📊 Using embedding version ID: {embedding_version_id} for search ({chunk_count} chunks)")
+                else:
+                    # 🔥 개선: 지정된 버전에 벡터가 없으면 모든 버전 검색
+                    self.logger.warning(
+                        f"⚠️ Specified version (ID={embedding_version_id}) has no chunks! "
+                        f"Falling back to search all versions."
+                    )
+                    embedding_version_id = None
         
+        # 🔥 개선: pgvector를 사용하는 경우 FAISS 인덱스 로드 건너뛰기
+        # pgvector는 DB에서 직접 검색하므로 FAISS 인덱스가 필요 없음
+        if PGVECTOR_AVAILABLE and self.vector_search_method == 'pgvector':
+            self.logger.debug("✅ Using pgvector - skipping FAISS index load")
+            # pgvector를 사용하는 경우 인덱스 로드 건너뛰기
+            self.index = None
         # 인덱스가 없으면 자동으로 로드 시도 (초기화 실패 시 재시도)
-        if self.index is None and FAISS_AVAILABLE and self.embedder:
+        elif self.index is None and FAISS_AVAILABLE and self.embedder:
             if self.use_mlflow_index and self.mlflow_manager:
                 try:
                     self._load_mlflow_index()
@@ -2246,11 +2622,23 @@ class SemanticSearchEngineV2:
                     )
             else:
                 # MLflow가 비활성화된 경우 DB 기반 인덱스 사용
-                self._load_faiss_index()
-                if self.index is None:
-                    raise RuntimeError(
-                        "DB 기반 인덱스 로드 실패. 인덱스 파일을 확인하거나 인덱스를 재생성하세요."
-                    )
+                # 🔥 개선: pgvector를 사용하는 경우 FAISS 인덱스 로드 건너뛰기
+                if PGVECTOR_AVAILABLE and self.vector_search_method == 'pgvector':
+                    self.logger.debug("✅ Using pgvector - skipping FAISS index load")
+                    self.index = None
+                else:
+                    self._load_faiss_index()
+                    if self.index is None:
+                        # 🔥 개선: pgvector를 사용할 수 있으면 에러 대신 경고만 출력
+                        if PGVECTOR_AVAILABLE:
+                            self.logger.warning(
+                                "⚠️ FAISS 인덱스 로드 실패. pgvector를 사용하여 검색을 계속합니다."
+                            )
+                            self.index = None
+                        else:
+                            raise RuntimeError(
+                                "DB 기반 인덱스 로드 실패. 인덱스 파일을 확인하거나 인덱스를 재생성하세요."
+                            )
         
         # Embedder 초기화 상태 확인 및 필요시 재초기화
         if not self._ensure_embedder_initialized():
@@ -2273,6 +2661,11 @@ class SemanticSearchEngineV2:
                 self.logger.error(f"Final embedder initialization attempt failed: {e}")
                 return []
 
+        # min_results 기본값 검증
+        if min_results <= 0:
+            min_results = max(1, k // 2)  # 기본값: k의 절반
+            self.logger.debug(f"min_results adjusted to {min_results} (was <= 0)")
+        
         # 검색 파라미터 동적 조정 (쿼리 복잡도 기반)
         adjusted_threshold = similarity_threshold
         if not disable_retry:
@@ -2302,7 +2695,8 @@ class SemanticSearchEngineV2:
                 filter_by_confidence=filter_by_confidence,
                 chunk_size_category=chunk_size_category,
                 deduplicate_by_group=deduplicate_by_group,
-                embedding_version_id=embedding_version_id
+                embedding_version_id=embedding_version_id,
+                search_k_multiplier=1.0
             )
             
             # 성능 모니터링 로깅
@@ -2325,45 +2719,118 @@ class SemanticSearchEngineV2:
             
             return results
 
-        # 재시도 로직: 결과가 부족하면 임계값을 낮춰 재시도
-        # 개선: 결과가 없을 때 더 공격적으로 임계값을 낮춤
-        thresholds_to_try = [
-            similarity_threshold,
-            max(0.3, similarity_threshold - 0.1),
-            max(0.2, similarity_threshold - 0.2),
-            0.15,
-            0.1,
-            0.05  # 최후의 수단: 매우 낮은 임계값
-        ]
+        # 재시도 로직 개선: 결과가 부족하면 search_k를 증가시켜 재시도
+        # 재시도 횟수: 6회 → 3회로 감소
+        # 전략 변경: 임계값 감소 → search_k 증가 (pgvector 최적화)
+        max_retries = 3
+        # search_k_multipliers를 환경 변수로 설정 가능하게
+        search_k_multipliers_str = os.getenv("SEARCH_K_MULTIPLIERS", "1.0,2.0,4.0")
+        search_k_multipliers = [float(x.strip()) for x in search_k_multipliers_str.split(",")]
+        if len(search_k_multipliers) != max_retries:
+            self.logger.warning(
+                f"⚠️ SEARCH_K_MULTIPLIERS length ({len(search_k_multipliers)}) "
+                f"does not match max_retries ({max_retries}), using default"
+            )
+            search_k_multipliers = [1.0, 2.0, 4.0]
         
-        for attempt, current_threshold in enumerate(thresholds_to_try):
+        for attempt in range(max_retries):
             try:
+                # search_k 배수 계산
+                search_k_multiplier = search_k_multipliers[attempt]
+                # k는 그대로 전달하고, search_k_multiplier만 pgvector 검색에 적용
+                # 실제 search_k는 _search_with_pgvector_weighted에서 계산됨:
+                # base_search_k = (k * 2) if max_results is None else max_results
+                # search_k = int(base_search_k * search_k_multiplier)
+                # 로깅용 effective_search_k 계산 (대략적인 값, 실제는 테이블별 설정에 따라 다를 수 있음)
+                effective_search_k = int((k * 2) * search_k_multiplier)
+                
+                self.logger.debug(
+                    f"🔍 [RETRY] Attempt {attempt + 1}/{max_retries}: "
+                    f"k={k}, search_k_multiplier={search_k_multiplier:.1f}, "
+                    f"effective_search_k≈{effective_search_k} (approximate, actual depends on table config), "
+                    f"threshold={similarity_threshold:.3f}, min_results={min_results}"
+                )
+                
                 results = self._search_with_threshold(
-                    query, k, source_types, current_threshold,
+                    query, k, source_types, similarity_threshold,  # k를 그대로 전달
                     min_ml_confidence=min_ml_confidence,
                     min_quality_score=min_quality_score,
                     filter_by_confidence=filter_by_confidence,
                     chunk_size_category=chunk_size_category,
                     deduplicate_by_group=deduplicate_by_group,
-                    embedding_version_id=embedding_version_id
+                    embedding_version_id=embedding_version_id,
+                    search_k_multiplier=search_k_multiplier
                 )
                 
-                # 최소 결과 수를 만족하면 반환
-                if len(results) >= min_results or attempt == len(thresholds_to_try) - 1:
+                # 🔥 개선: 결과가 0개인 경우 재시도 로직
+                if len(results) == 0:
+                    if attempt == 0:
+                        # 첫 번째 시도에서 0개 결과면 버전 필터링 실패 가능성 높음
+                        # 버전 필터링 실패로 인한 0개 결과는 재시도해도 의미 없으므로 건너뛰기
+                        self.logger.warning(
+                            f"⚠️ [RETRY] First attempt returned 0 results. "
+                            f"This may indicate version filtering failure or no matching data. "
+                            f"Skipping retries to save time."
+                        )
+                        break  # 재시도 건너뛰기
+                    elif attempt < max_retries - 1:
+                        # 두 번째 이후 시도에서 0개 결과면 재시도
+                        self.logger.debug(
+                            f"⚠️ [RETRY] No results found (attempt {attempt + 1}/{max_retries}), "
+                            f"retrying with increased search_k (multiplier={search_k_multipliers[attempt + 1]:.1f})..."
+                        )
+                        continue
+                
+                # 최소 결과 수를 만족하면 바로 반환 (조기 종료)
+                if len(results) >= min_results:
                     if attempt > 0:
                         self.logger.info(
-                            f"Semantic search: Found {len(results)} results "
-                            f"(threshold lowered from {similarity_threshold:.2f} to {current_threshold:.2f})"
+                            f"✅ [RETRY] Semantic search: Found {len(results)} results "
+                            f"(attempt {attempt + 1}/{max_retries}, search_k_multiplier={search_k_multiplier:.1f})"
                         )
-                    
-                    # 성능 모니터링 로깅
+                    else:
+                        self.logger.debug(
+                            f"✅ [SEARCH] Found {len(results)} results on first attempt "
+                            f"(no retry needed, search_k_multiplier={search_k_multiplier:.1f})"
+                        )
+                    # 조기 종료: 결과가 충분하면 재시도 중단
                     elapsed_time = time.time() - start_time
                     latency_ms = elapsed_time * 1000
                     avg_relevance = sum(r.get('score', 0.0) for r in results) / len(results) if results else 0.0
                     
                     self.logger.info(
                         f"⏱️  Search performance: {elapsed_time:.3f}s ({latency_ms:.1f}ms), "
-                        f"results: {len(results)}, avg_score: {avg_relevance:.3f}"
+                        f"results: {len(results)}/{k} requested, avg_score: {avg_relevance:.3f}, "
+                        f"retries: {attempt}/{max_retries}, search_k_multiplier: {search_k_multiplier:.1f}"
+                    )
+                    
+                    if self.enable_performance_monitoring and self.performance_monitor:
+                        self.performance_monitor.log_search(
+                            version=used_version,
+                            query_id=query_id,
+                            latency_ms=latency_ms,
+                            relevance_score=avg_relevance
+                        )
+                    
+                    return results
+                
+                # 마지막 시도인 경우 무조건 반환
+                if attempt == max_retries - 1:
+                    if len(results) < min_results:
+                        self.logger.warning(
+                            f"⚠️ [RETRY] Only {len(results)} results found after {max_retries} attempts "
+                            f"(min_results={min_results}, search_k_multiplier={search_k_multiplier:.1f})"
+                        )
+                    
+                    # 마지막 시도 성능 모니터링 로깅
+                    elapsed_time = time.time() - start_time
+                    latency_ms = elapsed_time * 1000
+                    avg_relevance = sum(r.get('score', 0.0) for r in results) / len(results) if results else 0.0
+                    
+                    self.logger.info(
+                        f"⏱️  Search performance: {elapsed_time:.3f}s ({latency_ms:.1f}ms), "
+                        f"results: {len(results)}/{k} requested, avg_score: {avg_relevance:.3f}, "
+                        f"retries: {attempt}/{max_retries}, search_k_multiplier: {search_k_multiplier:.1f}"
                     )
                     
                     if self.enable_performance_monitoring and self.performance_monitor:
@@ -2377,10 +2844,31 @@ class SemanticSearchEngineV2:
                     return results
                     
             except Exception as e:
-                self.logger.warning(f"Semantic search attempt {attempt + 1} failed: {e}")
-                if attempt == len(thresholds_to_try) - 1:
+                # 에러 타입에 따른 적절한 처리
+                is_transient_error = isinstance(e, (ConnectionError, TimeoutError))
+                is_value_error = isinstance(e, ValueError)
+                
+                if is_value_error:
+                    # 잘못된 파라미터는 재시도하지 않음
+                    self.logger.error(
+                        f"❌ [RETRY] Invalid parameters, stopping retries: {e}",
+                        exc_info=self.logger.isEnabledFor(logging.DEBUG)
+                    )
+                    return []
+                
+                self.logger.warning(
+                    f"⚠️ [RETRY] Semantic search attempt {attempt + 1}/{max_retries} failed: {e}",
+                    exc_info=self.logger.isEnabledFor(logging.DEBUG)
+                )
+                
+                if is_transient_error and attempt < max_retries - 1:
+                    # 일시적 오류는 재시도
+                    self.logger.info(f"🔄 Retrying due to transient error: {type(e).__name__}")
+                    continue
+                
+                if attempt == max_retries - 1:
                     # 마지막 시도 실패 시에도 빈 결과 반환
-                    self.logger.error("All semantic search attempts failed")
+                    self.logger.error("❌ All semantic search attempts failed")
                     return []
                 continue
         
@@ -2687,6 +3175,19 @@ class SemanticSearchEngineV2:
                         'weight': 1.0,
                         'min_results': 2,
                         'max_results': None
+                    },
+                    # 🔥 레거시 지원: case_paragraph는 precedent_content로 매핑
+                    'case_paragraph': {
+                        'table_name': 'precedent_chunks',
+                        'id_column': 'id',
+                        'vector_column': 'embedding_vector',
+                        'version_column': 'embedding_version',
+                        'source_type': 'precedent_content',
+                        'enabled': True,
+                        'priority': 1,
+                        'weight': 1.0,
+                        'min_results': 2,
+                        'max_results': None
                     }
                 }
         
@@ -2750,20 +3251,29 @@ class SemanticSearchEngineV2:
         k: int,
         source_types: Optional[List[str]] = None,
         embedding_version_id: Optional[int] = None,
-        similarity_threshold: float = 0.5
+        similarity_threshold: float = 0.5,
+        search_k_multiplier: float = 1.0
     ) -> List[Tuple[int, float, str]]:
         """
         가중치 기반 pgvector 검색 (각 테이블별 개별 검색 후 가중치 적용)
         
         Args:
             query_vec: 쿼리 벡터
-            k: 반환할 최대 결과 수
+            k: 반환할 최대 결과 수 (전체 검색 결과 기준)
             source_types: 필터링할 source_type 목록
             embedding_version_id: 임베딩 버전 ID
             similarity_threshold: 최소 유사도 임계값
+            search_k_multiplier: search_k 배수 (재시도 시 증가)
         
         Returns:
             [(chunk_id, weighted_similarity, source_type), ...]
+        
+        Note:
+            - 테이블별 min_results는 테이블별 최소 결과 수를 보장하기 위한 것이며,
+              전체 검색 결과의 min_results와는 별개입니다.
+            - 전체 검색 결과의 min_results는 재시도 로직(search 메서드)에서 처리됩니다.
+            - 이 메서드는 각 테이블에서 충분한 결과를 확보하려고 시도하지만,
+              최종 결과가 전체 min_results를 만족하지 않으면 재시도 로직이 작동합니다.
         """
         available_tables = self._get_available_vector_tables(source_types)
         
@@ -2772,6 +3282,8 @@ class SemanticSearchEngineV2:
             return []
         
         all_results = []
+        failed_tables_count = 0
+        failed_table_names = []
         
         with self._get_connection_context() as conn:
             # 각 테이블별로 개별 검색
@@ -2780,6 +3292,9 @@ class SemanticSearchEngineV2:
                 id_column = table_config['id_column']
                 vector_column = table_config['vector_column']
                 source_type = table_config['source_type']
+                # 🔥 레거시 정규화: case_paragraph는 precedent_content로 표시
+                if source_type == 'case_paragraph':
+                    source_type = 'precedent_content'
                 weight = table_config.get('weight', 1.0)
                 min_results = table_config.get('min_results', 0)
                 max_results = table_config.get('max_results')
@@ -2805,12 +3320,210 @@ class SemanticSearchEngineV2:
                     
                     # 필터 구성
                     filters = {}
-                    if embedding_version_id is not None:
-                        version_column = table_config.get('version_column', 'embedding_version')
-                        filters[version_column] = embedding_version_id
+                    # 🔥 개선: 테이블별 버전 전략 적용
+                    # - precedent_chunks: embedding_version=1 고정
+                    # - statute_embeddings: embedding_version IN (1, 2) (추후 변경 가능)
+                    version_column = table_config.get('version_column', 'embedding_version')
+                    
+                    # 테이블에 버전 컬럼이 있는지 확인
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute(f"""
+                            SELECT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name = %s AND column_name = %s
+                            )
+                        """, (table_name, version_column))
+                        row = cursor.fetchone()
+                        # 🔥 개선: fetchone() 결과 안전하게 처리
+                        if row:
+                            has_version_column = row[0] if isinstance(row, (tuple, list)) else row.get('exists', False)
+                        else:
+                            has_version_column = False
+                        
+                        if has_version_column:
+                            # 테이블별 버전 전략 결정
+                            if table_name == 'precedent_chunks':
+                                # 🔥 개선: precedent_chunks는 embedding_versions.version 값을 사용
+                                # precedent_chunks.embedding_version 컬럼에는 embedding_versions.version이 저장됨
+                                # embedding_version_id가 지정된 경우, 해당 버전의 version 번호를 조회
+                                if embedding_version_id is not None:
+                                    # embedding_version_id로 version 번호 조회
+                                    cursor.execute("""
+                                        SELECT version FROM embedding_versions WHERE id = %s
+                                    """, (embedding_version_id,))
+                                    version_row = cursor.fetchone()
+                                    if version_row:
+                                        version_num = version_row[0] if isinstance(version_row, (tuple, list)) else version_row.get('version', embedding_version_id)
+                                        target_versions = [version_num]
+                                        self.logger.debug(
+                                            f"📋 [PGVECTOR] {source_type}: Using version={version_num} "
+                                            f"(from version_id={embedding_version_id}) for precedent_chunks"
+                                        )
+                                    else:
+                                        # version_id를 찾을 수 없으면 그대로 사용 (하위 호환성)
+                                        target_versions = [embedding_version_id]
+                                        self.logger.warning(
+                                            f"⚠️ [PGVECTOR] {source_type}: version_id={embedding_version_id} not found, "
+                                            f"using as-is for precedent_chunks"
+                                        )
+                                else:
+                                    # 활성 버전 조회 후 version 번호 사용
+                                    active_version_id = self._get_active_embedding_version_id(data_type='precedents')
+                                    if active_version_id:
+                                        # 활성 버전의 version 번호 조회
+                                        cursor.execute("""
+                                            SELECT version FROM embedding_versions WHERE id = %s
+                                        """, (active_version_id,))
+                                        version_row = cursor.fetchone()
+                                        if version_row:
+                                            version_num = version_row[0] if isinstance(version_row, (tuple, list)) else version_row.get('version', 1)
+                                            target_versions = [version_num]
+                                            self.logger.debug(
+                                                f"📋 [PGVECTOR] {source_type}: Using active version={version_num} "
+                                                f"(from version_id={active_version_id}) for precedent_chunks"
+                                            )
+                                        else:
+                                            # 활성 버전이 없으면 버전 1 사용 (하위 호환성)
+                                            target_versions = [1]
+                                            self.logger.warning(
+                                                f"⚠️ [PGVECTOR] {source_type}: Active version_id={active_version_id} not found, "
+                                                f"falling back to version=1 for precedent_chunks"
+                                            )
+                                    else:
+                                        # 활성 버전이 없으면 버전 1 사용 (하위 호환성)
+                                        target_versions = [1]
+                                        self.logger.warning(
+                                            f"⚠️ [PGVECTOR] {source_type}: No active version found, "
+                                            f"falling back to version=1 for precedent_chunks"
+                                        )
+                            elif table_name == 'statute_embeddings':
+                                # statute_embeddings는 embedding_version IN (1, 2)
+                                # 추후 변경 가능하도록 설정에서 가져올 수 있음
+                                target_versions = [1, 2]
+                                self.logger.debug(
+                                    f"📋 [PGVECTOR] {source_type}: Using multi-version strategy "
+                                    f"(statute_embeddings: version IN (1, 2))"
+                                )
+                            else:
+                                # 기타 테이블은 embedding_version_id 사용 (지정된 경우)
+                                if embedding_version_id is not None:
+                                    target_versions = [embedding_version_id]
+                                else:
+                                    target_versions = None
+                            
+                            # 버전 필터 적용
+                            if target_versions:
+                                # 각 버전의 데이터 존재 여부 확인
+                                available_versions = []
+                                for version in target_versions:
+                                    cursor.execute(f"""
+                                        SELECT COUNT(*) FROM {table_name}
+                                        WHERE {version_column} = %s AND {vector_column} IS NOT NULL
+                                    """, (version,))
+                                    row = cursor.fetchone()
+                                    if row:
+                                        version_data_count = row[0] if isinstance(row, (tuple, list)) else row.get('count', 0)
+                                    else:
+                                        version_data_count = 0
+                                    
+                                    if version_data_count > 0:
+                                        available_versions.append(version)
+                                
+                                if available_versions:
+                                    if len(available_versions) == 1:
+                                        # 단일 버전인 경우
+                                        filters[version_column] = available_versions[0]
+                                        # 해당 버전의 데이터 수 확인
+                                        cursor.execute(f"""
+                                            SELECT COUNT(*) FROM {table_name}
+                                            WHERE {version_column} = %s AND {vector_column} IS NOT NULL
+                                        """, (available_versions[0],))
+                                        row = cursor.fetchone()
+                                        version_count = row[0] if isinstance(row, (tuple, list)) else row.get('count', 0) if row else 0
+                                        self.logger.debug(
+                                            f"✅ [PGVECTOR] {source_type}: Using version filter "
+                                            f"(version={available_versions[0]}, count={version_count})"
+                                        )
+                                    else:
+                                        # 여러 버전인 경우 IN 절 사용
+                                        filters[version_column] = available_versions
+                                        # 각 버전별 데이터 수 확인
+                                        version_counts = {}
+                                        for version in available_versions:
+                                            cursor.execute(f"""
+                                                SELECT COUNT(*) FROM {table_name}
+                                                WHERE {version_column} = %s AND {vector_column} IS NOT NULL
+                                            """, (version,))
+                                            row = cursor.fetchone()
+                                            version_counts[version] = row[0] if isinstance(row, (tuple, list)) else row.get('count', 0) if row else 0
+                                        total_count = sum(version_counts.values())
+                                        self.logger.debug(
+                                            f"✅ [PGVECTOR] {source_type}: Using multi-version filter "
+                                            f"(versions={available_versions}, counts={version_counts}, total={total_count})"
+                                        )
+                                else:
+                                    # 사용 가능한 버전이 없으면 모든 버전 검색
+                                    self.logger.warning(
+                                        f"⚠️ [PGVECTOR] {source_type}: No vectors found for target versions {target_versions}, "
+                                        f"searching all versions"
+                                    )
+                            elif embedding_version_id is not None:
+                                # embedding_version_id가 지정된 경우 기존 로직 사용
+                                cursor.execute(f"""
+                                    SELECT COUNT(*) FROM {table_name}
+                                    WHERE {version_column} = %s AND {vector_column} IS NOT NULL
+                                """, (embedding_version_id,))
+                                row = cursor.fetchone()
+                                if row:
+                                    version_data_count = row[0] if isinstance(row, (tuple, list)) else row.get('count', 0)
+                                else:
+                                    version_data_count = 0
+                                
+                                if version_data_count > 0:
+                                    filters[version_column] = embedding_version_id
+                                    self.logger.debug(
+                                        f"✅ [PGVECTOR] {source_type}: Using version filter "
+                                        f"(version_id={embedding_version_id}, count={version_data_count})"
+                                    )
+                                else:
+                                    self.logger.warning(
+                                        f"⚠️ [PGVECTOR] {source_type}: No vectors found for version {embedding_version_id}, "
+                                        f"searching all versions"
+                                    )
+                            else:
+                                # 버전 필터 없음 (모든 버전 검색)
+                                self.logger.debug(
+                                    f"📋 [PGVECTOR] {source_type}: No version filter, searching all versions"
+                                )
+                        else:
+                            # 버전 컬럼이 없으면 필터 제거
+                            self.logger.debug(
+                                f"⚠️ [PGVECTOR] {source_type}: No version column found, "
+                                f"searching all versions"
+                            )
+                    except Exception as e:
+                        # 오류 발생 시 필터 제거하고 계속 진행
+                        self.logger.warning(
+                            f"⚠️ [PGVECTOR] {source_type}: Error checking version data: {e}, "
+                            f"searching all versions"
+                        )
                     
                     # 각 테이블별 검색 (더 많은 후보 검색)
-                    search_k = (k * 2) if max_results is None else max_results
+                    # search_k_multiplier를 적용하여 재시도 시 더 많은 후보 검색
+                    # 재시도 시에는 max_results를 무시하고 search_k_multiplier 우선 적용
+                    if search_k_multiplier > 1.0:
+                        # 재시도 중이면 max_results 무시하고 더 많은 후보 검색
+                        # 재시도 효과를 극대화하기 위해 max_results 제한을 우회
+                        base_search_k = k * 2
+                        self.logger.debug(
+                            f"🔄 [RETRY] Ignoring max_results={max_results} for retry "
+                            f"(search_k_multiplier={search_k_multiplier:.1f})"
+                        )
+                    else:
+                        # 첫 번째 시도만 max_results 적용
+                        base_search_k = (k * 2) if max_results is None else max_results
+                    search_k = int(base_search_k * search_k_multiplier)
                     table_results = adapter.search(
                         query_vector=query_vec,
                         limit=search_k,
@@ -2820,7 +3533,9 @@ class SemanticSearchEngineV2:
                     self.logger.debug(f"🔍 [PGVECTOR] {source_type}: Found {len(table_results)} candidates")
                     
                     # 거리를 유사도로 변환하고 가중치 적용
+                    # 성능 최적화: O(1) 중복 체크를 위한 set 사용
                     table_weighted_results = []
+                    seen_chunk_ids = set()  # O(1) 중복 체크를 위한 set
                     distances_sample = []
                     similarities_sample = []
                     
@@ -2836,9 +3551,12 @@ class SemanticSearchEngineV2:
                             similarities_sample.append(similarity)
                         
                         if similarity >= similarity_threshold:
-                            # 가중치 적용: weighted_similarity = similarity * weight
-                            weighted_similarity = similarity * weight
-                            table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                            # 중복 체크 (O(1) 복잡도)
+                            if chunk_id not in seen_chunk_ids:
+                                # 가중치 적용: weighted_similarity = similarity * weight
+                                weighted_similarity = similarity * weight
+                                table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                                seen_chunk_ids.add(chunk_id)
                     
                     # 디버깅: 거리와 유사도 샘플 로깅
                     if distances_sample:
@@ -2852,20 +3570,25 @@ class SemanticSearchEngineV2:
                     # 원본 유사도 기준 정렬 (가중치 적용 전)
                     table_weighted_results.sort(key=lambda x: x[2], reverse=True)
                     
-                    # 최소 결과 수 보장
+                    # 최소 결과 수 보장 (테이블별 min_results)
+                    # 주의: 이는 테이블별 최소 결과 수이며, 전체 검색 결과의 min_results와는 별개
+                    # 전체 검색 결과의 min_results는 재시도 로직에서 처리됨
                     if min_results > 0 and len(table_weighted_results) < min_results:
                         # 임계값을 점진적으로 낮춰서 더 많은 결과 확보
-                        # 1차: 70% 임계값
-                        relaxed_threshold = similarity_threshold * 0.7
+                        # 1차: RELAXED_THRESHOLD_RATIO 비율로 임계값 완화
+                        relaxed_threshold = similarity_threshold * self.RELAXED_THRESHOLD_RATIO
                         for chunk_id, distance in table_results:
+                            # 중복 체크 (O(1) 복잡도)
+                            if chunk_id in seen_chunk_ids:
+                                continue
+                            
                             similarity = 1.0 - float(distance)
                             if similarity >= relaxed_threshold:
                                 weighted_similarity = similarity * weight
-                                # 중복 체크
-                                if not any(r[0] == chunk_id for r in table_weighted_results):
-                                    table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
-                                    if len(table_weighted_results) >= min_results:
-                                        break
+                                table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                                seen_chunk_ids.add(chunk_id)
+                                if len(table_weighted_results) >= min_results:
+                                    break
                         
                         # 2차: 여전히 부족하면 상위 N개 강제 포함 (임계값 무시)
                         if len(table_weighted_results) < min_results:
@@ -2875,13 +3598,16 @@ class SemanticSearchEngineV2:
                             )
                             # 상위 min_results개를 강제로 포함 (임계값 무시)
                             for chunk_id, distance in table_results[:min_results * 2]:  # 더 많은 후보 확인
+                                # 중복 체크 (O(1) 복잡도)
+                                if chunk_id in seen_chunk_ids:
+                                    continue
+                                
                                 similarity = 1.0 - float(distance)
                                 weighted_similarity = similarity * weight
-                                # 중복 체크
-                                if not any(r[0] == chunk_id for r in table_weighted_results):
-                                    table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
-                                    if len(table_weighted_results) >= min_results:
-                                        break
+                                table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                                seen_chunk_ids.add(chunk_id)
+                                if len(table_weighted_results) >= min_results:
+                                    break
                     
                     # max_results 제한 적용
                     if max_results:
@@ -2894,14 +3620,30 @@ class SemanticSearchEngineV2:
                     )
                     
                 except Exception as e:
-                    self.logger.warning(f"⚠️ [PGVECTOR] Failed to search {table_name}: {e}")
+                    failed_tables_count += 1
+                    failed_table_names.append(table_name)
+                    self.logger.warning(
+                        f"⚠️ [PGVECTOR] Failed to search {table_name}: {e}",
+                        exc_info=self.logger.isEnabledFor(logging.DEBUG)
+                    )
                     continue
         
-        # 가중 유사도 기준으로 전체 정렬
-        all_results.sort(key=lambda x: x[1], reverse=True)  # weighted_similarity 기준
+        # 테이블별 검색 실패 통계 로깅
+        if failed_tables_count > 0:
+            self.logger.warning(
+                f"⚠️ [PGVECTOR] {failed_tables_count}/{len(available_tables)} table(s) failed: {failed_table_names}"
+            )
         
-        # 상위 k개 선택
-        final_results = all_results[:k]
+        # 가중 유사도 기준으로 상위 k개 선택 (성능 최적화: 부분 정렬)
+        # heapq.nlargest를 사용하여 전체 정렬 대신 상위 k개만 선택
+        # 시간 복잡도: O(n log k) vs O(n log n) (n=all_results 수, k=요청된 결과 수)
+        if len(all_results) <= k:
+            # 결과가 k개 이하면 정렬만 수행
+            all_results.sort(key=lambda x: x[1], reverse=True)
+            final_results = all_results
+        else:
+            # 결과가 k개보다 많으면 heapq.nlargest 사용 (더 효율적)
+            final_results = heapq.nlargest(k, all_results, key=lambda x: x[1])
         
         self.logger.info(
             f"🔍 [PGVECTOR WEIGHTED] Total {len(final_results)} results from {len(available_tables)} tables"
@@ -2925,7 +3667,8 @@ class SemanticSearchEngineV2:
                                filter_by_confidence: bool = False,
                                chunk_size_category: Optional[str] = None,
                                deduplicate_by_group: bool = True,
-                               embedding_version_id: Optional[int] = None) -> List[Dict[str, Any]]:
+                               embedding_version_id: Optional[int] = None,
+                               search_k_multiplier: float = 1.0) -> List[Dict[str, Any]]:
         """
         임계값을 사용한 실제 검색 수행
         
@@ -2940,6 +3683,7 @@ class SemanticSearchEngineV2:
             chunk_size_category: 청크 크기 카테고리 필터
             deduplicate_by_group: 그룹별 중복 제거 활성화
             embedding_version_id: 임베딩 버전 ID 필터
+            search_k_multiplier: search_k 배수 (재시도 시 증가)
         """
         # 빈 쿼리 검증 추가
         if not query or not query.strip():
@@ -2984,42 +3728,67 @@ class SemanticSearchEngineV2:
             search_start = time.time()
             similarities = []
             
-            # pgvector 검색 (가중치 기반 개별 검색)
-            if self.vector_search_method in ['pgvector', 'hybrid'] and PGVECTOR_AVAILABLE:
-                try:
-                    self.logger.info(f"🔍 [PGVECTOR SEARCH] Using weighted pgvector search")
-                    
-                    # 가중치 기반 검색 실행
-                    pgvector_results = self._search_with_pgvector_weighted(
-                        query_vec=query_vec,
-                        k=k,
+            # pgvector 검색 (가중치 기반 개별 검색) - pgvector만 사용
+            if not PGVECTOR_AVAILABLE:
+                self.logger.error("❌ [PGVECTOR] pgvector is not available. Cannot perform search.")
+                return []
+            
+            try:
+                self.logger.info(f"🔍 [PGVECTOR SEARCH] Using weighted pgvector search (pgvector only mode)")
+                
+                # 가중치 기반 검색 실행 (search_k_multiplier 적용)
+                pgvector_results = self._search_with_pgvector_weighted(
+                    query_vec=query_vec,
+                    k=k,
+                    source_types=source_types,
+                    embedding_version_id=embedding_version_id,
+                    similarity_threshold=similarity_threshold,
+                    search_k_multiplier=search_k_multiplier
+                )
+                
+                # 결과 변환 (가중 유사도 사용)
+                for chunk_id, weighted_similarity, source_type in pgvector_results:
+                    similarities.append((chunk_id, weighted_similarity))
+                    # source_type은 나중에 메타데이터 조회 시 사용
+                
+                # 🔥 개선: pgvector 검색 후 결과 후처리를 위해 필요한 벡터만 로드
+                # 결과 후처리 단계에서 벡터를 사용하므로 미리 로드
+                if similarities and len(similarities) > 0:
+                    # 🔥 성능 최적화: 검색 결과의 chunk_id만 로드
+                    result_chunk_ids = [chunk_id for chunk_id, _ in similarities]
+                    self.logger.debug(
+                        f"📋 [OPTIMIZED] Loading only {len(result_chunk_ids)} chunk vectors "
+                        f"for result processing (pgvector search completed)"
+                    )
+                    result_chunk_vectors = self._load_chunk_vectors(
                         source_types=source_types,
                         embedding_version_id=embedding_version_id,
-                        similarity_threshold=similarity_threshold
+                        chunk_ids=result_chunk_ids  # 🔥 검색 결과의 chunk_id만 전달
                     )
-                    
-                    # 결과 변환 (가중 유사도 사용)
-                    for chunk_id, weighted_similarity, source_type in pgvector_results:
-                        similarities.append((chunk_id, weighted_similarity))
-                        # source_type은 나중에 메타데이터 조회 시 사용
-                    
-                    step_times['pgvector_search'] = time.time() - search_start
-                    self.logger.info(
-                        f"⏱️  PgVector weighted search: {step_times['pgvector_search']:.3f}s, "
-                        f"{len(similarities)} results"
-                    )
-                    
-                except Exception as e:
-                    self.logger.error(f"❌ [PGVECTOR] Search error: {e}", exc_info=True)
-                    if self.vector_search_method == 'pgvector':
-                        # pgvector 전용 모드에서 실패하면 빈 결과 반환
-                        return []
-                    # hybrid 모드에서는 FAISS로 폴백
-                    self.logger.warning("⚠️ [PGVECTOR] Falling back to FAISS in hybrid mode")
-                    similarities = []
+                    # 인스턴스 변수에 저장 (결과 후처리에서 사용)
+                    if not hasattr(self, '_chunk_vectors'):
+                        self._chunk_vectors = {}
+                    self._chunk_vectors.update(result_chunk_vectors)
+                
+                step_times['pgvector_search'] = time.time() - search_start
+                self.logger.info(
+                    f"⏱️  PgVector weighted search: {step_times['pgvector_search']:.3f}s, "
+                    f"{len(similarities)} results"
+                )
+                
+            except Exception as e:
+                self.logger.error(f"❌ [PGVECTOR] Search error: {e}", exc_info=True)
+                # pgvector 전용 모드에서 실패하면 빈 결과 반환
+                return []
             
-            # FAISS 검색 (hybrid 모드에서는 pgvector 결과와 병합)
-            if self.vector_search_method in ['faiss', 'hybrid'] and FAISS_AVAILABLE and self.index is not None:
+            # 🔥 pgvector 검색 완료 후 similarities가 있으면 벡터 검색 단계 건너뛰기
+            # (이미 pgvector 검색에서 필요한 벡터를 로드했으므로)
+            if similarities and len(similarities) > 0:
+                step_times['vector_search'] = time.time() - search_start
+                self.logger.debug(f"⏱️  Vector search (pgvector): {step_times['vector_search']:.3f}s (already loaded)")
+            # FAISS 검색은 건너뜀 (pgvector만 사용)
+            # 기존 FAISS 검색 코드는 주석 처리
+            elif False:  # FAISS 검색 비활성화 (pgvector만 사용)
                 # nprobe 동적 튜닝 (k 값에 따라 조정)
                 # FAISS 인덱스 검색 (빠른 근사 검색)
                 query_vec_np = np.array([query_vec]).astype('float32')
@@ -3517,32 +4286,33 @@ class SemanticSearchEngineV2:
                     metadata = self._chunk_metadata[chunk_id]
                     self.logger.debug(f"Found metadata for chunk_id={chunk_id}")
                     text = metadata.get('content', '') or metadata.get('text', '')
-                    source_type = metadata.get('type') or metadata.get('source_type', '')
+                    # 🔥 source_type 제거: type 필드만 사용
+                    doc_type = metadata.get('type') or metadata.get('source_type', '')
                     
-                    # source_type이 없으면 메타데이터에서 추론
-                    if not source_type:
+                    # type이 없으면 메타데이터에서 추론
+                    if not doc_type:
                         if metadata.get('case_id') or metadata.get('case_number') or metadata.get('doc_id'):
-                            source_type = 'case_paragraph'
+                            doc_type = 'precedent_content'  # 🔥 레거시: case_paragraph → precedent_content
                         elif metadata.get('law_id') or metadata.get('law_name') or metadata.get('article_number'):
-                            source_type = 'statute_article'
+                            doc_type = 'statute_article'
                         elif metadata.get('decision_id') or metadata.get('org'):
-                            source_type = 'decision_paragraph'
+                            doc_type = 'decision_paragraph'
                         elif metadata.get('interpretation_id'):
-                            source_type = 'interpretation_paragraph'
+                            doc_type = 'interpretation_paragraph'
                         
-                        # source_meta에 모든 메타데이터 포함
+                        # source_meta에 모든 메타데이터 포함 (type으로 저장)
                         source_meta = metadata.copy()
-                        source_meta['source_type'] = source_type
+                        source_meta['type'] = doc_type
                         # source_id 추출: 실제 DB ID를 찾기 위해 precedent_chunks에서 조회
                         # 외부 인덱스 메타데이터에는 case_number, doc_id 등이 있을 수 있지만 실제 DB ID는 다를 수 있음
                         potential_source_id = metadata.get('case_id') or metadata.get('law_id') or metadata.get('doc_id', '')
                         
                         # DB에서 실제 source_id 찾기 (precedent_chunks 테이블 사용)
                         actual_source_id = None
-                        if conn and source_type and potential_source_id:
+                        if conn and doc_type and potential_source_id:
                             try:
                                 # precedent_chunks에서 metadata로 조회
-                                if source_type == 'case_paragraph':
+                                if doc_type in ['case_paragraph', 'precedent_content']:  # 🔥 레거시 지원
                                     # case_number나 doc_id로 조회
                                     case_number = metadata.get('case_number') or metadata.get('doc_id')
                                     if case_number:
@@ -3554,7 +4324,7 @@ class SemanticSearchEngineV2:
                                         row = cursor.fetchone()
                                         if row:
                                             actual_source_id = row[0] if isinstance(row, tuple) else row['source_id']
-                                elif source_type == 'statute_article':
+                                elif doc_type == 'statute_article':
                                     # law_id와 article_number로 조회
                                     law_id = metadata.get('law_id')
                                     article_no = metadata.get('article_number') or metadata.get('article_no')
@@ -3603,7 +4373,7 @@ class SemanticSearchEngineV2:
                                 self.logger.debug(f"Failed to load chunking metadata for chunk_id={chunk_id}: {e}")
                         
                         self._chunk_metadata[chunk_id] = {
-                            'source_type': source_type,
+                            'type': doc_type,  # 🔥 source_type 제거: type으로 통일
                             'source_id': actual_source_id if actual_source_id is not None else potential_source_id,
                             'text': text,
                             **chunking_meta,
@@ -3863,8 +4633,8 @@ class SemanticSearchEngineV2:
                         if source_type == "statute_article":
                             if not source_meta.get("statute_name") or not source_meta.get("article_no"):
                                 needs_reload = True
-                        elif source_type == "case_paragraph":
-                            # case_paragraph: doc_id만 필수, casenames와 court는 선택적
+                        elif source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
+                            # precedent_content: doc_id만 필수, casenames와 court는 선택적
                             if not source_meta.get("doc_id"):
                                 needs_reload = True
                         elif source_type == "decision_paragraph":
@@ -3916,7 +4686,7 @@ class SemanticSearchEngineV2:
                     # 타입별 최소 길이 차등 적용 (텍스트 품질 개선: 최소 길이 보장)
                     if source_type == 'statute_article':
                         min_text_length = 30
-                    elif source_type in ['case_paragraph', 'decision_paragraph']:
+                    elif source_type in ['case_paragraph', 'precedent_content', 'decision_paragraph']:  # 🔥 레거시 지원
                         min_text_length = 100  # 텍스트 품질 개선: 5자 → 100자로 증가
                     else:
                         min_text_length = 100  # 텍스트 품질 개선: 50자 → 100자로 증가
@@ -4054,25 +4824,62 @@ class SemanticSearchEngineV2:
                             self._chunk_vectors = {}
                         
                         # 문서 벡터 로드
-                        if chunk_id in self._chunk_vectors:
+                        # 🔥 개선: _chunk_vectors에서 먼저 확인 (이미 로드된 경우)
+                        if hasattr(self, '_chunk_vectors') and chunk_id in self._chunk_vectors:
                             doc_vec = self._chunk_vectors[chunk_id]
                         else:
-                            # DB에서 벡터 로드
-                            # DatabaseAdapter 사용 또는 직접 연결
-                            # DatabaseAdapter 사용 (PostgreSQL)
+                            # 🔥 개선: pgvector 사용 시 올바른 테이블에서 벡터 로드
+                            # source_type에 따라 올바른 테이블 선택
                             if self._db_adapter:
                                 with self._db_adapter.get_connection_context() as conn:
                                     cursor = conn.cursor()
-                                    cursor.execute(
-                                        "SELECT vector FROM embeddings WHERE chunk_id = %s LIMIT 1",
-                                        (chunk_id,)
-                                    )
+                                    
+                                    # source_type에 따라 올바른 테이블과 컬럼 선택
+                                    if source_type == 'statute_article':
+                                        # statute_embeddings 테이블에서 article_id로 조회
+                                        cursor.execute(
+                                            """
+                                            SELECT embedding_vector 
+                                            FROM statute_embeddings 
+                                            WHERE article_id = %s 
+                                            AND embedding_vector IS NOT NULL 
+                                            LIMIT 1
+                                            """,
+                                            (chunk_id,)
+                                        )
+                                    else:
+                                        # precedent_chunks 테이블에서 id로 조회 (레거시)
+                                        cursor.execute(
+                                            """
+                                            SELECT embedding_vector 
+                                            FROM precedent_chunks 
+                                            WHERE id = %s 
+                                            AND embedding_vector IS NOT NULL 
+                                            LIMIT 1
+                                            """,
+                                            (chunk_id,)
+                                        )
+                                    
                                     row = cursor.fetchone()
                                     if row:
-                                        vector_blob = row[0] if isinstance(row, tuple) else row.get('vector')
-                                        if vector_blob:
-                                            doc_vec = np.frombuffer(vector_blob, dtype=np.float32)
-                                            self._chunk_vectors[chunk_id] = doc_vec
+                                        embedding_vector = row[0] if isinstance(row, tuple) else row.get('embedding_vector')
+                                        if embedding_vector:
+                                            # 벡터 파싱
+                                            try:
+                                                if isinstance(embedding_vector, (list, tuple)):
+                                                    doc_vec = np.array(embedding_vector, dtype=np.float32)
+                                                elif hasattr(embedding_vector, 'tolist'):
+                                                    doc_vec = np.array(embedding_vector.tolist(), dtype=np.float32)
+                                                else:
+                                                    doc_vec = np.array(embedding_vector, dtype=np.float32)
+                                                
+                                                # _chunk_vectors에 캐시
+                                                if not hasattr(self, '_chunk_vectors'):
+                                                    self._chunk_vectors = {}
+                                                self._chunk_vectors[chunk_id] = doc_vec
+                                            except Exception as parse_error:
+                                                self.logger.debug(f"Failed to parse vector for chunk_id {chunk_id}: {parse_error}")
+                                                doc_vec = None
                                         else:
                                             doc_vec = None
                                     else:
@@ -4096,8 +4903,8 @@ class SemanticSearchEngineV2:
                 if conn and source_type and source_id:
                     # 필수 필드가 누락된 경우 재조회 시도
                     required_fields_missing = False
-                    if source_type == "case_paragraph":
-                        # case_paragraph: doc_id만 필수, casenames와 court는 선택적
+                    if source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
+                        # precedent_content: doc_id만 필수, casenames와 court는 선택적
                         if not source_meta.get("doc_id"):
                             required_fields_missing = True
                     elif source_type == "decision_paragraph":
@@ -4139,31 +4946,42 @@ class SemanticSearchEngineV2:
                 # ccourt 필드 보장 (court 필드에서 가져오기) - 메타데이터 완전성 개선 강화
                 court_value = source_meta.get("court")
                 ccourt_value = source_meta.get("ccourt") or court_value
-                # court가 없으면 DB에서 직접 조회 시도 (case_paragraph의 경우)
-                if not ccourt_value and source_type == "case_paragraph" and source_id and conn:
+                # court가 없으면 DB에서 직접 조회 시도 (precedent_content의 경우)
+                if not ccourt_value and source_type in ["case_paragraph", "precedent_content"] and source_id and conn:  # 🔥 레거시 지원
                     try:
-                        # 먼저 case_paragraphs를 통해 조회
+                        # precedent_chunks를 통해 precedents 조회
                         cursor_court = conn.cursor()
                         cursor_court.execute(
-                            "SELECT c.court FROM case_paragraphs cp JOIN cases c ON cp.case_id = c.id WHERE cp.id = %s",
+                            """
+                            SELECT p.court_name 
+                            FROM precedent_chunks pc
+                            JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                            JOIN precedents p ON pcc.precedent_id = p.id
+                            WHERE pc.id = %s
+                            """,
                             (source_id,)
                         )
                         row_court = cursor_court.fetchone()
                         if row_court:
-                            court_val = row_court[0] if isinstance(row_court, tuple) else row_court.get("court")
+                            court_val = row_court[0] if isinstance(row_court, tuple) else row_court.get("court_name")
                             if court_val:
                                 ccourt_value = court_val
                                 court_value = ccourt_value
                         else:
-                            # case_paragraphs 조회 실패 시 cases 테이블에서 직접 조회
+                            # precedent_chunks 조회 실패 시 precedents 테이블에서 직접 조회 (precedent_content_id로)
                             cursor_court = conn.cursor()
                             cursor_court.execute(
-                                "SELECT court FROM cases WHERE id = %s",
+                                """
+                                SELECT p.court_name 
+                                FROM precedent_contents pcc
+                                JOIN precedents p ON pcc.precedent_id = p.id
+                                WHERE pcc.id = %s
+                                """,
                                 (source_id,)
                             )
                             row_court = cursor_court.fetchone()
                             if row_court:
-                                court_val = row_court[0] if isinstance(row_court, tuple) else row_court.get("court")
+                                court_val = row_court[0] if isinstance(row_court, tuple) else row_court.get("court_name")
                                 if court_val:
                                     ccourt_value = court_val
                                     court_value = ccourt_value
@@ -4177,7 +4995,7 @@ class SemanticSearchEngineV2:
                     article_no = source_meta.get("article_no") or source_meta.get("article_number")
                     if statute_name and article_no:
                         source_description = f"{statute_name} {article_no}"
-                elif source_type == "case_paragraph":
+                elif source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
                     casenames = source_meta.get("casenames")
                     doc_id = source_meta.get("doc_id")
                     if casenames and doc_id:
@@ -4212,10 +5030,10 @@ class SemanticSearchEngineV2:
                     "article_number": source_meta.get("article_no") if source_type == "statute_article" else None,
                     "clause_no": source_meta.get("clause_no") if source_type == "statute_article" else None,
                     "item_no": source_meta.get("item_no") if source_type == "statute_article" else None,
-                    "court": court_value if source_type == "case_paragraph" else None,
-                    "ccourt": ccourt_value if source_type == "case_paragraph" else None,  # ccourt 필드 추가 (메타데이터 완전성 개선 - 항상 포함)
-                    "doc_id": source_meta.get("doc_id") if source_type in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"] else None,
-                    "casenames": source_meta.get("casenames") if source_type == "case_paragraph" else None,
+                    "court": court_value if source_type in ["case_paragraph", "precedent_content"] else None,  # 🔥 레거시 지원
+                    "ccourt": ccourt_value if source_type in ["case_paragraph", "precedent_content"] else None,  # ccourt 필드 추가 (메타데이터 완전성 개선 - 항상 포함)
+                    "doc_id": source_meta.get("doc_id") if source_type in ["case_paragraph", "precedent_content", "decision_paragraph", "interpretation_paragraph"] else None,  # 🔥 레거시 지원
+                    "casenames": source_meta.get("casenames") if source_type in ["case_paragraph", "precedent_content"] else None,  # 🔥 레거시 지원
                     "org": source_meta.get("org") if source_type in ["decision_paragraph", "interpretation_paragraph"] else None,
                     "title": source_meta.get("title") if source_type == "interpretation_paragraph" else None,
                     "interpretation_id": source_meta.get("interpretation_id") if source_type == "interpretation_paragraph" else None,  # 오타 필드명 정규화 후 올바른 필드명 사용
@@ -4243,7 +5061,8 @@ class SemanticSearchEngineV2:
                         "statute_article": 1.3,
                         "interpretation_paragraph": 1.2,
                         "decision_paragraph": 1.1,
-                        "case_paragraph": 1.0
+                        "case_paragraph": 1.0,  # 🔥 레거시 지원
+                        "precedent_content": 1.0
                     }.get(source_type, 1.0)
                 }
                 
@@ -4345,12 +5164,14 @@ class SemanticSearchEngineV2:
                             total_count = sum(version_counts.values())
                             if active_count < total_count:
                                 mismatch_ratio = (total_count - active_count) / total_count * 100
-                                self.logger.warning(
-                                    f"⚠️  Version mismatch detected: "
-                                    f"Expected version {embedding_version_id} but found {mismatch_ratio:.1f}% from other versions"
+                                # TASK 7: Multi-version 전략은 의도된 동작이므로 DEBUG 레벨로 변경
+                                self.logger.debug(
+                                    f"ℹ️  [VERSION INFO] Multi-version strategy: "
+                                    f"Requested version {embedding_version_id}, "
+                                    f"found {mismatch_ratio:.1f}% from other versions (expected behavior)"
                                 )
                             else:
-                                self.logger.info(f"✅ All results are from expected version {embedding_version_id}")
+                                self.logger.debug(f"✅ All results are from expected version {embedding_version_id}")
                     else:
                         self.logger.warning("⚠️  No embedding_version_id found in results")
                 else:
@@ -4371,15 +5192,39 @@ class SemanticSearchEngineV2:
                         results = fallback_results
                 
                 # 여전히 결과가 없으면 source_types 필터 제거 후 재시도
+                # ⚠️ 주의: source_types 필터를 제거하면 질의 의도와 다른 타입의 문서가 반환될 수 있음
                 if not results and source_types:
-                    self.logger.info(f"🔄 Retrying without source_types filter")
+                    self.logger.warning(
+                        f"⚠️ [FALLBACK] 검색 결과가 없어 source_types 필터를 제거하고 재시도합니다. "
+                        f"원래 요청된 타입: {source_types}, 이는 질의 의도와 다른 타입의 문서가 반환될 수 있습니다."
+                    )
                     fallback_results = self._search_with_threshold(
                         query, k, None, max(0.20, similarity_threshold - 0.10),
                         min_ml_confidence, min_quality_score, filter_by_confidence,
                         chunk_size_category, deduplicate_by_group, embedding_version_id
                     )
                     if fallback_results:
-                        self.logger.info(f"✅ Fallback search (no source filter) found {len(fallback_results)} results")
+                        # 🔥 개선: 폴백 결과의 타입을 확인하고 원래 요청된 타입과 다르면 경고
+                        fallback_types = {}
+                        for doc in fallback_results:
+                            doc_type = doc.get("type") or doc.get("metadata", {}).get("type", "unknown")
+                            fallback_types[doc_type] = fallback_types.get(doc_type, 0) + 1
+                        
+                        requested_types = set(source_types)
+                        returned_types = set(fallback_types.keys())
+                        mismatched = returned_types - requested_types
+                        
+                        if mismatched:
+                            self.logger.warning(
+                                f"⚠️ [FALLBACK TYPE MISMATCH] 요청된 타입: {requested_types}, "
+                                f"반환된 타입: {returned_types}, 불일치: {mismatched}, "
+                                f"타입 분포: {fallback_types}"
+                            )
+                        
+                        self.logger.info(
+                            f"✅ Fallback search (no source filter) found {len(fallback_results)} results "
+                            f"(타입 분포: {fallback_types})"
+                        )
                         results = fallback_results
                 
                 # 원인 분석 (최종적으로 결과가 없을 때만)
@@ -4640,11 +5485,13 @@ class SemanticSearchEngineV2:
                 elif version_id != original_version_id:
                     restoration_stats['version_id_restored'] += 1
                 
-                # 버전 일관성 검증
+                # 버전 일관성 검증 (TASK 7: Multi-version 전략은 의도된 동작)
                 if expected_version_id and version_id and version_id != expected_version_id:
                     issues_found['version_mismatch'] += 1
+                    # TASK 7: DEBUG 레벨로 변경 (의도된 동작이므로 경고 아님)
                     self.logger.debug(
-                        f"Version mismatch in result {i+1}: expected {expected_version_id}, got {version_id}"
+                        f"ℹ️  [VERSION INFO] Multi-version result {i+1}: "
+                        f"requested {expected_version_id}, found {version_id} (multi-version strategy)"
                     )
                 
                 # 2. 메타데이터 완전성 검증 (개선 사항 #2)
@@ -4804,7 +5651,7 @@ class SemanticSearchEngineV2:
                 # 타입별 최소 길이 차등 적용 (P1-4: 더욱 완화 - 10자 → 5자)
                 if source_type == 'statute_article':
                     min_text_length = 30
-                elif source_type in ['case_paragraph', 'decision_paragraph']:
+                elif source_type in ['case_paragraph', 'precedent_content', 'decision_paragraph']:  # 🔥 레거시 지원
                     min_text_length = 5
                 else:
                     min_text_length = 50
@@ -4840,7 +5687,7 @@ class SemanticSearchEngineV2:
                     source_type = result.get('type') or result.get('metadata', {}).get('source_type')
                     if source_type == 'statute_article':
                         effective_min_length = 50
-                    elif source_type in ['case_paragraph', 'decision_paragraph']:
+                    elif source_type in ['case_paragraph', 'precedent_content', 'decision_paragraph']:  # 🔥 레거시 지원
                         effective_min_length = 30
                     else:
                         effective_min_length = min_text_length
@@ -4962,7 +5809,8 @@ class SemanticSearchEngineV2:
             핵심 필드 리스트
         """
         critical_fields_map = {
-            'case_paragraph': ['doc_id'],  # doc_id는 필수, casenames와 court는 선택적
+            'case_paragraph': ['doc_id'],  # 🔥 레거시: doc_id는 필수, casenames와 court는 선택적
+            'precedent_content': ['doc_id'],  # doc_id는 필수, casenames와 court는 선택적
             'decision_paragraph': ['doc_id'],  # doc_id는 필수, org는 선택적
             'interpretation_paragraph': ['interpretation_id'],  # interpretation_id는 필수
             'statute_article': ['statute_name', 'article_no'],  # 법령명과 조문번호는 필수
@@ -4981,8 +5829,9 @@ class SemanticSearchEngineV2:
         """
         required_fields_map = {
             'statute_article': ['statute_name', 'article_no', 'law_name'],
-            # case_paragraph: doc_id만 필수, casenames와 court는 선택적 (일부 판례에 없을 수 있음)
-            'case_paragraph': ['doc_id'],
+            # 🔥 레거시: case_paragraph는 precedent_content로 대체
+            'case_paragraph': ['doc_id'],  # doc_id만 필수, casenames와 court는 선택적 (일부 판례에 없을 수 있음)
+            'precedent_content': ['doc_id'],  # doc_id만 필수, casenames와 court는 선택적 (일부 판례에 없을 수 있음)
             # decision_paragraph: doc_id만 필수, org는 선택적 (일부 결정례에 없을 수 있음, court 필드는 없음)
             'decision_paragraph': ['doc_id'],
             # interpretation_paragraph: interpretation_id만 필수, title은 선택적 (해석례에는 court 필드 없음)
@@ -5134,24 +5983,26 @@ class SemanticSearchEngineV2:
                 # source_id가 None인 경우에도 chunk_id로 직접 복원 시도 (우선 처리)
                 if not source_id and chunk_id:
                     try:
-                        # case_paragraph의 경우: doc_id, casenames, court 복원 (강화)
-                        if source_type == 'case_paragraph':
+                        # precedent_content의 경우: doc_id, casenames, court 복원 (강화)
+                        if source_type in ['case_paragraph', 'precedent_content']:  # 🔥 레거시 지원
                             # 먼저 source_id로 조회 시도
                             cursor_case = conn.cursor()
                             if source_id:
+                                # precedent_chunks를 통해 precedents 조회
                                 cursor_case.execute("""
-                                    SELECT cp.case_id, c.casenames, c.doc_id, c.court
-                                    FROM case_paragraphs cp
-                                    JOIN cases c ON cp.case_id = c.id
-                                    WHERE cp.id = %s
+                                    SELECT pc.precedent_content_id, p.case_name as casenames, p.case_number as doc_id, p.court_name as court
+                                    FROM precedent_chunks pc
+                                    JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                    JOIN precedents p ON pcc.precedent_id = p.id
+                                    WHERE pc.id = %s
                                 """, (source_id,))
                             else:
                                 # source_id가 없으면 chunk_id로 직접 조회
                                 cursor_case.execute("""
-                                    SELECT cp.case_id, c.casenames, c.doc_id, c.court
+                                    SELECT pc.precedent_content_id, p.case_name as casenames, p.case_number as doc_id, p.court_name as court
                                     FROM precedent_chunks pc
-                                    JOIN precedent_contents pcon ON pc.precedent_content_id = pcon.id
-                                    JOIN precedents p ON pcon.precedent_id = p.id
+                                    JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                    JOIN precedents p ON pcc.precedent_id = p.id
                                     WHERE pc.id = %s
                                 """, (chunk_id,))
                             
@@ -5159,12 +6010,12 @@ class SemanticSearchEngineV2:
                             if case_row:
                                 # PostgreSQL의 경우 dict-like row 또는 tuple 반환
                                 if hasattr(case_row, 'keys'):
-                                    case_id = case_row.get('case_id')
+                                    # 🔥 precedent_content_id는 사용하지 않음 (이미 조회된 결과에서 사용)
                                     casenames = case_row.get('casenames')
                                     doc_id = case_row.get('doc_id')
                                     court = case_row.get('court')
                                 else:
-                                    case_id = case_row[0] if len(case_row) > 0 else None
+                                    # 🔥 precedent_content_id는 사용하지 않음 (이미 조회된 결과에서 사용)
                                     casenames = case_row[1] if len(case_row) > 1 else None
                                     doc_id = case_row[2] if len(case_row) > 2 else None
                                     court = case_row[3] if len(case_row) > 3 else None
@@ -5351,9 +6202,10 @@ class SemanticSearchEngineV2:
                                     # source_id로 직접 조회 시도
                                     if conn:
                                         cursor_direct = conn.cursor()
+                                        # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
                                         cursor_direct.execute("""
                                             SELECT sa.article_no, s.name as statute_name
-                                            FROM statute_articles sa
+                                            FROM statutes_articles sa
                                             JOIN statutes s ON sa.statute_id = s.id
                                             WHERE sa.id = %s
                                         """, (source_id,))
@@ -5393,81 +6245,83 @@ class SemanticSearchEngineV2:
                                     self.logger.debug(f"Failed to restore {field} via direct query for chunk_id={chunk_id}: {e}")
                     
                     # case_paragraph의 경우 추가 시도: source_id로 직접 조회
-                    if source_type == 'case_paragraph' and field == 'court' and not field_value and conn:
+                    if source_type in ['case_paragraph', 'precedent_content'] and field == 'court' and not field_value and conn:  # 🔥 레거시 지원
                         try:
                             # source_id가 None인 경우, chunk_id로 먼저 조회
                             actual_source_id = source_id
                             if not actual_source_id and chunk_id:
+                                # precedent_chunks에서 precedent_content_id 조회
                                 cursor_source = conn.cursor()
                                 cursor_source.execute("""
-                                    SELECT source_id FROM text_chunks WHERE id = %s AND source_type = 'case_paragraph'
+                                    SELECT precedent_content_id FROM precedent_chunks WHERE id = %s
                                 """, (chunk_id,))
                                 source_row = cursor_source.fetchone()
                                 if source_row:
-                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
+                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('precedent_content_id')
                             
                             court_row = None
                             
-                            # 방법 1: cases 테이블에서 직접 조회 (source_id가 cases.id인 경우)
+                            # 방법 1: precedents 테이블에서 직접 조회 (source_id가 precedents.id인 경우)
                             if actual_source_id:
                                 cursor_court = conn.cursor()
                                 cursor_court.execute("""
-                                    SELECT court FROM cases WHERE id = %s
+                                    SELECT court_name FROM precedents WHERE id = %s
                                 """, (actual_source_id,))
                                 court_row = cursor_court.fetchone()
                             
-                            # 방법 2: case_paragraphs를 통한 조회 (source_id가 case_paragraphs.id인 경우)
+                            # 방법 2: precedent_chunks를 통한 조회 (source_id가 precedent_chunks.id인 경우)
                             if not court_row and actual_source_id:
                                 cursor_court = conn.cursor()
                                 cursor_court.execute("""
-                                    SELECT c.court
-                                    FROM case_paragraphs cp
-                                    JOIN cases c ON cp.case_id = c.id
-                                    WHERE cp.id = %s
+                                    SELECT p.court
+                                    FROM precedent_chunks pc
+                                    JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                    JOIN precedents p ON pcc.precedent_id = p.id
+                                    WHERE pc.id = %s
                                 """, (actual_source_id,))
                                 court_row = cursor_court.fetchone()
                             
-                            # 방법 3: text_chunks를 통해 case_id를 찾아서 조회 (source_id가 None이거나 실패한 경우)
+                            # 방법 3: precedent_chunks를 통해 precedent_id를 찾아서 조회 (source_id가 None이거나 실패한 경우)
                             if not court_row and chunk_id:
                                 try:
-                                    # text_chunks -> case_paragraphs -> cases 경로
+                                    # precedent_chunks -> precedent_contents -> precedents 경로
                                     cursor_chunk = conn.cursor()
                                     cursor_chunk.execute("""
-                                        SELECT cp.case_id
-                                        FROM text_chunks tc
-                                        JOIN case_paragraphs cp ON tc.source_id = cp.id
-                                        WHERE tc.id = %s AND tc.source_type = 'case_paragraph'
+                                        SELECT pcc.precedent_id
+                                        FROM precedent_chunks pc
+                                        JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                        WHERE pc.id = %s
                                     """, (chunk_id,))
                                     chunk_row = cursor_chunk.fetchone()
                                     if chunk_row:
-                                        case_id = chunk_row[0] if isinstance(chunk_row, tuple) else chunk_row.get('case_id')
-                                        if case_id:
+                                        precedent_id = chunk_row[0] if isinstance(chunk_row, tuple) else chunk_row.get('precedent_id')
+                                        if precedent_id:
                                             cursor_court = conn.cursor()
                                             cursor_court.execute("""
-                                                SELECT court FROM cases WHERE id = %s
-                                            """, (case_id,))
+                                                SELECT court_name FROM precedents WHERE id = %s
+                                            """, (precedent_id,))
                                             court_row = cursor_court.fetchone()
                                 except Exception as e:
                                     self.logger.debug(f"Failed to get case_id from text_chunks for chunk_id={chunk_id}: {e}")
                             
-                            # 방법 4: chunk_id로 직접 case_paragraphs 조회 (source_id가 없는 경우)
+                            # 방법 4: chunk_id로 직접 precedent_chunks 조회 (source_id가 없는 경우)
                             if not court_row and chunk_id and not actual_source_id:
                                 try:
                                     cursor_chunk = conn.cursor()
                                     cursor_chunk.execute("""
-                                        SELECT cp.case_id
-                                        FROM text_chunks tc
-                                        JOIN case_paragraphs cp ON tc.source_id = cp.id
-                                        WHERE tc.id = %s AND tc.source_type = 'case_paragraph'
+                                        SELECT pcc.precedent_id
+                                        FROM precedent_chunks pc
+                                        JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                        WHERE pc.id = %s
                                     """, (chunk_id,))
                                     chunk_row = cursor_chunk.fetchone()
                                     if chunk_row:
-                                        case_id = chunk_row[0] if isinstance(chunk_row, tuple) else chunk_row.get('case_id')
-                                        if case_id:
+                                        precedent_id = chunk_row[0] if isinstance(chunk_row, tuple) else chunk_row.get('precedent_id')
+                                        if precedent_id:
                                             cursor_court = conn.cursor()
                                             cursor_court.execute("""
-                                                SELECT court FROM cases WHERE id = %s
-                                            """, (case_id,))
+                                                SELECT court_name FROM precedents WHERE id = %s
+                                            """, (precedent_id,))
                                             court_row = cursor_court.fetchone()
                                 except Exception as e:
                                     self.logger.debug(f"Failed to get case_id via chunk_id for chunk_id={chunk_id}: {e}")
@@ -5508,29 +6362,30 @@ class SemanticSearchEngineV2:
                                 result['metadata']['court'] = "알 수 없음"
                     
                     # case_paragraph의 casenames 복원 (source_id=None인 경우도 처리)
-                    if source_type == 'case_paragraph' and field == 'casenames' and not field_value and conn:
+                    if source_type in ['case_paragraph', 'precedent_content'] and field == 'casenames' and not field_value and conn:  # 🔥 레거시 지원
                         try:
                             actual_source_id = source_id
                             if not actual_source_id and chunk_id:
+                                # precedent_chunks에서 precedent_content_id 조회
                                 cursor_source = conn.cursor()
                                 cursor_source.execute("""
-                                    SELECT source_id FROM text_chunks WHERE id = %s AND source_type = 'case_paragraph'
+                                    SELECT precedent_content_id FROM precedent_chunks WHERE id = %s
                                 """, (chunk_id,))
                                 source_row = cursor_source.fetchone()
                                 if source_row:
-                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
+                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('precedent_content_id')
                             
                             # source_id가 없으면 chunk_id로 직접 조회
                             if not actual_source_id and chunk_id:
                                 try:
-                                    # 방법 1: text_chunks -> case_paragraphs -> cases 경로
+                                    # 방법 1: precedent_chunks -> precedent_contents -> precedents 경로
                                     cursor_direct = conn.cursor()
                                     cursor_direct.execute("""
-                                        SELECT cp.case_id, c.casenames, c.doc_id, c.court
-                                        FROM text_chunks tc
-                                        JOIN case_paragraphs cp ON tc.source_id = cp.id
-                                        JOIN cases c ON cp.case_id = c.id
-                                        WHERE tc.id = %s AND tc.source_type = 'case_paragraph'
+                                        SELECT pcc.precedent_id, p.case_name as casenames, p.case_number as doc_id, p.court_name as court
+                                        FROM precedent_chunks pc
+                                        JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                        JOIN precedents p ON pcc.precedent_id = p.id
+                                        WHERE pc.id = %s
                                     """, (chunk_id,))
                                     direct_row = cursor_direct.fetchone()
                                     if direct_row:
@@ -5570,20 +6425,24 @@ class SemanticSearchEngineV2:
                                     self.logger.debug(f"Failed to restore case metadata via chunk_id for chunk_id={chunk_id}: {e}")
                             
                             if actual_source_id:
-                                # case_paragraphs를 통해 cases 조회
+                                # precedent_chunks를 통해 precedents 조회
                                 cursor_casenames = conn.cursor()
                                 cursor_casenames.execute("""
-                                    SELECT c.casenames
-                                    FROM case_paragraphs cp
-                                    JOIN cases c ON cp.case_id = c.id
-                                    WHERE cp.id = %s
+                                    SELECT p.case_name as casenames
+                                    FROM precedent_chunks pc
+                                    JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                                    JOIN precedents p ON pcc.precedent_id = p.id
+                                    WHERE pc.id = %s
                                 """, (actual_source_id,))
                                 casenames_row = cursor_casenames.fetchone()
                                 if not casenames_row:
-                                    # cases 테이블에서 직접 조회
+                                    # precedent_contents를 통해 precedents 조회 (source_id가 precedent_content_id인 경우)
                                     cursor_casenames = conn.cursor()
                                     cursor_casenames.execute("""
-                                        SELECT casenames FROM cases WHERE id = %s
+                                        SELECT p.case_name as casenames
+                                        FROM precedent_contents pcc
+                                        JOIN precedents p ON pcc.precedent_id = p.id
+                                        WHERE pcc.id = %s
                                     """, (actual_source_id,))
                                     casenames_row = cursor_casenames.fetchone()
                                 
@@ -6040,6 +6899,52 @@ class SemanticSearchEngineV2:
         except Exception as e:
             self.logger.error(f"Error building FAISS index: {e}", exc_info=True)
             return False
+    
+    def _warmup_pgvector_connections(self):
+        """pgvector 연결 풀 워밍업"""
+        try:
+            if not PGVECTOR_AVAILABLE or not self._db_adapter:
+                return
+            
+            # 연결 풀 확인
+            if not hasattr(self._db_adapter, 'connection_pool') or not self._db_adapter.connection_pool:
+                self.logger.debug("Connection pool not available, skipping warmup")
+                return
+            
+            self.logger.info("Warming up pgvector connections...")
+            
+            # 연결 풀 크기에 따라 워밍업할 연결 수 결정
+            max_conn = getattr(self._db_adapter.connection_pool, 'maxconn', 1)
+            warmup_connections = min(5, max_conn)
+            
+            warmed_count = 0
+            for i in range(warmup_connections):
+                try:
+                    with self._db_adapter.get_connection_context() as conn:
+                        # 더미 쿼리로 연결 워밍업 및 pgvector 등록
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT 1")
+                        cursor.fetchone()
+                        
+                        # pgvector 등록 시도 (이미 등록되어 있을 수 있음)
+                        try:
+                            from pgvector.psycopg2 import register_vector
+                            register_vector(conn)
+                        except Exception:
+                            # 이미 등록되었거나 오류 발생 시 무시
+                            pass
+                        
+                        warmed_count += 1
+                        self.logger.debug(f"Warmed up connection {i+1}/{warmup_connections}")
+                except Exception as e:
+                    self.logger.debug(f"Failed to warmup connection {i+1}: {e}")
+            
+            if warmed_count > 0:
+                self.logger.info(f"✅ pgvector connections warmed up ({warmed_count}/{warmup_connections})")
+            else:
+                self.logger.warning("⚠️ No connections warmed up")
+        except Exception as e:
+            self.logger.debug(f"pgvector warmup failed: {e}")
 
     def _build_faiss_index(self):
         """FAISS IVF 인덱스 빌드 및 저장 (기존 호환용, 동기 방식)"""
@@ -6855,20 +7760,21 @@ class SemanticSearchEngineV2:
                     cursor = conn.cursor()
                     
                     if source_type == "statute_article":
+                        # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
                         cursor.execute(f"""
                             SELECT sa.id, sa.article_no, s.name as statute_name, s.abbrv, s.category, s.statute_type
-                            FROM statute_articles sa
+                            FROM statutes_articles sa
                             JOIN statutes s ON sa.statute_id = s.id
                             WHERE sa.id IN ({placeholders})
                         """, batch)
-                    elif source_type == "case_paragraph":
-                        # text_chunks.source_id가 case_paragraphs.id를 참조하므로
-                        # case_paragraphs를 통해 cases를 조인하여 조회
+                    elif source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
+                        # precedent_chunks를 통해 precedents 조회
                         cursor.execute(f"""
-                            SELECT cp.id, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
-                            FROM case_paragraphs cp
-                            JOIN cases c ON cp.case_id = c.id
-                            WHERE cp.id IN ({placeholders})
+                            SELECT pc.id, p.case_number as doc_id, p.court_name as court, p.case_type_name, p.case_name as casenames, p.decision_date
+                            FROM precedent_chunks pc
+                            JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                            JOIN precedents p ON pcc.precedent_id = p.id
+                            WHERE pc.id IN ({placeholders})
                         """, batch)
                         
                         # 조회된 결과의 source_id 추적
@@ -6885,9 +7791,9 @@ class SemanticSearchEngineV2:
                                     'id': source_id,
                                     'doc_id': row[1] if len(row) > 1 else None,
                                     'court': row[2] if len(row) > 2 else None,
-                                    'case_type': row[3] if len(row) > 3 else None,
+                                    'case_type_name': row[3] if len(row) > 3 else None,  # 🔥 case_type → case_type_name
                                     'casenames': row[4] if len(row) > 4 else None,
-                                    'announce_date': row[5] if len(row) > 5 else None
+                                    'decision_date': row[5] if len(row) > 5 else None  # 🔥 announce_date → decision_date
                                 }
                             
                             if source_id:
@@ -6896,19 +7802,20 @@ class SemanticSearchEngineV2:
                                 metadata_map[cache_key] = metadata
                                 self._set_to_cache(cache_key, metadata)
                         
-                        # case_paragraphs를 통해 찾지 못한 ID는 cases 테이블에서 직접 조회 시도
-                        # (text_chunks.source_id가 cases.id를 직접 참조하는 경우)
+                        # precedent_chunks를 통해 찾지 못한 ID는 precedent_contents를 통해 조회 시도
+                        # (source_id가 precedent_content_id인 경우)
                         missing_ids = [sid for sid in batch if sid not in found_ids]
                         if missing_ids:
                             missing_placeholders = ','.join(['%s'] * len(missing_ids))
-                            cursor_cases = conn.cursor()
-                            cursor_cases.execute(f"""
-                                SELECT c.id, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
-                                FROM cases c
-                                WHERE c.id IN ({missing_placeholders})
+                            cursor_precedents = conn.cursor()
+                            cursor_precedents.execute(f"""
+                                SELECT pcc.id, p.case_number as doc_id, p.court_name as court, p.case_type_name, p.case_name as casenames, p.decision_date
+                                FROM precedent_contents pcc
+                                JOIN precedents p ON pcc.precedent_id = p.id
+                                WHERE pcc.id IN ({missing_placeholders})
                             """, missing_ids)
                             
-                            for row in cursor_cases.fetchall():
+                            for row in cursor_precedents.fetchall():
                                 # PostgreSQL의 경우 dict-like row 또는 tuple 반환
                                 if hasattr(row, 'keys'):
                                     source_id = row.get('id')
@@ -6919,9 +7826,9 @@ class SemanticSearchEngineV2:
                                         'id': source_id,
                                         'doc_id': row[1] if len(row) > 1 else None,
                                         'court': row[2] if len(row) > 2 else None,
-                                        'case_type': row[3] if len(row) > 3 else None,
+                                        'case_type_name': row[3] if len(row) > 3 else None,  # 🔥 case_type → case_type_name
                                         'casenames': row[4] if len(row) > 4 else None,
-                                        'announce_date': row[5] if len(row) > 5 else None
+                                        'decision_date': row[5] if len(row) > 5 else None  # 🔥 announce_date → decision_date
                                     }
                                 
                                 if source_id:
@@ -6979,10 +7886,41 @@ class SemanticSearchEngineV2:
         """
         try:
             if source_type == "statute_article":
-                # text_chunks.source_id가 statute_articles.id를 참조
-                base_columns = "sa.article_no, s.name as statute_name, s.abbrv, s.category, s.statute_type"
+                # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
+                # text_chunks.source_id가 statutes_articles.id를 참조
+                base_columns = ["sa.article_no"]
                 optional_columns = []
                 
+                # statute_name 컬럼 확인 (name 또는 law_name_kr 등 다양한 이름 가능)
+                if self._column_exists(conn, "statutes", "name"):
+                    base_columns.append("s.name as statute_name")
+                elif self._column_exists(conn, "statutes", "law_name_kr"):
+                    base_columns.append("s.law_name_kr as statute_name")
+                elif self._column_exists(conn, "statutes", "law_name"):
+                    base_columns.append("s.law_name as statute_name")
+                else:
+                    # 기본값으로 빈 문자열 사용
+                    base_columns.append("'' as statute_name")
+                
+                # abbrv 컬럼 확인
+                if self._column_exists(conn, "statutes", "abbrv"):
+                    base_columns.append("s.abbrv")
+                elif self._column_exists(conn, "statutes", "law_abbrv"):
+                    base_columns.append("s.law_abbrv as abbrv")
+                
+                # category 컬럼 확인
+                if self._column_exists(conn, "statutes", "category"):
+                    base_columns.append("s.category")
+                elif self._column_exists(conn, "statutes", "domain"):
+                    base_columns.append("s.domain as category")
+                
+                # statute_type 컬럼 확인
+                if self._column_exists(conn, "statutes", "statute_type"):
+                    base_columns.append("s.statute_type")
+                elif self._column_exists(conn, "statutes", "law_type"):
+                    base_columns.append("s.law_type as statute_type")
+                
+                # 선택적 컬럼들
                 if self._column_exists(conn, "statutes", "law_id"):
                     optional_columns.append("s.law_id")
                 if self._column_exists(conn, "statutes", "mst"):
@@ -6992,50 +7930,52 @@ class SemanticSearchEngineV2:
                 if self._column_exists(conn, "statutes", "effective_date"):
                     optional_columns.append("s.effective_date")
                 
-                select_clause = base_columns
+                select_clause = ", ".join(base_columns)
                 if optional_columns:
                     select_clause += ", " + ", ".join(optional_columns)
                 
                 cursor = conn.cursor()
                 cursor.execute(f"""
                     SELECT {select_clause}
-                    FROM statute_articles sa
+                    FROM statutes_articles sa
                     JOIN statutes s ON sa.statute_id = s.id
                     WHERE sa.id = %s
                 """, (source_id,))
-            elif source_type == "case_paragraph":
-                # text_chunks.source_id가 cases.id를 직접 참조할 수 있으므로 두 가지 경우 모두 처리
-                base_columns = "c.doc_id, c.court, c.case_type, c.casenames, c.announce_date"
+            elif source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
+                # precedent_chunks를 통해 precedents 조회
+                base_columns = "p.case_number as doc_id, p.court_name as court, p.case_type_name, p.case_name as casenames, p.decision_date"
                 optional_columns = []
                 
-                if self._column_exists(conn, "cases", "precedent_serial_number"):
-                    optional_columns.append("c.precedent_serial_number")
+                if self._column_exists(conn, "precedents", "precedent_serial_number"):
+                    optional_columns.append("p.precedent_serial_number")
                 
                 select_clause = base_columns
                 if optional_columns:
                     select_clause += ", " + ", ".join(optional_columns)
                 
-                # 먼저 cases 테이블에서 직접 조회 시도 (text_chunks.source_id가 cases.id를 직접 참조하는 경우)
+                # 먼저 precedent_chunks를 통해 조회 시도 (source_id가 precedent_chunks.id인 경우)
                 cursor = conn.cursor()
                 cursor.execute(f"""
                     SELECT {select_clause}
-                    FROM cases c
-                    WHERE c.id = %s
+                    FROM precedent_chunks pc
+                    JOIN precedent_contents pcc ON pc.precedent_content_id = pcc.id
+                    JOIN precedents p ON pcc.precedent_id = p.id
+                    WHERE pc.id = %s
                 """, (source_id,))
                 row = cursor.fetchone()
                 
-                # case_paragraphs를 통한 조회 시도 (text_chunks.source_id가 case_paragraphs.id를 참조하는 경우)
+                # precedent_contents를 통한 조회 시도 (source_id가 precedent_content_id인 경우)
                 if not row:
                     cursor.execute(f"""
                         SELECT {select_clause}
-                        FROM case_paragraphs cp
-                        JOIN cases c ON cp.case_id = c.id
-                        WHERE cp.id = %s
+                        FROM precedent_contents pcc
+                        JOIN precedents p ON pcc.precedent_id = p.id
+                        WHERE pcc.id = %s
                     """, (source_id,))
                     row = cursor.fetchone()
                 
                 if row:
-                    return dict(row) if hasattr(row, 'keys') else {col: row[i] if len(row) > i else None for i, col in enumerate(['doc_id', 'court', 'case_type', 'casenames', 'announce_date'])}
+                    return dict(row) if hasattr(row, 'keys') else {col: row[i] if len(row) > i else None for i, col in enumerate(['doc_id', 'court', 'case_type_name', 'casenames', 'decision_date'])}
                 return {}
             elif source_type == "decision_paragraph":
                 # text_chunks.source_id가 decisions.id를 직접 참조할 수 있으므로 두 가지 경우 모두 처리
@@ -7096,17 +8036,29 @@ class SemanticSearchEngineV2:
                 self.logger.debug(f"No row found for {source_type} source_id={source_id}")
                 return {}
         except Exception as e:
+            error_msg = str(e).lower()
+            # 🔥 개선: PostgreSQL 트랜잭션 중단 오류 처리
+            if "current transaction is aborted" in error_msg or "aborted" in error_msg:
+                try:
+                    # 트랜잭션 롤백 시도
+                    if hasattr(conn, 'rollback'):
+                        conn.rollback()
+                    self.logger.warning(f"Transaction aborted for {source_type} {source_id}, rolled back")
+                except Exception as rollback_error:
+                    self.logger.warning(f"Failed to rollback transaction: {rollback_error}")
             self.logger.warning(f"Error getting source metadata for {source_type} {source_id}: {e}")
             return {}
 
-    def _restore_text_from_source(self, conn, source_type: str, source_id: int) -> str:
+    def _restore_text_from_source(self, conn, source_type: str, source_id: int, article_no: Optional[str] = None) -> str:
         """
         text_chunks 테이블의 text가 비어있을 때 원본 테이블에서 복원
+        TASK 3: article_no를 사용하여 전체 조문 복원 지원
         
         Args:
             conn: 데이터베이스 연결
             source_type: 소스 타입 (statute_article, case_paragraph 등)
             source_id: 소스 ID
+            article_no: 조문 번호 (전체 조문 복원용, 선택적)
             
         Returns:
             복원된 text 문자열 (없으면 빈 문자열)
@@ -7116,10 +8068,170 @@ class SemanticSearchEngineV2:
             cursor = conn.cursor()
             
             if source_type == "statute_article":
+                # TASK 3: article_no가 있으면 전체 조문 복원 시도 (statutes_articles 테이블 사용)
+                if article_no:
+                    try:
+                        # statutes_articles 테이블에서 같은 조문의 모든 항목 조회
+                        # article_no를 정규화하여 검색 (선행 0 제거)
+                        article_no_normalized = str(article_no).strip().lstrip('0')
+                        if not article_no_normalized:
+                            article_no_normalized = "0"
+                        
+                        # 여러 형식으로 시도: 원본, 정규화된 값, 그리고 variants
+                        article_no_variants = [
+                            str(article_no).strip(),
+                            article_no_normalized,
+                            f"{article_no_normalized:06d}",  # 750 -> 000750
+                            f"{article_no_normalized:06d}00",  # 750 -> 00075000
+                        ]
+                        
+                        # 중복 제거
+                        article_no_variants = list(dict.fromkeys(article_no_variants))
+                        
+                        where_conditions = " OR ".join(["sa.article_no = %s"] * len(article_no_variants))
+                        params = article_no_variants
+                        
+                        cursor.execute(
+                            f"""
+                            SELECT sa.article_content, sa.clause_no, sa.item_no
+                            FROM statutes_articles sa
+                            WHERE ({where_conditions})
+                            ORDER BY 
+                                CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
+                                sa.clause_no,
+                                CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
+                                sa.item_no
+                            """,
+                            tuple(params)
+                        )
+                        rows = cursor.fetchall()
+                        if rows:
+                            # 전체 조문 내용 결합
+                            full_article_parts = []
+                            for row in rows:
+                                if hasattr(row, 'keys'):
+                                    content = row.get('article_content')
+                                else:
+                                    content = row[0] if len(row) > 0 else None
+                                if content:
+                                    full_article_parts.append(str(content))
+                            
+                            if full_article_parts:
+                                full_article_content = "\n".join(full_article_parts)
+                                if len(full_article_content.strip()) >= 200:  # TASK 3: 최소 200자
+                                    self.logger.debug(f"✅ [TASK 3] Restored full article for article_no={article_no} (length: {len(full_article_content)} chars)")
+                                    return full_article_content
+                    except Exception as e:
+                        self.logger.debug(f"Failed to restore full article from statutes_articles: {e}")
+                
+                # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
+                # statutes_articles 테이블에서 article_content 컬럼으로 조회
                 cursor.execute(
-                    "SELECT text, article_no FROM statute_articles WHERE id = %s",
+                    """
+                    SELECT article_content, article_no 
+                    FROM statutes_articles 
+                    WHERE id = %s
+                    """,
                     (source_id,)
                 )
+                row = cursor.fetchone()
+                
+                # 결과 처리
+                if row:
+                    if hasattr(row, 'keys'):
+                        text = row.get('article_content')
+                        article_no_from_db = row.get('article_no')
+                    else:
+                        text = row[0] if len(row) > 0 else None
+                        article_no_from_db = row[1] if len(row) > 1 else None
+                    
+                    # TASK 3: text가 짧으면 article_no로 전체 조문 복원 시도
+                    if text and len(str(text).strip()) > 0:
+                        text_str = str(text)
+                        if len(text_str.strip()) < 200 and article_no_from_db:
+                            # 전체 조문 복원 시도 (statutes_articles 테이블 사용)
+                            try:
+                                article_no_normalized = str(article_no_from_db).strip().lstrip('0')
+                                if not article_no_normalized:
+                                    article_no_normalized = "0"
+                                
+                                # 여러 형식으로 시도
+                                article_no_variants = [
+                                    str(article_no_from_db).strip(),
+                                    article_no_normalized,
+                                    f"{article_no_normalized:06d}",
+                                    f"{article_no_normalized:06d}00",
+                                ]
+                                article_no_variants = list(dict.fromkeys(article_no_variants))
+                                
+                                where_conditions = " OR ".join(["sa.article_no = %s"] * len(article_no_variants))
+                                params = article_no_variants
+                                
+                                cursor.execute(
+                                    f"""
+                                    SELECT sa.article_content, sa.clause_no, sa.item_no
+                                    FROM statutes_articles sa
+                                    WHERE ({where_conditions})
+                                    ORDER BY 
+                                        CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
+                                        sa.clause_no,
+                                        CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
+                                        sa.item_no
+                                    """,
+                                    tuple(params)
+                                )
+                                full_rows = cursor.fetchall()
+                                if full_rows:
+                                    full_parts = []
+                                    for full_row in full_rows:
+                                        if hasattr(full_row, 'keys'):
+                                            content = full_row.get('article_content')
+                                        else:
+                                            content = full_row[0] if len(full_row) > 0 else None
+                                        if content:
+                                            full_parts.append(str(content))
+                                    if full_parts:
+                                        full_content = "\n".join(full_parts)
+                                        if len(full_content.strip()) >= 200:
+                                            self.logger.debug(f"✅ [TASK 3] Restored full article from statutes_articles for article_no={article_no_from_db} (length: {len(full_content)} chars)")
+                                            return full_content
+                            except Exception as e:
+                                self.logger.debug(f"Failed to restore full article: {e}")
+                        
+                        self.logger.debug(f"Restored text for {source_type} id={source_id} (length: {len(text_str)} chars)")
+                        return text_str
+                
+                # statutes_articles에서 찾지 못한 경우, statute_embeddings.metadata에서 시도
+                if not row:
+                    try:
+                        cursor.execute(
+                            """
+                            SELECT metadata 
+                            FROM statute_embeddings 
+                            WHERE article_id = %s 
+                            AND metadata IS NOT NULL
+                            LIMIT 1
+                            """,
+                            (source_id,)
+                        )
+                        meta_row = cursor.fetchone()
+                        if meta_row:
+                            import json
+                            metadata = meta_row[0] if isinstance(meta_row, tuple) else meta_row.get('metadata')
+                            if metadata:
+                                if isinstance(metadata, str):
+                                    metadata = json.loads(metadata)
+                                # metadata에서 텍스트 추출 시도
+                                text = metadata.get('text') or metadata.get('article_content') or metadata.get('content')
+                                if text and len(str(text).strip()) > 0:
+                                    self.logger.debug(f"Restored text from statute_embeddings.metadata for article_id={source_id} (length: {len(str(text))} chars)")
+                                    return str(text)
+                    except Exception as e:
+                        self.logger.debug(f"Failed to get text from statute_embeddings.metadata: {e}")
+                
+                # 모든 방법 실패
+                self.logger.warning(f"No row found for {source_type} id={source_id}")
+                return ""
             elif source_type == "case_paragraph":
                 cursor.execute(
                     "SELECT text FROM case_paragraphs WHERE id = %s",
@@ -7214,7 +8326,7 @@ class SemanticSearchEngineV2:
             metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else ""
             
             # source_type에 따라 다른 필드로 조회
-            if source_type == 'case_paragraph':
+            if source_type in ['case_paragraph', 'precedent_content']:  # 🔥 레거시 지원
                 # 다양한 필드명 시도
                 case_number = (
                     metadata.get('case_number') or 
@@ -7470,10 +8582,19 @@ class SemanticSearchEngineV2:
             return text or ""
         
         try:
+            # TASK 3: article_no 추출 (전체 조문 복원용)
+            article_no = None
+            if full_metadata:
+                article_no = full_metadata.get("article_no") or full_metadata.get("article_number")
+            if not article_no and source_type == "statute_article":
+                # metadata에서 직접 추출 시도
+                if hasattr(self, '_extract_article_no_from_metadata'):
+                    article_no = self._extract_article_no_from_metadata(full_metadata)
+            
             if isinstance(source_id, str):
                 if source_id.isdigit():
                     actual_source_id = int(source_id)
-                    restored_text = self._restore_text_from_source(conn, source_type, actual_source_id)
+                    restored_text = self._restore_text_from_source(conn, source_type, actual_source_id, article_no)
                 else:
                     self.logger.debug(f"source_id is string format: {source_id}, trying metadata lookup")
                     restored_text = self._restore_text_from_chunks_by_metadata(conn, source_type, full_metadata)
@@ -7483,7 +8604,7 @@ class SemanticSearchEngineV2:
                         if extracted_id:
                             self.logger.debug(f"Extracted ID from source_id string: {extracted_id}")
                             if isinstance(extracted_id, int):
-                                restored_text = self._restore_text_from_source(conn, source_type, extracted_id)
+                                restored_text = self._restore_text_from_source(conn, source_type, extracted_id, article_no)
                             else:
                                 restored_text = self._restore_text_from_chunks_by_metadata(conn, source_type, full_metadata)
             else:

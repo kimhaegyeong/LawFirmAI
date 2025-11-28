@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from ..data.vector_store import LegalVectorStore as VectorStore
 from ..utils.config import Config
-from ..services.ai_keyword_generator import AIKeywordGenerator
+from ..processing.extractors.ai_keyword_generator import AIKeywordGenerator
 
 try:
     from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor

@@ -10,14 +10,38 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.agents.extractors import DocumentExtractor
-from core.generation.builders.prompt_builders import QueryBuilder
-from core.generation.builders.prompt_chain_executor import PromptChainExecutor
-from core.agents.parsers.response_parsers import QueryParser
-from core.agents.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants
-from core.workflow.utils.workflow_utils import WorkflowUtils
-from core.workflow.utils.query_diversifier import QueryDiversifier
+try:
+    from lawfirm_langgraph.core.agents.extractors import DocumentExtractor
+except ImportError:
+    from core.agents.extractors import DocumentExtractor
+try:
+    from lawfirm_langgraph.core.generation.builders.prompt_builders import QueryBuilder
+except ImportError:
+    from core.generation.builders.prompt_builders import QueryBuilder
+try:
+    from lawfirm_langgraph.core.generation.builders.prompt_chain_executor import PromptChainExecutor
+except ImportError:
+    from core.generation.builders.prompt_chain_executor import PromptChainExecutor
+try:
+    from lawfirm_langgraph.core.agents.parsers.response_parsers import QueryParser
+except ImportError:
+    from core.agents.parsers.response_parsers import QueryParser
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.workflow.utils.query_diversifier import QueryDiversifier
+except ImportError:
+    from core.workflow.utils.query_diversifier import QueryDiversifier
 
 try:
     from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor

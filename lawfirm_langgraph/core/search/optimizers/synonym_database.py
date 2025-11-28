@@ -1,10 +1,8 @@
 ﻿#!/usr/bin/env python3
 """
 동의어 데이터베이스 관리 시스템
-SQLite를 사용한 동의어 저장, 관리, 최적화 시스템
+PostgreSQL을 사용한 동의어 저장, 관리, 최적화 시스템
 """
-
-import sqlite3
 import json
 import os
 import time
@@ -17,6 +15,19 @@ try:
 except ImportError:
     from core.utils.logger import get_logger
 from pathlib import Path
+from contextlib import contextmanager
+
+# Database adapter import
+try:
+    from core.data.db_adapter import DatabaseAdapter
+    from core.data.sql_adapter import SQLAdapter
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+        from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+    except ImportError:
+        DatabaseAdapter = None
+        SQLAdapter = None
 
 @dataclass
 class SynonymRecord:
@@ -36,17 +47,51 @@ class SynonymRecord:
 class SynonymDatabase:
     """동의어 데이터베이스 관리 클래스"""
     
-    def __init__(self, db_path: str = "data/synonym_database.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = "data/synonym_database.db", database_url: Optional[str] = None):
+        # database_url 필수
+        if database_url:
+            self.database_url = database_url
+            self.db_path = None
+        else:
+            if db_path and (db_path.startswith('postgresql://') or db_path.startswith('postgres://')):
+                self.database_url = db_path
+                self.db_path = None
+            else:
+                raise ValueError(f"Invalid database path: {db_path}. PostgreSQL URL is required (e.g., postgresql://user:password@host:port/database)")
+        
+        # DatabaseAdapter 초기화 (필수)
+        if not DatabaseAdapter:
+            raise ImportError("DatabaseAdapter is required. PostgreSQL support is mandatory.")
+        
         self.logger = get_logger(__name__)
+        try:
+            self._db_adapter = DatabaseAdapter(self.database_url)
+            self.logger.info(f"DatabaseAdapter initialized: type={self._db_adapter.db_type}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize DatabaseAdapter: {e}") from e
+        
         self._initialize_database()
+    
+    def _get_connection(self):
+        """데이터베이스 연결 가져오기"""
+        if not self._db_adapter:
+            raise RuntimeError("DatabaseAdapter is required")
+        return self._db_adapter.get_connection()
+    
+    @contextmanager
+    def _get_connection_context(self):
+        """데이터베이스 연결 컨텍스트 매니저"""
+        if not self._db_adapter:
+            raise RuntimeError("DatabaseAdapter is required")
+        with self._db_adapter.get_connection_context() as conn:
+            yield conn
     
     def _initialize_database(self):
         """데이터베이스 초기화"""
         # 디렉토리 생성
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         conn.text_factory = str  # UTF-8 텍스트 처리
         cursor = conn.cursor()
         
@@ -110,7 +155,7 @@ class SynonymDatabase:
     def save_synonym(self, synonym_record: SynonymRecord) -> bool:
         """동의어 저장"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             cursor = conn.cursor()
             
@@ -154,7 +199,7 @@ class SynonymDatabase:
         success_count = 0
         
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             cursor = conn.cursor()
             
@@ -202,7 +247,7 @@ class SynonymDatabase:
                     context: str = None, limit: int = None) -> List[SynonymRecord]:
         """동의어 조회"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -264,7 +309,7 @@ class SynonymDatabase:
                           domain: str = None, context: str = None) -> bool:
         """사용 횟수 업데이트"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             cursor = conn.cursor()
             
@@ -297,7 +342,7 @@ class SynonymDatabase:
                           domain: str = None, context: str = None) -> bool:
         """사용자 평점 업데이트"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             cursor = conn.cursor()
             
@@ -346,7 +391,7 @@ class SynonymDatabase:
     def get_database_statistics(self) -> Dict[str, Any]:
         """데이터베이스 통계 조회"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             cursor = conn.cursor()
             
@@ -403,7 +448,7 @@ class SynonymDatabase:
     def cleanup_unused_synonyms(self, days_threshold: int = 30) -> int:
         """사용하지 않는 동의어 정리"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.text_factory = str  # UTF-8 텍스트 처리
             cursor = conn.cursor()
             
@@ -434,7 +479,7 @@ class SynonymDatabase:
             output_file = f"data/synonym_export_{timestamp}.json"
         
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             

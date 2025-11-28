@@ -359,9 +359,15 @@ class LegalDataConnectorV2:
             self.logger.debug(f"Error analyzing query plan: {e}")
             return None
         finally:
-            # 연결 풀링 사용 시 close() 호출하지 않음
-            # DatabaseAdapter는 연결 풀을 자동 관리
-            pass
+            # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+            try:
+                cursor.close()
+            except Exception:
+                pass
+            try:
+                conn.close()  # 연결 풀에 반환
+            except Exception:
+                pass
 
     def _optimize_fts5_query(self, query: str) -> str:
         """
@@ -715,6 +721,22 @@ class LegalDataConnectorV2:
     def search_statutes_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
         """FTS5 키워드 검색: 법령 조문 (최적화됨)"""
         try:
+            # 🔥 개선: 조문 번호가 있으면 직접 검색 먼저 시도
+            import re
+            article_pattern = re.compile(r'제\s*(\d+)\s*조')
+            article_match = article_pattern.search(query)
+            law_pattern = re.compile(r'([가-힣]+법|민법|형법|상법|공법|사법)')
+            law_match = law_pattern.search(query)
+            
+            if article_match and law_match:
+                # 조문 번호 직접 검색 먼저 시도
+                direct_results = self.search_statute_article_direct(query, limit=limit)
+                if direct_results:
+                    self.logger.info(f"✅ [FTS WITH DIRECT] 조문 직접 검색 성공: {len(direct_results)}개, FTS 검색 스킵")
+                    return direct_results
+                else:
+                    self.logger.debug(f"⚠️ [FTS WITH DIRECT] 조문 직접 검색 실패, FTS 검색 진행")
+            
             # FTS5 쿼리 최적화 및 안전화
             optimized_query = self._optimize_fts5_query(query)
             safe_query = self._sanitize_fts5_query(optimized_query)
@@ -857,12 +879,15 @@ class LegalDataConnectorV2:
                         "search_type": "keyword"
                     })
             finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if not self._connection_pool:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()  # 연결 풀에 반환
+                except Exception:
+                    pass
             
             self.logger.info(f"FTS search found {len(results)} statute articles for query: '{query}' (safe_query: '{safe_query}')")
             
@@ -923,6 +948,30 @@ class LegalDataConnectorV2:
             # article_no는 이미 위에서 추출됨
             
             self.logger.info(f"⚖️ [DIRECT STATUTE SEARCH] 법령명: {law_name}, 조문번호: {article_no}")
+            
+            # 🔥 개선: 조문 번호를 여러 형식으로 변환하여 시도
+            # 로그 패턴 분석: 046800 = 제468조, 052600 = 제526조, 053700 = 제537조
+            # 따라서 제750조는 "075000" 형식일 가능성이 높음
+            article_no_clean = article_no.lstrip('0')  # 앞의 0 제거 ("0750" -> "750")
+            article_no_variants = []
+            
+            if article_no_clean.isdigit():
+                # 방법 1: 앞에 0 채우기 (기존 방식) - "750" -> "000750"
+                variant1 = article_no_clean.zfill(6)
+                # 방법 2: 뒤에 00 붙이기 (로그 패턴 기반) - "750" -> "075000"
+                variant2 = article_no_clean.zfill(4) + "00"
+                # 방법 3: 중간에 0 채우기 - "750" -> "007500"
+                variant3 = article_no_clean.zfill(5) + "0"
+                # 방법 4: 원본 그대로
+                variant4 = article_no_clean
+                
+                article_no_variants = [variant1, variant2, variant3, variant4]
+                # 중복 제거
+                article_no_variants = list(dict.fromkeys(article_no_variants))
+            else:
+                article_no_variants = [article_no]
+            
+            self.logger.debug(f"조문 번호 형식 변환: '{article_no}' -> variants={article_no_variants}")
             
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -1031,8 +1080,12 @@ class LegalDataConnectorV2:
                     self.logger.warning(f"법령 ID를 찾을 수 없음: {law_name}")
                     return []
                 
-                # 해당 조문 직접 조회 (SQLite는 NULLS LAST 미지원, CASE 문 사용)
-                cursor.execute("""
+                # 해당 조문 직접 조회 (여러 형식으로 시도)
+                # 🔥 개선: 여러 article_no 형식을 OR 조건으로 시도
+                where_conditions = " OR ".join([f"sa.article_no = %s" for _ in article_no_variants])
+                params = [statute_id] + article_no_variants + [limit * 2]
+                
+                cursor.execute(f"""
                     SELECT 
                         sa.id,
                         sa.statute_id,
@@ -1047,14 +1100,14 @@ class LegalDataConnectorV2:
                         s.domain as category
                     FROM statutes_articles sa
                     JOIN statutes s ON sa.statute_id = s.id
-                    WHERE sa.statute_id = %s AND sa.article_no = %s
+                    WHERE sa.statute_id = %s AND ({where_conditions})
                     ORDER BY 
                         CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
                         sa.clause_no,
                         CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
                         sa.item_no
                     LIMIT %s
-                """, (statute_id, article_no, limit * 2))
+                """, tuple(params))
                 
                 for row in cursor.fetchall():
                     if row['id'] not in seen_ids:
@@ -1091,12 +1144,15 @@ class LegalDataConnectorV2:
                             "direct_match": True
                         })
             finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if not self._connection_pool:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()  # 연결 풀에 반환
+                except Exception:
+                    pass
             
             if results:
                 self.logger.info(f"✅ [DIRECT STATUTE SEARCH] {len(results)}개 조문 직접 검색 성공: {law_name} 제{article_no}조")
@@ -1254,12 +1310,15 @@ class LegalDataConnectorV2:
                                 "fallback_strategy": "law_article_only"
                             })
                 finally:
-                    # 연결 풀링 사용 시 close() 호출하지 않음
-                    if not self._connection_pool:
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
+                    # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                    try:
+                        conn.close()  # 연결 풀에 반환
+                    except Exception:
+                        pass
                 
                 if fallback_results:
                     self.logger.info(f"Fallback 1 found {len(fallback_results)} results")
@@ -1291,7 +1350,7 @@ class LegalDataConnectorV2:
                     # PostgreSQL FTS 검색으로 변환
                     if self._db_adapter and self._db_adapter.db_type == 'postgresql':
                         where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                            keyword_query, table_alias='sa', text_vector_column='text_search_vector'
+                            keyword_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
                         )
                         
                         if not tsquery:
@@ -1388,12 +1447,15 @@ class LegalDataConnectorV2:
                                 "fallback_strategy": "keyword_only"
                             })
                 finally:
-                    # 연결 풀링 사용 시 close() 호출하지 않음
-                    if not self._connection_pool:
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
+                    # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                    try:
+                        conn.close()  # 연결 풀에 반환
+                    except Exception:
+                        pass
                 
                 if fallback_results:
                     self.logger.info(f"Fallback 2 found {len(fallback_results)} results")
@@ -1417,7 +1479,7 @@ class LegalDataConnectorV2:
                         # PostgreSQL FTS 검색으로 변환
                         if self._db_adapter and self._db_adapter.db_type == 'postgresql':
                             where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                                fallback_query, table_alias='sa', text_vector_column='text_search_vector'
+                                fallback_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
                             )
                             
                             if not tsquery:
@@ -1510,12 +1572,15 @@ class LegalDataConnectorV2:
                                     "fallback_strategy": "article_number_only"
                                 })
                     finally:
-                        # 연결 풀링 사용 시 close() 호출하지 않음
-                        if not self._connection_pool:
-                            try:
-                                conn.close()
-                            except Exception:
-                                pass
+                        # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                        try:
+                            cursor.close()
+                        except Exception:
+                            pass
+                        try:
+                            conn.close()  # 연결 풀에 반환
+                        except Exception:
+                            pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback 3 found {len(fallback_results)} results")
@@ -1598,30 +1663,35 @@ class LegalDataConnectorV2:
                                 
                                 fallback_results.append({
                                     "id": f"case_para_{row['id']}",
-                                    "type": "case",
+                                    "type": "precedent_content",
+                                    "source_type": "precedent_content",
                                     "content": text_content,
                                     "text": text_content,
                                     "source": f"{row['court']} {row['doc_id']}",
                                     "metadata": {
-                                        "case_id": row['case_id'],
-                                        "doc_id": row['doc_id'],
-                                        "court": row['court'],
-                                        "case_type": row['case_type'],
-                                        "casenames": row['casenames'],
-                                        "announce_date": row['announce_date'],
-                                        "para_index": row['para_index'],
+                                        "case_id": row.get('case_id'),
+                                        "doc_id": row.get('doc_id'),
+                                        "court": row.get('court'),
+                                        "case_type": row.get('case_type'),
+                                        "casenames": row.get('casenames'),
+                                        "announce_date": row.get('announce_date'),
+                                        "para_index": row.get('para_index'),
+                                        "source_type": "precedent_content",
                                     },
                                     "relevance_score": relevance_score,
                                     "search_type": "keyword",
                                     "fallback_strategy": "keyword_only"
                                 })
                     finally:
-                        # 연결 풀링 사용 시 close() 호출하지 않음
-                        if not self._connection_pool:
-                            try:
-                                conn.close()
-                            except Exception:
-                                pass
+                        # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                        try:
+                            cursor.close()
+                        except Exception:
+                            pass
+                        try:
+                            conn.close()  # 연결 풀에 반환
+                        except Exception:
+                            pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback case search found {len(fallback_results)} results")
@@ -1674,18 +1744,20 @@ class LegalDataConnectorV2:
                                         
                                         fallback_results.append({
                                             "id": f"case_para_{row['id']}",
-                                            "type": "case",
+                                            "type": "precedent_content",
+                                            "source_type": "precedent_content",
                                             "content": text_content,
                                             "text": text_content,
                                             "source": f"{row['court']} {row['doc_id']}",
                                             "metadata": {
-                                                "case_id": row['case_id'],
-                                                "doc_id": row['doc_id'],
-                                                "court": row['court'],
-                                                "case_type": row['case_type'],
-                                                "casenames": row['casenames'],
-                                                "announce_date": row['announce_date'],
-                                                "para_index": row['para_index'],
+                                                "case_id": row.get('case_id'),
+                                                "doc_id": row.get('doc_id'),
+                                                "court": row.get('court'),
+                                                "case_type": row.get('case_type'),
+                                                "casenames": row.get('casenames'),
+                                                "announce_date": row.get('announce_date'),
+                                                "para_index": row.get('para_index'),
+                                                "source_type": "precedent_content",
                                             },
                                             "relevance_score": relevance_score,
                                             "search_type": "keyword",
@@ -1806,12 +1878,15 @@ class LegalDataConnectorV2:
                                     "fallback_strategy": "keyword_only"
                                 })
                     finally:
-                        # 연결 풀링 사용 시 close() 호출하지 않음
-                        if not self._connection_pool:
-                            try:
-                                conn.close()
-                            except Exception:
-                                pass
+                        # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                        try:
+                            cursor.close()
+                        except Exception:
+                            pass
+                        try:
+                            conn.close()  # 연결 풀에 반환
+                        except Exception:
+                            pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback decision search found {len(fallback_results)} results")
@@ -2052,7 +2127,8 @@ class LegalDataConnectorV2:
                     
                     results.append({
                         "id": f"case_para_{row['id']}",
-                        "type": "case",
+                        "type": "precedent_content",
+                        "source_type": "precedent_content",
                         "content": text_content,
                         "text": text_content,
                         "source": f"{row['court']} {row['doc_id']}",
@@ -2063,17 +2139,21 @@ class LegalDataConnectorV2:
                             "case_type": row.get('case_type'),
                             "casenames": row.get('casenames'),
                             "announce_date": row.get('announce_date'),
+                            "source_type": "precedent_content",
                         },
                         "relevance_score": relevance_score,
                         "search_type": "keyword"
                     })
             finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if not self._connection_pool:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()  # 연결 풀에 반환
+                except Exception:
+                    pass
             
             self.logger.info(f"FTS search found {len(results)} case paragraphs for query: {query}")
             
@@ -2224,12 +2304,15 @@ class LegalDataConnectorV2:
                         "search_type": "keyword"
                     })
             finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if not self._connection_pool:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()  # 연결 풀에 반환
+                except Exception:
+                    pass
             
             self.logger.info(f"FTS search found {len(results)} decision paragraphs for query: {query}")
             
@@ -2380,12 +2463,15 @@ class LegalDataConnectorV2:
                         "search_type": "keyword"
                     })
             finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if not self._connection_pool:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()  # 연결 풀에 반환
+                except Exception:
+                    pass
             self.logger.info(f"FTS search found {len(results)} interpretation paragraphs for query: {query}")
             
             # 결과가 없으면 폴백 검색 시도
@@ -2541,10 +2627,11 @@ class LegalDataConnectorV2:
             type_docs[doc_type].append(doc)
             type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
         
-        # 타입별 최소 보장 (statute_article: 1개, case: 2개, decision: 1개, interpretation: 1개)
+        # 타입별 최소 보장 (statute_article: 1개, precedent_content: 2개, decision: 1개, interpretation: 1개)
         min_counts = {
             "statute_article": 1,
-            "case": 2,
+            "precedent_content": 2,
+            "case": 2,  # 레거시 호환
             "decision": 1,
             "interpretation": 1
         }

@@ -11,10 +11,22 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.search.optimizers.legal_query_analyzer import LegalQueryAnalyzer
-from core.search.optimizers.legal_keyword_expander import LegalKeywordExpander
-from core.search.optimizers.legal_query_optimizer import LegalQueryOptimizer
-from core.search.optimizers.legal_query_validator import LegalQueryValidator
+try:
+    from lawfirm_langgraph.core.search.optimizers.legal_query_analyzer import LegalQueryAnalyzer
+except ImportError:
+    from core.search.optimizers.legal_query_analyzer import LegalQueryAnalyzer
+try:
+    from lawfirm_langgraph.core.search.optimizers.legal_keyword_expander import LegalKeywordExpander
+except ImportError:
+    from core.search.optimizers.legal_keyword_expander import LegalKeywordExpander
+try:
+    from lawfirm_langgraph.core.search.optimizers.legal_query_optimizer import LegalQueryOptimizer
+except ImportError:
+    from core.search.optimizers.legal_query_optimizer import LegalQueryOptimizer
+try:
+    from lawfirm_langgraph.core.search.optimizers.legal_query_validator import LegalQueryValidator
+except ImportError:
+    from core.search.optimizers.legal_query_validator import LegalQueryValidator
 
 logger = get_logger(__name__)
 

@@ -12,14 +12,39 @@ except ImportError:
 import json
 import sqlite3
 import asyncio
+import os
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
-from core.data.vector_store import LegalVectorStore
-from core.utils.config import Config
-from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
+# Database adapter import
+try:
+    from core.data.db_adapter import DatabaseAdapter
+    from core.data.sql_adapter import SQLAdapter
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+        from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+    except ImportError:
+        DatabaseAdapter = None
+        SQLAdapter = None
+
+try:
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+except ImportError:
+    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+try:
+    from lawfirm_langgraph.core.data.vector_store import LegalVectorStore
+except ImportError:
+    from core.data.vector_store import LegalVectorStore
+try:
+    from lawfirm_langgraph.core.utils.config import Config
+except ImportError:
+    from core.utils.config import Config
+try:
+    from lawfirm_langgraph.core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
+except ImportError:
+    from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
 
 try:
     from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor

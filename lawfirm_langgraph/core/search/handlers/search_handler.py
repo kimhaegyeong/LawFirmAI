@@ -9,9 +9,18 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 # 개선 기능 import (선택적)
 try:
@@ -24,6 +33,15 @@ try:
     IMPROVEMENT_FEATURES_AVAILABLE = True
 except ImportError:
     IMPROVEMENT_FEATURES_AVAILABLE = False
+
+# MergedResult import
+try:
+    from lawfirm_langgraph.core.search.processors.result_merger import MergedResult
+except ImportError:
+    try:
+        from core.search.processors.result_merger import MergedResult
+    except ImportError:
+        MergedResult = None
 
 
 class SearchHandler:
@@ -1130,14 +1148,100 @@ class SearchHandler:
             # Step 3: 순위 결정
             ranked = self.result_ranker.rank_results(merged, top_k=20, query=query)
             
+            # 🔥 개선: rank_results 후 메타데이터 복원 (원본 문서에서)
+            # 원본 문서를 ID로 매핑 (text/content 기반 해시도 포함)
+            original_docs_by_id = {}
+            original_docs_by_content = {}
+            for doc in semantic_results + keyword_results:
+                if isinstance(doc, dict):
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    if doc_id:
+                        original_docs_by_id[doc_id] = doc
+                    # content 기반 매칭도 추가
+                    content = doc.get("text") or doc.get("content", "")
+                    if content:
+                        content_hash = str(hash(content[:200]))  # 처음 200자로 해시
+                        original_docs_by_content[content_hash] = doc
+            
+            # ranked 문서의 메타데이터를 원본 문서에서 복원
+            for doc in ranked:
+                if not isinstance(doc, dict):
+                    continue
+                
+                # ID 기반 매칭 시도
+                merged_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                original_doc = None
+                
+                if merged_id and merged_id in original_docs_by_id:
+                    original_doc = original_docs_by_id[merged_id]
+                else:
+                    # content 기반 매칭 시도
+                    content = doc.get("text") or doc.get("content", "")
+                    if content:
+                        content_hash = str(hash(content[:200]))
+                        if content_hash in original_docs_by_content:
+                            original_doc = original_docs_by_content[content_hash]
+                
+                if original_doc:
+                    # 원본 문서의 메타데이터를 doc에 복원
+                    if not doc.get("type") and original_doc.get("type"):
+                        doc["type"] = original_doc.get("type")
+                    # 🔥 source_type 제거: source_type이 있으면 type으로 변환
+                    if not doc.get("type") and original_doc.get("source_type"):
+                        doc["type"] = original_doc.get("source_type")
+                    
+                    # 법령/판례 관련 필드 복원
+                    for key in ["statute_name", "law_name", "article_no", "article_number", 
+                               "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
+                        if not doc.get(key) and original_doc.get(key):
+                            doc[key] = original_doc.get(key)
+                    
+                    # metadata에도 복원
+                    if "metadata" not in doc:
+                        doc["metadata"] = {}
+                    if not isinstance(doc["metadata"], dict):
+                        doc["metadata"] = {}
+                    
+                    original_metadata = original_doc.get("metadata", {})
+                    if isinstance(original_metadata, dict):
+                        # 🔥 source_type을 type으로 변환
+                        original_type = original_metadata.get("type") or original_metadata.get("source_type")
+                        if original_type and not doc["metadata"].get("type"):
+                            doc["metadata"]["type"] = original_type
+                        
+                        for key in ["statute_name", "law_name", "article_no", 
+                                   "article_number", "case_id", "court", "ccourt", "doc_id", 
+                                   "casenames", "precedent_id", "chunk_id", "source_id"]:
+                            if original_metadata.get(key) and not doc["metadata"].get(key):
+                                doc["metadata"][key] = original_metadata.get(key)
+                
+                # metadata에서 최상위 필드로 복원 (백업)
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    # 🔥 source_type을 type으로 변환
+                    metadata_type = metadata.get("type") or metadata.get("source_type")
+                    if metadata_type and not doc.get("type"):
+                        doc["type"] = metadata_type
+                        doc["metadata"]["type"] = metadata_type
+                    
+                    for key in ["statute_name", "law_name", "article_no", 
+                               "article_number", "case_id", "court", "ccourt", "doc_id", 
+                               "casenames", "precedent_id", "id", "chunk_id", "document_id", "source_id"]:
+                        if metadata.get(key) and key not in doc:
+                            doc[key] = metadata[key]
+            
             # Step 3.3: 키워드 매칭 점수 기반 재정렬 (검색 결과 관련성 검증 개선)
             if extracted_keywords and len(extracted_keywords) > 0:
-                # MergedResult를 Dict로 변환하여 키워드 매칭 점수 계산
+                # MergedResult를 Dict로 변환하여 키워드 매칭 점수 계산 (메타데이터 보존)
                 ranked_with_keywords = []
                 for result in ranked:
                     if isinstance(result, dict):
-                        doc = result
+                        doc = result.copy()
+                    elif MergedResult and isinstance(result, MergedResult):
+                        # result_merger의 _merged_result_to_dict 사용 (메타데이터 보존)
+                        doc = self.result_merger._merged_result_to_dict(result)
                     else:
+                        # 폴백: 직접 변환
                         doc = {
                             "text": result.text if hasattr(result, 'text') else str(result),
                             "content": result.text if hasattr(result, 'text') else str(result),
@@ -1233,16 +1337,23 @@ class SearchHandler:
                 filtered = diverse_results
             else:
                 filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)
-                # MergedResult를 Dict로 변환
+                # MergedResult를 Dict로 변환 (메타데이터 보존)
                 ranked_dicts = []
                 for result in filtered:
-                    doc = {
-                        "text": result.text if hasattr(result, 'text') else str(result),
-                        "content": result.text if hasattr(result, 'text') else str(result),
-                        "relevance_score": result.score if hasattr(result, 'score') else 0.0,
-                        "source": result.source if hasattr(result, 'source') else "",
-                        "metadata": result.metadata if hasattr(result, 'metadata') else {}
-                    }
+                    if MergedResult and isinstance(result, MergedResult):
+                        # result_merger의 _merged_result_to_dict 사용 (메타데이터 보존)
+                        doc = self.result_merger._merged_result_to_dict(result)
+                    elif isinstance(result, dict):
+                        doc = result.copy()
+                    else:
+                        # 폴백: 직접 변환
+                        doc = {
+                            "text": result.text if hasattr(result, 'text') else str(result),
+                            "content": result.text if hasattr(result, 'text') else str(result),
+                            "relevance_score": result.score if hasattr(result, 'score') else 0.0,
+                            "source": result.source if hasattr(result, 'source') else "",
+                            "metadata": result.metadata if hasattr(result, 'metadata') else {}
+                        }
                     ranked_dicts.append(doc)
                 filtered = ranked_dicts
 
