@@ -187,8 +187,33 @@ def test_metadata_restoration():
     logger.info("데이터베이스 직접 확인")
     logger.info("="*80)
     
-    conn = sqlite3.connect(config.database_path)
-    conn.row_factory = sqlite3.Row
+    # DatabaseAdapter 사용 또는 직접 연결
+    database_url = getattr(config, 'database_url', None)
+    if not database_url:
+        database_url = f"sqlite:///{config.database_path}"
+    
+    try:
+        from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+    except ImportError:
+        try:
+            from core.data.db_adapter import DatabaseAdapter
+        except ImportError:
+            DatabaseAdapter = None
+    
+    if DatabaseAdapter:
+        adapter = DatabaseAdapter(database_url)
+        conn = adapter.get_connection()
+        # SQLite인 경우 row_factory 설정
+        if adapter.db_type == 'sqlite' and hasattr(conn, 'conn'):
+            conn.conn.row_factory = sqlite3.Row
+            actual_conn = conn.conn
+        else:
+            actual_conn = conn
+    else:
+        # 하위 호환성
+        conn = sqlite3.connect(config.database_path)
+        conn.row_factory = sqlite3.Row
+        actual_conn = conn
     
     # 첫 번째 결과의 chunk_id 가져오기 (metadata 안에 있음)
     sample_chunk_id = None
@@ -196,8 +221,16 @@ def test_metadata_restoration():
         sample_metadata = results[0].get('metadata', {})
         sample_chunk_id = sample_metadata.get('chunk_id') or results[0].get('chunk_id')
     
+    # 커서 가져오기
+    if hasattr(actual_conn, 'cursor'):
+        cursor = actual_conn.cursor()
+    elif hasattr(actual_conn, 'execute'):
+        cursor = actual_conn
+    else:
+        cursor = actual_conn
+    
     if sample_chunk_id:
-        cursor = conn.execute("""
+        cursor.execute("""
             SELECT id, source_type, source_id, meta, LENGTH(text) as text_length
             FROM text_chunks
             WHERE id = ?
@@ -222,7 +255,10 @@ def test_metadata_restoration():
             else:
                 logger.warning(f"  ⚠️  meta 컬럼이 비어있음")
     
-    conn.close()
+    # 연결 닫기 (DatabaseAdapter는 자동 관리)
+    if not DatabaseAdapter or not hasattr(adapter, 'get_connection_context'):
+        if hasattr(actual_conn, 'close'):
+            actual_conn.close()
     
     logger.info("\n" + "="*80)
     logger.info("검증 완료")

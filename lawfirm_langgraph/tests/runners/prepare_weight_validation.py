@@ -97,35 +97,67 @@ class ExperimentPreparator:
             logger.info(f"   ✅ 데이터베이스 파일 존재: {db_path}")
             
             # 데이터베이스 연결 테스트
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            database_url = os.getenv("DATABASE_URL")
+            if not database_url:
+                # PostgreSQL 환경 변수로부터 조합
+                from urllib.parse import quote_plus
+                host = os.getenv("POSTGRES_HOST", "localhost")
+                port = os.getenv("POSTGRES_PORT", "5432")
+                db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+                user = os.getenv("POSTGRES_USER", "lawfirmai")
+                password = quote_plus(os.getenv("POSTGRES_PASSWORD", "local_password"))
+                database_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
             
-            # 테이블 확인
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            tables = [row[0] for row in cursor.fetchall()]
-            logger.info(f"   ✅ 테이블 수: {len(tables)}개")
-            
-            # 주요 테이블 데이터 확인
-            key_tables = {
-                "statutes": "SELECT COUNT(*) FROM statutes",
-                "statute_articles": "SELECT COUNT(*) FROM statute_articles",
-                "cases": "SELECT COUNT(*) FROM cases",
-                "case_paragraphs": "SELECT COUNT(*) FROM case_paragraphs"
-            }
-            
-            logger.info("\n   주요 테이블 데이터:")
-            for table_name, query in key_tables.items():
+            try:
+                from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+                from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+            except ImportError:
                 try:
-                    cursor.execute(query)
-                    count = cursor.fetchone()[0]
-                    logger.info(f"      - {table_name}: {count:,}개")
-                    if count == 0:
-                        logger.warning(f"      ⚠️  {table_name}에 데이터가 없습니다")
-                except Exception as e:
-                    logger.warning(f"      ⚠️  {table_name} 확인 실패: {e}")
+                    from core.data.db_adapter import DatabaseAdapter
+                    from core.data.sql_adapter import SQLAdapter
+                except ImportError:
+                    DatabaseAdapter = None
+                    SQLAdapter = None
             
-            conn.close()
+            if DatabaseAdapter:
+                adapter = DatabaseAdapter(database_url)
+                with adapter.get_connection_context() as conn:
+                    cursor = conn.cursor()
+                    
+                    # 테이블 확인
+                    if adapter.db_type == 'postgresql':
+                        cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
+                    else:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                    tables = [row[0] for row in cursor.fetchall()]
+                    logger.info(f"   ✅ 테이블 수: {len(tables)}개")
+                    
+                    # 주요 테이블 데이터 확인
+                    key_tables = {
+                        "statutes": "SELECT COUNT(*) FROM statutes",
+                        "statute_articles": "SELECT COUNT(*) FROM statute_articles",
+                        "cases": "SELECT COUNT(*) FROM cases",
+                        "case_paragraphs": "SELECT COUNT(*) FROM case_paragraphs"
+                    }
+                    
+                    logger.info("\n   주요 테이블 데이터:")
+                    for table_name, query in key_tables.items():
+                        try:
+                            # SQL 변환
+                            converted_query = SQLAdapter.convert_sql(query, adapter.db_type) if SQLAdapter else query
+                            cursor.execute(converted_query)
+                            count = cursor.fetchone()[0]
+                            logger.info(f"      - {table_name}: {count:,}개")
+                            if count == 0:
+                                logger.warning(f"      ⚠️  {table_name}에 데이터가 없습니다")
+                        except Exception as e:
+                            logger.warning(f"      ⚠️  {table_name} 확인 실패: {e}")
+            else:
+                # DatabaseAdapter를 사용할 수 없는 경우 오류
+                logger.error("   ❌ DatabaseAdapter를 사용할 수 없습니다. PostgreSQL 연결을 확인하세요.")
+                return False
+                
+                conn.close()
             self.checks_passed.append("database")
             return True
             

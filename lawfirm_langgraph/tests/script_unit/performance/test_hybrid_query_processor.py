@@ -75,7 +75,7 @@ def test_hybrid_query_processor():
             from core.processing.integration.term_integration_system import TermIntegrator
         except ImportError:
             try:
-                from core.services.term_integration_system import TermIntegrator
+                from core.processing.integration.term_integration_system import TermIntegrator
             except ImportError:
                 TermIntegrator = None
         from core.workflow.initializers.llm_initializer import LLMInitializer

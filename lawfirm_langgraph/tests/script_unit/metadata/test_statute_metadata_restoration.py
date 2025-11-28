@@ -6,6 +6,15 @@ import os
 from pathlib import Path
 import sqlite3
 
+# Database adapter import
+try:
+    from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+except ImportError:
+    try:
+        from core.data.db_adapter import DatabaseAdapter
+    except ImportError:
+        DatabaseAdapter = None
+
 # 프로젝트 경로 설정
 script_dir = Path(__file__).parent
 metadata_dir = script_dir.parent
@@ -80,44 +89,96 @@ if statute_results:
         source_id = result.get('metadata', {}).get('source_id')
         
         if chunk_id and source_id:
-            conn = sqlite3.connect(config.database_path)
-            conn.row_factory = sqlite3.Row
+            # DatabaseAdapter 사용 또는 직접 연결
+            database_url = getattr(config, 'database_url', None)
+            if not database_url:
+                database_url = f"sqlite:///{config.database_path}"
             
-            # text_chunks 확인
-            cursor = conn.execute("""
-                SELECT source_type, source_id, meta
-                FROM text_chunks
-                WHERE id = ?
-            """, (chunk_id,))
-            chunk_row = cursor.fetchone()
-            if chunk_row:
-                logger.info(f"\n  DB text_chunks:")
-                logger.info(f"    source_type: {chunk_row['source_type']}")
-                logger.info(f"    source_id: {chunk_row['source_id']}")
-                logger.info(f"    meta: {chunk_row['meta']}")
-            
-            # statute_articles 확인
-            cursor = conn.execute("""
-                SELECT sa.id, sa.article_no, s.name as statute_name
-                FROM statute_articles sa
-                JOIN statutes s ON sa.statute_id = s.id
-                WHERE sa.id = ?
-            """, (source_id,))
-            statute_row = cursor.fetchone()
-            if statute_row:
-                logger.info(f"\n  DB statute_articles:")
-                logger.info(f"    id: {statute_row['id']}")
-                logger.info(f"    article_no: {statute_row['article_no']}")
-                logger.info(f"    statute_name: {statute_row['statute_name']}")
+            if DatabaseAdapter:
+                adapter = DatabaseAdapter(database_url)
+                with adapter.get_connection_context() as conn:
+                    # 커서 가져오기
+                    if hasattr(conn, 'cursor'):
+                        cursor = conn.cursor()
+                    elif hasattr(conn, 'conn'):
+                        cursor = conn.conn.cursor()
+                    else:
+                        cursor = conn
+                    
+                    # text_chunks 확인
+                    cursor.execute("""
+                        SELECT source_type, source_id, meta
+                        FROM text_chunks
+                        WHERE id = ?
+                    """, (chunk_id,))
+                    chunk_row = cursor.fetchone()
+                    if chunk_row:
+                        logger.info(f"\n  DB text_chunks:")
+                        logger.info(f"    source_type: {chunk_row['source_type']}")
+                        logger.info(f"    source_id: {chunk_row['source_id']}")
+                        logger.info(f"    meta: {chunk_row['meta']}")
+                    
+                    # statute_articles 확인
+                    cursor.execute("""
+                        SELECT sa.id, sa.article_no, s.name as statute_name
+                        FROM statute_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE sa.id = ?
+                    """, (source_id,))
+                    statute_row = cursor.fetchone()
+                    if statute_row:
+                        logger.info(f"\n  DB statute_articles:")
+                        logger.info(f"    id: {statute_row['id']}")
+                        logger.info(f"    article_no: {statute_row['article_no']}")
+                        logger.info(f"    statute_name: {statute_row['statute_name']}")
+                    else:
+                        logger.warning(f"  ⚠️  statute_articles에서 source_id={source_id}를 찾을 수 없습니다")
+                    
+                    # _get_source_metadata 테스트
+                    actual_conn = conn.conn if hasattr(conn, 'conn') else conn
+                    source_meta = search_engine._get_source_metadata(actual_conn, "statute_article", source_id)
+                    logger.info(f"\n  _get_source_metadata 결과:")
+                    logger.info(f"    {source_meta}")
             else:
-                logger.warning(f"  ⚠️  statute_articles에서 source_id={source_id}를 찾을 수 없습니다")
-            
-            # _get_source_metadata 테스트
-            source_meta = search_engine._get_source_metadata(conn, "statute_article", source_id)
-            logger.info(f"\n  _get_source_metadata 결과:")
-            logger.info(f"    {source_meta}")
-            
-            conn.close()
+                # 하위 호환성: 직접 연결
+                conn = sqlite3.connect(config.database_path)
+                conn.row_factory = sqlite3.Row
+                
+                # text_chunks 확인
+                cursor = conn.execute("""
+                    SELECT source_type, source_id, meta
+                    FROM text_chunks
+                    WHERE id = ?
+                """, (chunk_id,))
+                chunk_row = cursor.fetchone()
+                if chunk_row:
+                    logger.info(f"\n  DB text_chunks:")
+                    logger.info(f"    source_type: {chunk_row['source_type']}")
+                    logger.info(f"    source_id: {chunk_row['source_id']}")
+                    logger.info(f"    meta: {chunk_row['meta']}")
+                
+                # statute_articles 확인
+                cursor = conn.execute("""
+                    SELECT sa.id, sa.article_no, s.name as statute_name
+                    FROM statute_articles sa
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE sa.id = ?
+                """, (source_id,))
+                statute_row = cursor.fetchone()
+                if statute_row:
+                    logger.info(f"\n  DB statute_articles:")
+                    logger.info(f"    id: {statute_row['id']}")
+                    logger.info(f"    article_no: {statute_row['article_no']}")
+                    logger.info(f"    statute_name: {statute_row['statute_name']}")
+                else:
+                    logger.warning(f"  ⚠️  statute_articles에서 source_id={source_id}를 찾을 수 없습니다")
+                
+                # _get_source_metadata 테스트
+                source_meta = search_engine._get_source_metadata(conn, "statute_article", source_id)
+                logger.info(f"\n  _get_source_metadata 결과:")
+                logger.info(f"    {source_meta}")
+                
+                conn.close()
 else:
     logger.warning("⚠️  법령 검색 결과가 없습니다")
 

@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 from typing import Dict, Any, List
 
-from lawfirm_langgraph.core.search.connectors.legal_data_connector import LegalDataConnectorV2
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
 
 class TestLegalDataConnectorV2:
@@ -22,14 +22,14 @@ class TestLegalDataConnectorV2:
     @pytest.fixture
     def legal_data_connector(self, mock_db_path):
         """LegalDataConnectorV2 인스턴스"""
-        with patch('lawfirm_langgraph.core.search.connectors.legal_data_connector.Path') as mock_path:
+        with patch('lawfirm_langgraph.core.search.connectors.legal_data_connector_v2.Path') as mock_path:
             mock_path.return_value.exists.return_value = True
             connector = LegalDataConnectorV2(db_path=mock_db_path)
             return connector
     
     def test_legal_data_connector_initialization(self, mock_db_path):
         """LegalDataConnectorV2 초기화 테스트"""
-        with patch('lawfirm_langgraph.core.search.connectors.legal_data_connector.Path') as mock_path:
+        with patch('lawfirm_langgraph.core.search.connectors.legal_data_connector_v2.Path') as mock_path:
             mock_path.return_value.exists.return_value = True
             connector = LegalDataConnectorV2(db_path=mock_db_path)
             

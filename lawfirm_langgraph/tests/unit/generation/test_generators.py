@@ -12,7 +12,7 @@ from lawfirm_langgraph.core.generation.generators.answer_generator import Answer
 from lawfirm_langgraph.core.generation.generators.context_builder import ContextBuilder
 from lawfirm_langgraph.core.generation.generators.direct_answer_handler import DirectAnswerHandler
 from lawfirm_langgraph.core.generation.generators.improved_answer_generator import ImprovedAnswerGenerator
-from lawfirm_langgraph.core.services.question_classifier import QuestionType, QuestionClassification
+from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType, QuestionClassification
 
 
 class TestAnswerGenerator:

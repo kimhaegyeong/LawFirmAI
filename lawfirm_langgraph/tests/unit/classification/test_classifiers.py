@@ -7,7 +7,7 @@ Classification Classifiers 테스트
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 
-from lawfirm_langgraph.core.services.question_classifier import QuestionClassifier, QuestionType, QuestionClassification
+from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionClassifier, QuestionType, QuestionClassification
 from lawfirm_langgraph.core.classification.classifiers.hybrid_question_classifier import HybridQuestionClassifier
 from lawfirm_langgraph.core.classification.classifiers.semantic_domain_classifier import SemanticDomainClassifier
 from lawfirm_langgraph.core.classification.classifiers.complexity_classifier import ComplexityClassifier

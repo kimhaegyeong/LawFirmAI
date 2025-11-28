@@ -23,7 +23,7 @@ if str(lawfirm_langgraph_dir) not in sys.path:
 
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig, CheckpointStorageType
 from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
-from lawfirm_langgraph.core.services.question_classifier import QuestionType
+from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
 
 
 class TestEnhancedLegalQuestionWorkflow:
@@ -126,6 +126,71 @@ class TestEnhancedLegalQuestionWorkflow:
         result = workflow.process_search_results_combined(sample_state)
         
         assert isinstance(result, dict)
+    
+    def test_consolidate_expanded_query_results(self, workflow):
+        """확장된 쿼리 결과 병합 및 중복 제거 테스트"""
+        # 테스트 데이터: 확장된 쿼리 결과 시뮬레이션
+        semantic_results = [
+            {
+                "id": "doc1",
+                "content": "계약 해지 사유에 대한 내용",
+                "relevance_score": 0.9,
+                "source_query": "original"
+            },
+            {
+                "id": "doc1",  # 중복 ID
+                "content": "계약 해지 사유에 대한 내용",  # 동일 내용
+                "relevance_score": 0.85,
+                "sub_query": "sub_query_1"  # 확장된 쿼리
+            },
+            {
+                "id": "doc2",
+                "content": "계약 해지 절차",
+                "relevance_score": 0.8,
+                "sub_query": "sub_query_1"
+            },
+            {
+                "id": "doc3",
+                "content": "계약 해지 사유에 대한 내용",  # 동일 내용, 다른 ID
+                "relevance_score": 0.75,
+                "query_variation": "variation_1"
+            }
+        ]
+        
+        # 메서드 호출
+        result = workflow._consolidate_expanded_query_results(
+            semantic_results,
+            "계약 해지 사유에 대해 알려주세요"
+        )
+        
+        # 검증
+        assert isinstance(result, list)
+        assert len(result) <= len(semantic_results), "중복 제거로 인해 결과 수가 줄어들어야 함"
+        
+        # 중복 제거 확인
+        seen_ids = set()
+        for doc in result:
+            doc_id = doc.get("id")
+            if doc_id:
+                assert doc_id not in seen_ids, f"중복 ID 발견: {doc_id}"
+                seen_ids.add(doc_id)
+        
+        # 가중치 적용 확인
+        for doc in result:
+            assert "source_query" in doc, "source_query 필드가 있어야 함"
+            assert "query_weight" in doc, "query_weight 필드가 있어야 함"
+            assert "weighted_score" in doc, "weighted_score 필드가 있어야 함"
+            
+            # 원본 쿼리는 가중치 1.0
+            if doc.get("source_query") == "original":
+                assert doc.get("query_weight") == 1.0
+            else:
+                assert doc.get("query_weight") == 0.9
+        
+        # 정렬 확인 (가중치 점수 기준 내림차순)
+        if len(result) > 1:
+            for i in range(len(result) - 1):
+                assert result[i].get("weighted_score", 0) >= result[i + 1].get("weighted_score", 0)
 
     def test_merge_and_rerank_with_keyword_weights(self, workflow, sample_state):
         """키워드 가중치 기반 병합 및 재순위화 테스트"""

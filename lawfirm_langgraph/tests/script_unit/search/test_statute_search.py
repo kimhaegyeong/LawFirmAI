@@ -27,6 +27,15 @@ except ImportError:
     from core.utils.logger import get_logger
 import sqlite3
 
+# Database adapter import
+try:
+    from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+except ImportError:
+    try:
+        from core.data.db_adapter import DatabaseAdapter
+    except ImportError:
+        DatabaseAdapter = None
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = get_logger(__name__)
 
@@ -92,69 +101,142 @@ logger.info(f"소스 타입별 분포: {type_counts}")
 
 # 3. 법령 텍스트 길이 확인
 logger.info("\n3️⃣  법령 텍스트 길이 확인")
-conn = sqlite3.connect(config.database_path)
-conn.row_factory = sqlite3.Row
+database_url = getattr(config, 'database_url', None)
+if not database_url:
+    database_url = f"sqlite:///{config.database_path}"
 
-cursor = conn.execute("""
-    SELECT tc.id, tc.text, tc.source_id, sa.article_no, s.name as statute_name
-    FROM text_chunks tc
-    JOIN statute_articles sa ON tc.source_id = sa.id
-    JOIN statutes s ON sa.statute_id = s.id
-    WHERE tc.source_type = 'statute_article'
-    LIMIT 100
-""")
-
-text_lengths = []
-for row in cursor.fetchall():
-    text_length = len(row['text']) if row['text'] else 0
-    text_lengths.append(text_length)
-    if text_length < 100:
-        logger.info(f"  짧은 법령: chunk_id={row['id']}, length={text_length}, "
-                   f"statute={row['statute_name']}, article={row['article_no']}")
-
-if text_lengths:
-    logger.info(f"\n법령 텍스트 길이 통계:")
-    logger.info(f"  평균: {sum(text_lengths) / len(text_lengths):.1f}자")
-    logger.info(f"  최소: {min(text_lengths)}자")
-    logger.info(f"  최대: {max(text_lengths)}자")
-    logger.info(f"  100자 미만: {sum(1 for l in text_lengths if l < 100)}개 ({sum(1 for l in text_lengths if l < 100)/len(text_lengths)*100:.1f}%)")
-    logger.info(f"  50자 미만: {sum(1 for l in text_lengths if l < 50)}개 ({sum(1 for l in text_lengths if l < 50)/len(text_lengths)*100:.1f}%)")
-
-conn.close()
+if DatabaseAdapter:
+    adapter = DatabaseAdapter(database_url)
+    with adapter.get_connection_context() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT tc.id, tc.text, tc.source_id, sa.article_no, s.name as statute_name
+            FROM text_chunks tc
+            JOIN statute_articles sa ON tc.source_id = sa.id
+            JOIN statutes s ON sa.statute_id = s.id
+            WHERE tc.source_type = 'statute_article'
+            LIMIT 100
+        """)
+        
+        text_lengths = []
+        for row in cursor.fetchall():
+            text_length = len(row['text']) if row['text'] else 0
+            text_lengths.append(text_length)
+            if text_length < 100:
+                logger.info(f"  짧은 법령: chunk_id={row['id']}, length={text_length}, "
+                           f"statute={row['statute_name']}, article={row['article_no']}")
+        
+        if text_lengths:
+            logger.info(f"\n법령 텍스트 길이 통계:")
+            logger.info(f"  평균: {sum(text_lengths) / len(text_lengths):.1f}자")
+            logger.info(f"  최소: {min(text_lengths)}자")
+            logger.info(f"  최대: {max(text_lengths)}자")
+            logger.info(f"  100자 미만: {sum(1 for l in text_lengths if l < 100)}개 ({sum(1 for l in text_lengths if l < 100)/len(text_lengths)*100:.1f}%)")
+            logger.info(f"  50자 미만: {sum(1 for l in text_lengths if l < 50)}개 ({sum(1 for l in text_lengths if l < 50)/len(text_lengths)*100:.1f}%)")
+else:
+    # 하위 호환성
+    conn = sqlite3.connect(config.database_path)
+    conn.row_factory = sqlite3.Row
+    
+    cursor = conn.execute("""
+        SELECT tc.id, tc.text, tc.source_id, sa.article_no, s.name as statute_name
+        FROM text_chunks tc
+        JOIN statute_articles sa ON tc.source_id = sa.id
+        JOIN statutes s ON sa.statute_id = s.id
+        WHERE tc.source_type = 'statute_article'
+        LIMIT 100
+    """)
+    
+    text_lengths = []
+    for row in cursor.fetchall():
+        text_length = len(row['text']) if row['text'] else 0
+        text_lengths.append(text_length)
+        if text_length < 100:
+            logger.info(f"  짧은 법령: chunk_id={row['id']}, length={text_length}, "
+                       f"statute={row['statute_name']}, article={row['article_no']}")
+    
+    if text_lengths:
+        logger.info(f"\n법령 텍스트 길이 통계:")
+        logger.info(f"  평균: {sum(text_lengths) / len(text_lengths):.1f}자")
+        logger.info(f"  최소: {min(text_lengths)}자")
+        logger.info(f"  최대: {max(text_lengths)}자")
+        logger.info(f"  100자 미만: {sum(1 for l in text_lengths if l < 100)}개 ({sum(1 for l in text_lengths if l < 100)/len(text_lengths)*100:.1f}%)")
+        logger.info(f"  50자 미만: {sum(1 for l in text_lengths if l < 50)}개 ({sum(1 for l in text_lengths if l < 50)/len(text_lengths)*100:.1f}%)")
+    
+    conn.close()
 
 # 4. 판례에서 인용된 법령 확인
 logger.info("\n4️⃣  판례에서 인용된 법령 확인")
-conn = sqlite3.connect(config.database_path)
-conn.row_factory = sqlite3.Row
+database_url = getattr(config, 'database_url', None)
+if not database_url:
+    database_url = f"sqlite:///{config.database_path}"
 
-# 판례 텍스트에서 법령 인용 패턴 찾기
-cursor = conn.execute("""
-    SELECT DISTINCT c.id, c.doc_id, c.casenames, tc.text
-    FROM cases c
-    JOIN text_chunks tc ON tc.source_type = 'case_paragraph' AND tc.source_id = c.id
-    WHERE tc.text LIKE '%제%조%' OR tc.text LIKE '%법%조%' OR tc.text LIKE '%법률%'
-    LIMIT 10
-""")
-
-logger.info(f"법령 인용이 있는 판례: {len(cursor.fetchall())}개")
-
-# 판례 텍스트 샘플 확인
-cursor = conn.execute("""
-    SELECT tc.text
-    FROM text_chunks tc
-    JOIN cases c ON tc.source_type = 'case_paragraph' AND tc.source_id = c.id
-    WHERE tc.text LIKE '%임대차%' AND (tc.text LIKE '%제%조%' OR tc.text LIKE '%법%조%')
-    LIMIT 5
-""")
-
-logger.info("\n판례에서 법령 인용 예시:")
-for i, row in enumerate(cursor.fetchall(), 1):
-    text = row['text']
-    # 법령 인용 패턴 찾기
+if DatabaseAdapter:
+    adapter = DatabaseAdapter(database_url)
+    with adapter.get_connection_context() as conn:
+        cursor = conn.cursor()
+        
+        # 판례 텍스트에서 법령 인용 패턴 찾기
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.doc_id, c.casenames, tc.text
+            FROM cases c
+            JOIN text_chunks tc ON tc.source_type = 'case_paragraph' AND tc.source_id = c.id
+            WHERE tc.text LIKE '%제%조%' OR tc.text LIKE '%법%조%' OR tc.text LIKE '%법률%'
+            LIMIT 10
+        """)
+        
+        logger.info(f"법령 인용이 있는 판례: {len(cursor.fetchall())}개")
+        
+        # 판례 텍스트 샘플 확인
+        cursor.execute("""
+            SELECT tc.text
+            FROM text_chunks tc
+            JOIN cases c ON tc.source_type = 'case_paragraph' AND tc.source_id = c.id
+            WHERE tc.text LIKE '%임대차%' AND (tc.text LIKE '%제%조%' OR tc.text LIKE '%법%조%')
+            LIMIT 5
+        """)
+        
+        logger.info("\n판례에서 법령 인용 예시:")
+        import re
+        for i, row in enumerate(cursor.fetchall(), 1):
+            text = row['text']
+            # 법령 인용 패턴 찾기
+            patterns = re.findall(r'[가-힣]+법\s*제\d+조|제\d+조', text)
+            if patterns:
+                logger.info(f"  예시 {i}: {patterns[:3]}")
+else:
+    # 하위 호환성
+    conn = sqlite3.connect(config.database_path)
+    conn.row_factory = sqlite3.Row
+    
+    # 판례 텍스트에서 법령 인용 패턴 찾기
+    cursor = conn.execute("""
+        SELECT DISTINCT c.id, c.doc_id, c.casenames, tc.text
+        FROM cases c
+        JOIN text_chunks tc ON tc.source_type = 'case_paragraph' AND tc.source_id = c.id
+        WHERE tc.text LIKE '%제%조%' OR tc.text LIKE '%법%조%' OR tc.text LIKE '%법률%'
+        LIMIT 10
+    """)
+    
+    logger.info(f"법령 인용이 있는 판례: {len(cursor.fetchall())}개")
+    
+    # 판례 텍스트 샘플 확인
+    cursor = conn.execute("""
+        SELECT tc.text
+        FROM text_chunks tc
+        JOIN cases c ON tc.source_type = 'case_paragraph' AND tc.source_id = c.id
+        WHERE tc.text LIKE '%임대차%' AND (tc.text LIKE '%제%조%' OR tc.text LIKE '%법%조%')
+        LIMIT 5
+    """)
+    
+    logger.info("\n판례에서 법령 인용 예시:")
     import re
-    patterns = re.findall(r'[가-힣]+법\s*제\d+조|제\d+조', text)
-    if patterns:
-        logger.info(f"  예시 {i}: {patterns[:3]}")
-
-conn.close()
+    for i, row in enumerate(cursor.fetchall(), 1):
+        text = row['text']
+        # 법령 인용 패턴 찾기
+        patterns = re.findall(r'[가-힣]+법\s*제\d+조|제\d+조', text)
+        if patterns:
+            logger.info(f"  예시 {i}: {patterns[:3]}")
+    
+    conn.close()
 

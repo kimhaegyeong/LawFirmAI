@@ -8,7 +8,7 @@ import os
 
 # conftest.py에서 project_root fixture 자동 사용 가능
 
-from lawfirm_langgraph.core.search.connectors.legal_data_connector import LegalDataConnectorV2
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
 from lawfirm_langgraph.core.utils.config import Config
 from lawfirm_langgraph.core.utils.logger import get_logger

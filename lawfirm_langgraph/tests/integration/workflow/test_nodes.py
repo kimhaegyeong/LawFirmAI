@@ -106,22 +106,6 @@ class TestWorkflowNodes:
         assert result == {"answer": "test answer"}
         mock_workflow.generate_and_validate_answer.assert_called_once_with(mock_state)
     
-    def test_classification_node_legacy(self, mock_state, config):
-        """분류 노드 테스트 (레거시 호환)"""
-        with patch('lawfirm_langgraph.core.classification.handlers.classification_handler.ClassificationHandler') as MockHandler:
-            mock_handler = MockHandler.return_value
-            mock_handler.classify = Mock(return_value={
-                "legal_field": "contract",
-                "complexity": "medium",
-                "urgency": "normal",
-            })
-            
-            # 실제 노드 함수를 테스트하는 대신 핸들러 동작 확인
-            result = mock_handler.classify(mock_state["query"])
-            
-            assert "legal_field" in result
-            assert result["legal_field"] == "contract"
-    
     def test_search_node(self, mock_state, config):
         """검색 노드 테스트"""
         with patch('lawfirm_langgraph.core.agents.handlers.search_handler.SearchHandler') as MockHandler:
