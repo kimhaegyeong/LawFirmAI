@@ -11,10 +11,11 @@ LawFirmAI 프로젝트는 **PostgreSQL 12+** 데이터베이스를 사용하며,
 
 ## 데이터베이스 요구사항
 
-- **PostgreSQL 버전**: 12.0 이상
+- **PostgreSQL 버전**: 12.0 이상 (권장: 18+)
 - **필수 확장 프로그램**: 
   - `vector` (pgvector) - 벡터 검색
-  - `pg_trgm` - 한국어 텍스트 검색 (trigram 기반)
+  - `pgroonga` - 한국어 전문 검색 (형태소 분석 지원) ⭐ **권장**
+  - `pg_trgm` - 한국어 텍스트 검색 (trigram 기반, 보조)
 
 ## 확장 프로그램
 
@@ -29,15 +30,29 @@ CREATE EXTENSION IF NOT EXISTS vector;
 - 코사인 유사도 연산 (`<=>`, `<->`)
 - IVFFlat 및 HNSW 인덱스 지원
 
+### PGroonga ⭐ (권장)
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgroonga;
+```
+
+**용도**: 한국어 전문 검색을 위한 확장 (형태소 분석 지원)
+- `to_tsvector('korean', ...)` 사용 시 한국어 형태소 분석
+- 조사, 어미 제거로 핵심 키워드 추출
+- 검색 정확도 향상
+
+**자세한 내용**: [PGroonga 및 tsvector 사용 가이드](./pgroonga_tsvector_guide.md)
+
 ### pg_trgm
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-**용도**: 한국어 텍스트 검색을 위한 trigram 확장
+**용도**: 한국어 텍스트 검색을 위한 trigram 확장 (보조)
 - `gin_trgm_ops` 연산자 클래스
 - LIKE 검색 성능 향상
+- 유사도 검색 지원
 
 ## 테이블 구조
 
@@ -308,40 +323,7 @@ LIMIT 20;
 
 ### 4. 벡터 검색 관련
 
-#### text_chunks (텍스트 청크)
-
-RAG를 위한 텍스트 청크를 저장하는 테이블입니다.
-
-| 컬럼명 | 타입 | 제약조건 | 설명 |
-|--------|------|----------|------|
-| id | SERIAL | PRIMARY KEY | 청크 ID |
-| source_type | VARCHAR(50) | NOT NULL | 소스 타입 |
-| source_id | INTEGER | NOT NULL | 소스 ID (해당 테이블의 FK) |
-| level | VARCHAR(50) | | 레벨 (article/clause/item) |
-| chunk_index | INTEGER | NOT NULL | 청크 인덱스 |
-| start_char | INTEGER | | 시작 문자 위치 |
-| end_char | INTEGER | | 종료 문자 위치 |
-| overlap_chars | INTEGER | | 겹치는 문자 수 |
-| text | TEXT | NOT NULL | 청크 텍스트 |
-| token_count | INTEGER | | 토큰 수 |
-| embedding_version_id | INTEGER | | 임베딩 버전 ID (FK → embedding_versions(id)) |
-| chunk_size_category | VARCHAR(20) | | 청크 크기 카테고리 |
-| chunk_group_id | VARCHAR(255) | | 청크 그룹 ID |
-| chunking_strategy | VARCHAR(50) | | 청킹 전략 |
-| meta | JSONB | | 메타데이터 |
-| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
-| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
-
-**제약조건:**
-- PRIMARY KEY: `id`
-- FOREIGN KEY: `embedding_version_id` → `embedding_versions(id)` ON DELETE SET NULL
-- UNIQUE: `(source_type, source_id, chunk_index, embedding_version_id)`
-
-**인덱스:**
-- PRIMARY KEY: `id`
-- UNIQUE: `(source_type, source_id, chunk_index, embedding_version_id)`
-- `idx_text_chunks_meta_gin`: `meta` (GIN 인덱스, JSONB 쿼리 최적화)
-- `idx_text_chunks_version_type`: `(embedding_version_id, source_type)` (복합 B-Tree)
+**참고**: `text_chunks` 테이블은 더 이상 사용되지 않습니다. PostgreSQL 환경에서는 각 소스 타입별 전용 테이블(`precedent_chunks` 등)을 사용합니다.
 
 #### embeddings (임베딩)
 
@@ -350,7 +332,7 @@ pgvector를 사용한 벡터 임베딩을 저장하는 테이블입니다.
 | 컬럼명 | 타입 | 제약조건 | 설명 |
 |--------|------|----------|------|
 | id | SERIAL | PRIMARY KEY | 임베딩 ID |
-| chunk_id | INTEGER | NOT NULL | 청크 ID (FK → text_chunks(id)) |
+| chunk_id | INTEGER | NOT NULL | 청크 ID (다양한 소스 테이블 참조 가능) |
 | model | VARCHAR(255) | NOT NULL | 모델명 |
 | dim | INTEGER | NOT NULL | 벡터 차원 (예: 768) |
 | version_id | INTEGER | | 임베딩 버전 ID (FK → embedding_versions(id)) |
@@ -359,8 +341,8 @@ pgvector를 사용한 벡터 임베딩을 저장하는 테이블입니다.
 
 **제약조건:**
 - PRIMARY KEY: `id`
-- FOREIGN KEY: `chunk_id` → `text_chunks(id)` ON DELETE CASCADE
 - FOREIGN KEY: `version_id` → `embedding_versions(id)` ON DELETE SET NULL
+- `chunk_id`는 외래 키 제약조건 없음 (다양한 소스 테이블 참조 가능)
 
 **인덱스:**
 - PRIMARY KEY: `id`
@@ -436,6 +418,106 @@ WHERE is_active = TRUE AND data_type = 'statutes';
 
 #### retrieval_cache (검색 캐시)
 
+### 5. API 서버용 테이블 (인증 및 세션 관리)
+
+#### users (회원 정보)
+
+회원 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| user_id | VARCHAR(255) | PRIMARY KEY | 사용자 ID (Google OAuth2 sub) |
+| email | VARCHAR(255) | | 이메일 주소 |
+| name | TEXT | | 사용자 이름 |
+| picture | TEXT | | 프로필 사진 URL |
+| provider | VARCHAR(50) | | 인증 제공자 (google 등) |
+| google_access_token | TEXT | | Google OAuth2 Access Token |
+| google_refresh_token | TEXT | | Google OAuth2 Refresh Token |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+
+**제약조건:**
+- PRIMARY KEY: `user_id`
+
+**인덱스:**
+- PRIMARY KEY: `user_id`
+- `idx_users_email`: `email` (B-Tree)
+- `idx_users_provider`: `provider` (B-Tree)
+
+**사용 예시:**
+```sql
+-- 사용자 조회
+SELECT * FROM users WHERE email = 'user@example.com';
+
+-- Google OAuth2 사용자 조회
+SELECT * FROM users WHERE provider = 'google' AND user_id = 'google_user_id';
+```
+
+#### sessions (세션 정보)
+
+채팅 세션 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| session_id | VARCHAR(255) | PRIMARY KEY | 세션 ID (UUID) |
+| title | TEXT | | 세션 제목 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+| message_count | INTEGER | DEFAULT 0 | 메시지 개수 |
+| user_id | VARCHAR(255) | | 사용자 ID (FK → users(user_id)) |
+| ip_address | VARCHAR(45) | | IP 주소 (IPv4/IPv6) |
+
+**제약조건:**
+- PRIMARY KEY: `session_id`
+
+**인덱스:**
+- PRIMARY KEY: `session_id`
+- `idx_sessions_user_id`: `user_id` (B-Tree)
+- `idx_sessions_updated_at`: `updated_at` (B-Tree)
+
+**사용 예시:**
+```sql
+-- 사용자별 세션 조회
+SELECT * FROM sessions WHERE user_id = 'user_id' ORDER BY updated_at DESC;
+
+-- 최근 세션 조회
+SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 10;
+```
+
+#### messages (메시지 정보)
+
+채팅 메시지를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| message_id | VARCHAR(255) | PRIMARY KEY | 메시지 ID (UUID) |
+| session_id | VARCHAR(255) | NOT NULL, FK | 세션 ID (FK → sessions(session_id)) |
+| role | VARCHAR(50) | NOT NULL | 메시지 역할 (user, assistant, progress) |
+| content | TEXT | NOT NULL | 메시지 내용 |
+| timestamp | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 메시지 시간 |
+| metadata | JSONB | | 메타데이터 (sources_by_type, sources_detail 등) |
+
+**제약조건:**
+- PRIMARY KEY: `message_id`
+- FOREIGN KEY: `session_id` → `sessions(session_id)` ON DELETE CASCADE
+
+**인덱스:**
+- PRIMARY KEY: `message_id`
+- `idx_messages_session_id`: `session_id` (B-Tree)
+- `idx_messages_timestamp`: `timestamp` (B-Tree)
+- `idx_messages_metadata_gin`: `metadata` (GIN 인덱스, JSONB 쿼리 최적화)
+
+**사용 예시:**
+```sql
+-- 세션별 메시지 조회
+SELECT * FROM messages WHERE session_id = 'session_id' ORDER BY timestamp ASC;
+
+-- 메타데이터에서 sources_by_type 조회
+SELECT message_id, metadata->'sources_by_type' as sources
+FROM messages
+WHERE metadata ? 'sources_by_type';
+```
+
 검색 결과 캐시를 저장하는 테이블입니다.
 
 | 컬럼명 | 타입 | 제약조건 | 설명 |
@@ -458,20 +540,39 @@ PostgreSQL의 Full-Text Search 기능을 사용하여 한국어 텍스트 검색
 
 각 테이블에는 **BEFORE INSERT/UPDATE 트리거**가 설정되어 있어, 텍스트가 변경될 때 자동으로 `text_search_vector`가 갱신됩니다.
 
-### FTS 쿼리 예시
+### FTS 쿼리 예시 (PGroonga 사용)
 
 ```sql
--- 법률 조문 검색
+-- 법률 조문 검색 (PGroonga 사용, 'korean' 설정)
 SELECT 
     s.law_name_kr,
     sa.article_no,
     sa.article_content,
-    ts_rank(to_tsvector('simple', sa.article_content), query) as rank
+    ts_rank_cd(
+        to_tsvector('korean', sa.article_content),
+        plainto_tsquery('korean', '계약 해지')
+    ) as rank_score
 FROM statutes_articles sa
-JOIN statutes s ON sa.statute_id = s.id,
-to_tsquery('simple', '계약 & 해지') as query
-WHERE to_tsvector('simple', sa.article_content) @@ query
-ORDER BY rank DESC
+JOIN statutes s ON sa.statute_id = s.id
+WHERE to_tsvector('korean', sa.article_content) 
+      @@ plainto_tsquery('korean', '계약 해지')
+ORDER BY rank_score DESC
+LIMIT 10;
+
+-- text_search_vector 컬럼 활용 (권장, 인덱스 직접 사용)
+SELECT 
+    s.law_name_kr,
+    sa.article_no,
+    sa.article_content,
+    ts_rank_cd(
+        sa.text_search_vector,
+        plainto_tsquery('korean', '계약 해지')
+    ) as rank_score
+FROM statute_articles sa
+JOIN statutes s ON sa.statute_id = s.id
+WHERE sa.text_search_vector 
+      @@ plainto_tsquery('korean', '계약 해지')
+ORDER BY rank_score DESC
 LIMIT 10;
 
 -- 판례 본문 검색
@@ -500,13 +601,15 @@ pgvector를 사용하여 벡터 유사도 검색을 수행합니다.
 
 ```sql
 -- 코사인 유사도 검색 (거리 기반)
+-- embeddings 테이블 벡터 검색 (chunk_id는 다른 소스 테이블 참조)
+-- 참고: text_chunks 테이블은 더 이상 사용되지 않으므로, 
+-- 실제 사용 시에는 chunk_id가 참조하는 테이블과 JOIN 필요
 SELECT 
     e.id,
-    tc.text,
+    e.chunk_id,
     e.vector <=> query_vector as distance,
     1 - (e.vector <=> query_vector) as similarity
 FROM embeddings e
-JOIN text_chunks tc ON e.chunk_id = tc.id
 WHERE e.version_id = 1
 ORDER BY e.vector <=> query_vector
 LIMIT 10;
@@ -542,9 +645,7 @@ precedents
         └── precedent_chunks
 
 embedding_versions
-  ├── text_chunks
   └── embeddings
-        └── text_chunks
 ```
 
 ### 외래 키 정책
@@ -554,11 +655,9 @@ embedding_versions
   - `statutes_articles` → `statute_embeddings`
   - `precedents` → `precedent_contents`
   - `precedent_contents` → `precedent_chunks`
-  - `text_chunks` → `embeddings`
   - 부모 레코드 삭제 시 자식 레코드도 자동 삭제
 
 - **ON DELETE SET NULL**:
-  - `embedding_versions` → `text_chunks.embedding_version_id`
   - `embedding_versions` → `embeddings.version_id`
   - 부모 레코드 삭제 시 외래 키를 NULL로 설정
 
@@ -572,7 +671,6 @@ embedding_versions
 - `precedents.precedent_id`
 - `precedent_contents(precedent_id, section_type)`
 - `precedent_chunks(precedent_content_id, chunk_index)`
-- `text_chunks(source_type, source_id, chunk_index, embedding_version_id)`
 - `embedding_versions(version, data_type)`
 - `statute_embeddings(article_id, embedding_version)`
 
@@ -590,7 +688,6 @@ embedding_versions
 - **Full-Text Search용 tsvector 컬럼**: 
   - `statute_articles.text_search_vector`
 - **JSONB 메타데이터 컬럼**: 
-  - `text_chunks.meta`
   - `embedding_versions.metadata`
   - `precedent_chunks.metadata`
 - **Trigram 인덱스 (한국어 검색)**:
@@ -706,7 +803,16 @@ LIMIT 10;
 
 ## 관련 문서
 
+### 프로젝트 내 문서
+
+- **[PGroonga 및 tsvector 사용 가이드](./pgroonga_tsvector_guide.md)**: 상세한 사용 방법 및 예시
+- [tsvector 사용 현황 검토 보고서](./tsvector_review_report.md)
+- [Rank Score 계산 가이드](./rank_score_calculation_guide.md)
+
+### 공식 문서
+
 - PostgreSQL 공식 문서: https://www.postgresql.org/docs/
 - pgvector 문서: https://github.com/pgvector/pgvector
+- PGroonga 공식 문서: https://pgroonga.github.io/
 - PostgreSQL Full-Text Search: https://www.postgresql.org/docs/current/textsearch.html
 - pg_trgm 문서: https://www.postgresql.org/docs/current/pgtrgm.html
