@@ -2301,7 +2301,11 @@ class ResultRanker:
             all_docs = db_results + vector_results + keyword_results
             
             # 🔥 메타데이터 보존: 통합 reranking 스킵 시에도 메타데이터 복원
-            # 🔥 개선: unknown 타입도 복원하도록 수정 (기존 값이 unknown이면 metadata에서 복원)
+            # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_documents_type
+            
+            all_docs = normalize_documents_type(all_docs)
+            
             for doc in all_docs:
                 if not isinstance(doc, dict):
                     continue
@@ -2309,62 +2313,11 @@ class ResultRanker:
                 # metadata에서 최상위 필드로 복원
                 metadata = doc.get("metadata", {})
                 if isinstance(metadata, dict):
-                    # 🔥 CRITICAL: metadata의 source_type을 type으로 변환 (레거시 호환)
-                    if metadata.get("source_type") and not doc.get("type"):
-                        doc["type"] = metadata.get("source_type")
-                        metadata["type"] = metadata.get("source_type")
-                    
-                    # type 복원 (unknown이거나 없으면 복원)
-                    # 🔥 개선: 타입 복원 시 우선순위를 명확히 함
-                    current_type = doc.get("type", "").lower() if doc.get("type") else ""
-                    metadata_type = metadata.get("type") or metadata.get("source_type")
-                    
-                    # 1단계: metadata에서 타입 복원 (이미 설정된 타입이 unknown이거나 없을 때만)
-                    if metadata_type and metadata_type.lower() != "unknown":
-                        if not doc.get("type") or current_type == "unknown" or current_type == "":
-                            doc["type"] = metadata_type
-                            if not metadata.get("type"):
-                                metadata["type"] = metadata_type
-                            self.logger.debug(
-                                f"🔍 [TYPE RESTORE] Doc ID={doc.get('id', 'unknown')}: "
-                                f"metadata에서 타입 복원: {metadata_type}"
-                            )
-                    
-                    # 2단계: 타입이 여전히 없거나 unknown인 경우에만 추론
-                    # 🔥 개선: 이미 타입이 설정되어 있으면 추론하지 않음 (타입 손실 방지)
-                    if not doc.get("type") or current_type == "unknown" or current_type == "":
-                        # 먼저 메타데이터 필드를 복원한 후 추론
-                        # 법령/판례 관련 필드 복원 (추론 전에 메타데이터 보완)
-                        for key in ["statute_name", "law_name", "article_no", "article_number",
-                                   "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
-                            if metadata.get(key) and not doc.get(key):
-                                doc[key] = metadata.get(key)
-                        
-                        # DocumentType.from_metadata로 추론
-                        from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
-                        doc_type_enum = DocumentType.from_metadata(doc)
-                        if doc_type_enum != DocumentType.UNKNOWN:
-                            doc["type"] = doc_type_enum.value
-                            metadata["type"] = doc_type_enum.value
-                            self.logger.debug(
-                                f"🔍 [TYPE INFERENCE] Doc ID={doc.get('id', 'unknown')}: "
-                                f"추론된 타입: {doc_type_enum.value}"
-                            )
-                    else:
-                        # 이미 타입이 설정되어 있으면 추론하지 않고 메타데이터에 저장만
-                        if doc.get("type") and not metadata.get("type"):
-                            metadata["type"] = doc.get("type")
-                            self.logger.debug(
-                                f"🔍 [TYPE PRESERVE] Doc ID={doc.get('id', 'unknown')}: "
-                                f"기존 타입 유지: {doc.get('type')}"
-                            )
-                    
-                    # 법령/판례 관련 필드 복원
-                    for key in ["statute_name", "law_name", "article_no", "article_number",
-                               "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id",
-                               "chunk_id", "source_id"]:
-                        if metadata.get(key) and not doc.get(key):
-                            doc[key] = metadata.get(key)
+                    for key in ["statute_name", "law_name", "article_no", 
+                               "article_number", "case_id", "court", "ccourt", "doc_id", 
+                               "casenames", "precedent_id", "id", "chunk_id", "document_id", "source_id"]:
+                        if metadata.get(key) and key not in doc:
+                            doc[key] = metadata[key]
                 
                 # 최상위 필드를 metadata에도 저장 (일관성 유지)
                 if "metadata" not in doc:
