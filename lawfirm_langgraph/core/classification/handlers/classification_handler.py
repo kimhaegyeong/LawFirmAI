@@ -28,8 +28,8 @@ except ImportError:
 try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
-    # 호환성을 위한 fallback
-    from core.services.question_classifier import QuestionType
+    # 호환성을 위한 fallback (더 이상 services에 없음)
+    QuestionType = None
 
 
 class QueryComplexity(str, Enum):

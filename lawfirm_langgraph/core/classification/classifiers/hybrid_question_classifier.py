@@ -22,9 +22,9 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from lawfirm_langgraph.core.services.answer_structure_enhancer import QuestionType
+    from lawfirm_langgraph.core.generation.formatters.answer_structure_enhancer import QuestionType
 except ImportError:
-    from core.services.answer_structure_enhancer import QuestionType
+    from core.generation.formatters.answer_structure_enhancer import QuestionType
 
 @dataclass
 class ClassificationResult:
