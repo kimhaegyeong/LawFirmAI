@@ -210,10 +210,8 @@ def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
     logger = logging.getLogger("lawfirm_langgraph.tests.runners.run_query_test")
     logger.setLevel(log_level_value)
     
-    # 🔥 개선: 로그 파일 경로를 명시적으로 출력 (파일 생성 확인용)
-    logger.info(f"로그 파일: {log_file}")
-    logger.info(f"로그 파일 절대 경로: {log_file.absolute()}")
-    logger.info(f"로그 레벨: {log_level}")
+    # 🔥 개선: 로그 파일 경로를 명시적으로 출력 (파일 생성 확인용 - 한 번만)
+    logger.info(f"로그 파일: {log_file.absolute()} | 로그 레벨: {log_level}")
     
     # 🔥 개선: 콘솔에도 로그 파일 경로 출력 (로그 파일이 생성되지 않을 경우 대비)
     print(f"\n[로그 설정]")
@@ -264,21 +262,29 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
     logger.info("=" * 80)
     logger.info("LangGraph 질의 테스트")
     logger.info("=" * 80)
-    logger.info(f"\n질의: {query}\n")
+    logger.info(f"질의: {query}")
     
     try:
+        # 초기화 시간 측정 시작
+        import time
+        total_start_time = time.time()
+        
         # 설정 로드
         logger.info("1. 설정 로드 중...")
+        setup_start = time.time()
         from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         from lawfirm_langgraph.config.app_config import Config as AppConfig
         
         config = LangGraphConfig.from_env()
         config.enable_checkpoint = False
+        setup_time = time.time() - setup_start
         logger.info(f"   LangGraph 활성화: {config.langgraph_enabled}")
         logger.info(f"   체크포인트: {config.enable_checkpoint}")
+        logger.info(f"   설정 로드 시간: {setup_time:.3f}초")
         
         # 데이터베이스 및 벡터 검색 설정 확인
         logger.info("\n1.1. 데이터베이스 및 벡터 검색 설정 확인...")
+        db_check_start = time.time()
         app_config = AppConfig()
         
         # SQLite URL 검증 (테스트 시작 전)
@@ -295,6 +301,7 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
             logger.info(f"   FAISS_INDEX_PATH: {app_config.faiss_index_path}")
         
         # DatabaseAdapter 확인
+        db_adapter_start = time.time()
         try:
             from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
             if app_config.database_url:
@@ -334,12 +341,17 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
         except Exception as e:
             logger.warning(f"   ⚠️  VectorSearchFactory 사용 불가: {e}")
         
+        db_check_time = time.time() - db_check_start
+        logger.info(f"   데이터베이스 확인 시간: {db_check_time:.3f}초")
+        
         # 서비스 초기화
         logger.info("\n2. LangGraphWorkflowService 초기화 중...")
+        service_start = time.time()
         from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
         
         service = LangGraphWorkflowService(config)
-        logger.info("   서비스 초기화 완료")
+        service_time = time.time() - service_start
+        logger.info(f"   서비스 초기화 완료 (초기화 시간: {service_time:.3f}초)")
         
         # 서비스 내부 컴포넌트 확인
         if hasattr(service, 'db_manager') and service.db_manager:
@@ -556,6 +568,26 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
         logger.info("테스트 완료!")
         logger.info("=" * 80)
         
+        # 🔥 개선: 리소스 정리 (데이터베이스 연결 풀 등)
+        try:
+            # 서비스가 cleanup 메서드를 가지고 있으면 호출
+            if hasattr(service, 'cleanup'):
+                service.cleanup()
+            # 데이터베이스 연결 풀 정리
+            if hasattr(service, 'legal_workflow') and service.legal_workflow:
+                if hasattr(service.legal_workflow, 'data_connector') and service.legal_workflow.data_connector:
+                    if hasattr(service.legal_workflow.data_connector, '_db_adapter') and service.legal_workflow.data_connector._db_adapter:
+                        db_adapter = service.legal_workflow.data_connector._db_adapter
+                        if hasattr(db_adapter, 'connection_pool') and db_adapter.connection_pool:
+                            try:
+                                # 연결 풀의 모든 연결 닫기
+                                db_adapter.connection_pool.closeall()
+                                logger.debug("데이터베이스 연결 풀 정리 완료")
+                            except Exception as e:
+                                logger.debug(f"연결 풀 정리 중 오류 (무시): {e}")
+        except Exception as e:
+            logger.debug(f"리소스 정리 중 오류 (무시): {e}")
+        
         return result
         
     except ImportError as e:
@@ -570,6 +602,23 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
         logger.error("   - DATABASE_URL=postgresql://user:password@host:port/database")
         logger.error("   - 또는 POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD 환경 변수 설정")
         raise
+    except KeyboardInterrupt:
+        logger.warning("\n\n사용자에 의해 중단되었습니다.")
+        # 중단 시에도 리소스 정리 시도
+        try:
+            if 'service' in locals():
+                if hasattr(service, 'legal_workflow') and service.legal_workflow:
+                    if hasattr(service.legal_workflow, 'data_connector') and service.legal_workflow.data_connector:
+                        if hasattr(service.legal_workflow.data_connector, '_db_adapter') and service.legal_workflow.data_connector._db_adapter:
+                            db_adapter = service.legal_workflow.data_connector._db_adapter
+                            if hasattr(db_adapter, 'connection_pool') and db_adapter.connection_pool:
+                                try:
+                                    db_adapter.connection_pool.closeall()
+                                except Exception:
+                                    pass
+        except Exception:
+            pass
+        raise
     except Exception as e:
         logger.error(f"\n오류 발생: {type(e).__name__}: {e}")
         logger.error(f"   상세 정보:")
@@ -578,6 +627,20 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
         if hasattr(e, '__cause__') and e.__cause__:
             logger.error(f"   - 원인: {e.__cause__}")
         logger.debug("   전체 스택 트레이스:", exc_info=True)
+        # 오류 발생 시에도 리소스 정리 시도
+        try:
+            if 'service' in locals():
+                if hasattr(service, 'legal_workflow') and service.legal_workflow:
+                    if hasattr(service.legal_workflow, 'data_connector') and service.legal_workflow.data_connector:
+                        if hasattr(service.legal_workflow.data_connector, '_db_adapter') and service.legal_workflow.data_connector._db_adapter:
+                            db_adapter = service.legal_workflow.data_connector._db_adapter
+                            if hasattr(db_adapter, 'connection_pool') and db_adapter.connection_pool:
+                                try:
+                                    db_adapter.connection_pool.closeall()
+                                except Exception:
+                                    pass
+        except Exception:
+            pass
         raise
 
 
