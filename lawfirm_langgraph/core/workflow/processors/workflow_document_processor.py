@@ -415,15 +415,56 @@ class WorkflowDocumentProcessor:
                 )
                 # is_legal_doc는 이미 위에서 정의됨
                 
-                # 개선: 법률 조문 필터링 예외 (우선순위 2) - 법률 조문은 관련도와 무관하게 포함
+                # 개선: 법률 조문 필터링 예외 (우선순위 2) - TASK 2: 의미적 관련성 검증 추가
                 if is_statute_article:
-                    # 법률 조문은 항상 포함 (관련도 점수 무시)
-                    print(f"[STATUTE EXCEPTION] 법률 조문 포함 (관련도 무시): source={doc.get('source', 'Unknown')}, relevance={relevance_score:.3f}", flush=True, file=sys.stdout)
-                    self.logger.debug(
-                        f"✅ [STATUTE EXCEPTION] 법률 조문 포함 (관련도 무시): "
-                        f"source={doc.get('source', 'Unknown')}, relevance={relevance_score:.3f}"
-                    )
-                    valid_docs.append(doc)
+                    # TASK 2: 의미적 관련성 검증 (조문 번호 매칭)
+                    should_include = True
+                    if "제" in query and "조" in query:
+                        import re
+                        article_match = re.search(r'제\s*(\d+)\s*조', query)
+                        if article_match:
+                            question_article = article_match.group(1).lstrip('0')
+                            if not question_article:
+                                question_article = "0"
+                            
+                            doc_article = str(doc.get("article_no", "") or doc.get("metadata", {}).get("article_no", "") if isinstance(doc.get("metadata"), dict) else "").strip()
+                            if doc_article:
+                                doc_article_normalized = doc_article.lstrip('0')
+                                if not doc_article_normalized:
+                                    doc_article_normalized = "0"
+                                
+                                # 정확한 매칭 확인 (10배 차이 체크)
+                                try:
+                                    question_num = int(question_article)
+                                    doc_num = int(doc_article_normalized)
+                                    
+                                    # 정확히 일치하거나 직접 검색된 조문만 포함
+                                    if question_num != doc_num:
+                                        # 10배 차이면 완전히 다른 조문으로 간주
+                                        if doc_num > 0 and (question_num * 10 == doc_num or doc_num * 10 == question_num):
+                                            should_include = False
+                                            self.logger.debug(
+                                                f"🔍 [SEMANTIC FILTER] 조문 번호 불일치 및 큰 차이로 제외: "
+                                                f"질문={question_num}, 문서={doc_num}"
+                                            )
+                                        elif not doc.get("direct_match", False):
+                                            # 직접 검색되지 않았고 번호가 다르면 제외
+                                            should_include = False
+                                            self.logger.debug(
+                                                f"🔍 [SEMANTIC FILTER] 조문 번호 불일치로 제외: "
+                                                f"질문={question_num}, 문서={doc_num}"
+                                            )
+                                except (ValueError, TypeError):
+                                    # 숫자 변환 실패 시 문자열 비교
+                                    if question_article != doc_article_normalized and not doc.get("direct_match", False):
+                                        should_include = False
+                    
+                    if should_include:
+                        self.logger.debug(
+                            f"✅ [STATUTE EXCEPTION] 법률 조문 포함 (관련도 무시): "
+                            f"source={doc.get('source', 'Unknown')}, relevance={relevance_score:.3f}"
+                        )
+                        valid_docs.append(doc)
                     continue
                 
                 # 개선 4: 문서 타입별 필터링 기준 차등화 (키워드 매칭이 있으면 완화)
@@ -549,32 +590,13 @@ class WorkflowDocumentProcessor:
                         if len(valid_docs) >= MIN_DOCS_REQUIRED:
                             break
                 
-                # 여전히 부족하면 더 완화
+                # TASK 9: 완화 로직은 한 번만 실행 (품질 우선 원칙)
                 if len(valid_docs) < MIN_DOCS_REQUIRED:
                     self.logger.warning(
-                        f"⚠️ [MIN DOCS] 여전히 부족 ({len(valid_docs)}개). "
-                        f"임계값을 더 완화하여 추가 문서 포함 시도..."
+                        f"⚠️ [MIN DOCS] 완화 후에도 {len(valid_docs)}개로 부족합니다. "
+                        f"품질 우선 원칙에 따라 현재 문서로 진행합니다. "
+                        f"(최소 요구: {MIN_DOCS_REQUIRED}개)"
                     )
-                    relaxed_min_score = max(0.01, relaxed_min_score * 0.5)  # 임계값을 절반으로
-                    
-                    for doc in retrieved_docs:
-                        if not isinstance(doc, dict):
-                            continue
-                        
-                        doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or str(doc.get("source", ""))
-                        if doc_id in existing_doc_ids:
-                            continue
-                        
-                        content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
-                        if not content or len(content.strip()) < 3:
-                            continue
-                        
-                        relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
-                        if relevance_score >= relaxed_min_score:
-                            valid_docs.append(doc)
-                            existing_doc_ids.add(doc_id)
-                            if len(valid_docs) >= MIN_DOCS_REQUIRED:
-                                break
                 
                 if valid_docs:
                     self.logger.info(
@@ -768,7 +790,10 @@ class WorkflowDocumentProcessor:
             filtered_vector_docs = []
             validation_cache = {}  # doc_id -> validation_result
             
-            for doc, score in doc_scores:
+            # 🔥 수정: doc_scores는 (score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc) 형식의 튜플 리스트
+            for item in doc_scores:
+                score = item[0]
+                doc = item[7]  # 마지막 요소가 doc
                 doc_type = doc.get("type") or doc.get("source_type", "")
                 
                 # 타입별 차등 임계값 적용
@@ -1291,16 +1316,38 @@ class WorkflowDocumentProcessor:
                     f"(low_relevance_count: {final_validation.get('low_relevance_count', 0)})"
                 )
             
+            # 🔥 개선: structured_documents 생성 시 원본 문서의 모든 필드 보존
+            structured_documents_list = []
+            for idx, doc in enumerate(sorted_docs, 1):
+                structured_doc = {
+                    "document_id": idx,
+                    "source": doc.get("source", "Unknown"),
+                    "relevance_score": doc.get("final_weighted_score") or doc.get("relevance_score", 0.0),
+                    "content": (doc.get("content") or doc.get("text") or doc.get("content_text", ""))[:2000]
+                }
+                # 🔥 개선: 법률 정보 필드 보존 (type, statute_name, law_name, article_no 등)
+                if doc.get("type"):
+                    structured_doc["type"] = doc.get("type")
+                if doc.get("source_type"):
+                    structured_doc["source_type"] = doc.get("source_type")
+                if doc.get("statute_name"):
+                    structured_doc["statute_name"] = doc.get("statute_name")
+                if doc.get("law_name"):
+                    structured_doc["law_name"] = doc.get("law_name")
+                if doc.get("article_no"):
+                    structured_doc["article_no"] = doc.get("article_no")
+                if doc.get("article_number"):
+                    structured_doc["article_number"] = doc.get("article_number")
+                # metadata도 보존
+                if doc.get("metadata"):
+                    structured_doc["metadata"] = doc.get("metadata")
+                structured_documents_list.append(structured_doc)
+            
             return {
                 "prompt_optimized_text": prompt_section,
                 "structured_documents": {
                     "total_count": len(sorted_docs),
-                    "documents": [{
-                        "document_id": idx,
-                        "source": doc.get("source", "Unknown"),
-                        "relevance_score": doc.get("final_weighted_score") or doc.get("relevance_score", 0.0),
-                        "content": (doc.get("content") or doc.get("text") or doc.get("content_text", ""))[:2000]
-                    } for idx, doc in enumerate(sorted_docs, 1)]
+                    "documents": structured_documents_list
                 },
                 "document_count": len(sorted_docs),
                 "total_context_length": len(prompt_section),

@@ -101,6 +101,11 @@ except ImportError:
     from core.agents.optimizers.performance_optimizer import PerformanceOptimizer
 
 try:
+    from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType, DocumentTypeConfig
+except ImportError:
+    from core.workflow.constants.document_types import DocumentType, DocumentTypeConfig
+
+try:
     from lawfirm_langgraph.core.workflow.builders.prompt_builders import QueryBuilder
 except ImportError:
     from core.workflow.builders.prompt_builders import QueryBuilder
@@ -313,6 +318,13 @@ class EnhancedLegalQuestionWorkflow(
     # 키워드 추출 관련 상수
     MAX_FALLBACK_KEYWORDS = 20
     MIN_KEYWORD_LENGTH = 2
+    
+    # 메타데이터 복사 대상 필드
+    METADATA_COPY_FIELDS = [
+        "statute_name", "law_name", "article_no", "article_number",
+        "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id",
+        "chunk_id", "source_id"
+    ]
 
     def __init__(self, config: LangGraphConfig):
         self.config = config
@@ -1268,16 +1280,34 @@ class EnhancedLegalQuestionWorkflow(
     def _save_keywords_to_state(
         self, state: LegalWorkflowState, keywords: List[str]
     ) -> None:
-        """키워드를 state의 여러 위치에 저장 (중복 제거)"""
+        """키워드를 state의 여러 위치에 저장 (TASK 5: 검증 강화)"""
+        if not keywords:
+            self.logger.warning("⚠️ [KEYWORD SAVE] 키워드가 비어있음")
+            return
+        
+        # 여러 위치에 저장 (보장)
         self._set_state_value(state, "extracted_keywords", keywords)
         
         if "search" not in state:
             state["search"] = {}
         if not isinstance(state["search"], dict):
             state["search"] = {}
-        
         state["search"]["extracted_keywords"] = keywords
+        
+        if "common" not in state:
+            state["common"] = {}
+        if "search" not in state["common"]:
+            state["common"]["search"] = {}
+        state["common"]["search"]["extracted_keywords"] = keywords
+        
         state["extracted_keywords"] = keywords
+        
+        # TASK 5: 저장 확인
+        saved = self._get_state_value(state, "extracted_keywords", [])
+        if not saved:
+            self.logger.error("❌ [KEYWORD SAVE] 키워드 저장 실패")
+        else:
+            self.logger.info(f"✅ [KEYWORD SAVE] 키워드 저장 완료: {len(saved)}개")
     
     def _get_query_type_keywords(self, query_type_str: str) -> List[str]:
         """쿼리 타입별 기본 키워드 반환"""
@@ -2135,10 +2165,70 @@ class EnhancedLegalQuestionWorkflow(
         return state
 
     def _validate_answer_quality_internal(self, state: LegalWorkflowState) -> bool:
-        """AnswerQualityValidator.validate_answer_quality 래퍼"""
+        """AnswerQualityValidator.validate_answer_quality 래퍼 + TASK 13: 관련 없는 조문 인용 검증"""
         if self.answer_quality_validator:
-            return self.answer_quality_validator.validate_answer_quality(state)
+            result = self.answer_quality_validator.validate_answer_quality(state)
+            
+            # TASK 13: 관련 없는 조문 인용 검증
+            answer = self._get_state_value(state, "answer", "")
+            query = self._get_state_value(state, "query", "")
+            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            
+            if answer and query and retrieved_docs:
+                citation_validation = self._validate_answer_citations(answer, query, retrieved_docs)
+                if not citation_validation.get("is_valid", True):
+                    self.logger.warning(
+                        f"⚠️ [TASK 13] 관련 없는 조문 인용 감지: "
+                        f"unrelated_articles={citation_validation.get('unrelated_articles', [])}, "
+                        f"invalid_articles={citation_validation.get('invalid_articles', [])}"
+                    )
+                    # 관련 없는 조문이 있으면 품질 점수 감소
+                    return False
+            
+            return result
         return True
+    
+    def _validate_answer_citations(
+        self, 
+        answer: str, 
+        query: str, 
+        retrieved_docs: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """답변의 인용 검증 (관련성 확인) - TASK 13"""
+        import re
+        
+        # 질문에서 조문 번호 추출
+        question_articles = set()
+        article_matches = re.findall(r'제\s*(\d+)\s*조', query)
+        question_articles.update(article_matches)
+        
+        # 답변에서 인용된 조문 추출
+        answer_articles = set()
+        answer_matches = re.findall(r'제\s*(\d+)\s*조', answer)
+        answer_articles.update(answer_matches)
+        
+        # 관련 없는 조문 감지
+        unrelated_articles = answer_articles - question_articles
+        
+        # 검색된 문서의 조문 번호
+        doc_articles = set()
+        for doc in retrieved_docs:
+            article_no = doc.get("article_no") or doc.get("article_number")
+            if article_no:
+                article_str = str(article_no).strip().lstrip('0')
+                if article_str:
+                    doc_articles.add(article_str)
+        
+        # 문서에 없는 조문 인용 감지
+        invalid_articles = answer_articles - doc_articles
+        
+        return {
+            "has_unrelated_articles": len(unrelated_articles) > 0,
+            "unrelated_articles": list(unrelated_articles),
+            "has_invalid_articles": len(invalid_articles) > 0,
+            "invalid_articles": list(invalid_articles),
+            "is_valid": len(unrelated_articles) == 0 and len(invalid_articles) == 0
+        }
     
     def _detect_format_errors(self, answer: str) -> bool:
         """AnswerQualityValidator.detect_format_errors 래퍼"""
@@ -3253,44 +3343,10 @@ class EnhancedLegalQuestionWorkflow(
         return metadata
 
     def _extract_doc_type(self, doc: Dict[str, Any]) -> str:
-        """문서에서 타입 추출 (중복 로직 통합 - 개선: content 기반 추론 강화)"""
-        doc_type = (
-            doc.get("type") or
-            doc.get("source_type") or
-            (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else "") or
-            "unknown"
-        )
-        
-        if doc_type == "unknown":
-            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-            if metadata.get("case_id") or metadata.get("court") or metadata.get("casenames"):
-                doc_type = "case_paragraph"
-            elif metadata.get("decision_id") or metadata.get("org"):
-                doc_type = "decision_paragraph"
-            elif metadata.get("interpretation_number") or (metadata.get("org") and metadata.get("title")):
-                doc_type = "interpretation_paragraph"
-            elif metadata.get("statute_name") or metadata.get("law_name") or metadata.get("article_no"):
-                doc_type = "statute_article"
-        
-        # 개선: content 기반 추론 강화
-        if doc_type == "unknown":
-            content = self._extract_doc_content(doc)
-            content_lower = content.lower() if content else ""
-            
-            # 판례 패턴
-            if any(keyword in content_lower for keyword in ["대법원", "지방법원", "법원", "판결", "선고", "원고", "피고", "사건"]):
-                if any(keyword in content_lower for keyword in ["판결", "선고"]):
-                    doc_type = "case_paragraph"
-            # 결정례 패턴
-            elif any(keyword in content_lower for keyword in ["결정", "재결", "심판", "의결"]):
-                if any(keyword in content_lower for keyword in ["행정심판", "심판청", "위원회"]):
-                    doc_type = "decision_paragraph"
-            # 법령 패턴
-            elif any(keyword in content_lower for keyword in ["제", "조", "항", "호", "법률", "규칙", "시행령"]):
-                if any(keyword in content_lower for keyword in ["제", "조"]):
-                    doc_type = "statute_article"
-        
-        return doc_type.lower()
+        """문서에서 타입 추출 (메타데이터 필드 기준만 사용)"""
+        # DocumentType.from_metadata를 사용하여 메타데이터 필드 기준으로만 타입 추론
+        doc_type_enum = DocumentType.from_metadata(doc)
+        return doc_type_enum.value
 
     def _calculate_type_distribution(self, docs: List[Dict[str, Any]]) -> Dict[str, int]:
         """문서 타입 분포 계산"""
@@ -3301,30 +3357,24 @@ class EnhancedLegalQuestionWorkflow(
         return type_distribution
 
     def _has_precedent_or_decision(self, docs: List[Dict[str, Any]], check_precedent: bool = True, check_decision: bool = True) -> Tuple[bool, bool]:
-        """판례/결정례 존재 여부 확인 (개선: case_paragraph를 판례로 인식)"""
+        """판례 존재 여부 확인 (메타데이터 필드 기준)"""
         has_precedent = False
-        has_decision = False
+        has_decision = False  # 레거시 호환성을 위해 유지하지만 항상 False 반환
         
         for doc in docs:
             if not isinstance(doc, dict):
                 continue
             
-            doc_type = self._extract_doc_type(doc)
+            doc_type_enum = DocumentType.from_metadata(doc)
+            doc_type = doc_type_enum.value
             
-            # 개선: case_paragraph를 판례로 명시적으로 인식
+            # precedent_content는 판례로 인식
             if check_precedent and not has_precedent:
-                # case_paragraph는 판례 문서이므로 판례로 인식
-                if doc_type == "case_paragraph" or any(keyword in doc_type for keyword in ["precedent", "case", "판례"]):
+                if doc_type_enum == DocumentType.PRECEDENT_CONTENT:
                     has_precedent = True
                     self.logger.debug(f"🔀 [DIVERSITY] Found precedent document: type={doc_type}")
             
-            # decision_paragraph는 결정례 문서이므로 결정례로 인식
-            if check_decision and not has_decision:
-                if doc_type == "decision_paragraph" or any(keyword in doc_type for keyword in ["decision", "결정"]):
-                    has_decision = True
-                    self.logger.debug(f"🔀 [DIVERSITY] Found decision document: type={doc_type}")
-            
-            if (not check_precedent or has_precedent) and (not check_decision or has_decision):
+            if not check_precedent or has_precedent:
                 break
         
         return has_precedent, has_decision
@@ -3377,8 +3427,91 @@ class EnhancedLegalQuestionWorkflow(
         
         return content or ""
 
+    def _normalize_score(self, score: Optional[float], min_val: float = 0.0, max_val: float = 1.0) -> float:
+        """점수를 0.0~1.0 범위로 정규화
+        
+        Args:
+            score: 정규화할 점수
+            min_val: 원본 점수의 최소값 (예상)
+            max_val: 원본 점수의 최대값 (예상)
+        
+        Returns:
+            0.0~1.0 범위의 정규화된 점수
+        """
+        if score is None:
+            return 0.5  # 기본값
+        
+        score = float(score)
+        
+        # 이미 0.0~1.0 범위에 있으면 그대로 반환
+        if 0.0 <= score <= 1.0:
+            return score
+        
+        # 음수면 0.0으로 클리핑
+        if score < 0.0:
+            return 0.0
+        
+        # 1.0보다 크면 정규화 (예: Cross-Encoder 점수가 0~10 범위인 경우)
+        if score > 1.0:
+            # min-max 정규화
+            if max_val > min_val:
+                normalized = (score - min_val) / (max_val - min_val)
+                # 0.0~1.0 범위로 클리핑
+                return max(0.0, min(1.0, normalized))
+            else:
+                # max_val이 1.0 이하면 그냥 1.0으로 클리핑
+                return 1.0
+        
+        return score
+    
+    def _normalize_scores_batch(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """여러 문서의 점수를 일괄 정규화
+        
+        Args:
+            docs: 점수를 정규화할 문서 리스트
+        
+        Returns:
+            점수가 정규화된 문서 리스트
+        """
+        if not docs:
+            return docs
+        
+        # 모든 점수 수집하여 최소/최대값 계산
+        all_scores = []
+        for doc in docs:
+            score = doc.get("relevance_score") or doc.get("similarity") or doc.get("score")
+            if score is not None:
+                all_scores.append(float(score))
+        
+        if all_scores:
+            min_score = min(all_scores)
+            max_score = max(all_scores)
+            
+            # 점수 범위가 1.0보다 크면 정규화 필요
+            if max_score > 1.0 or min_score < 0.0:
+                self.logger.debug(
+                    f"📊 [SCORE NORMALIZATION] 점수 범위: {min_score:.3f}~{max_score:.3f}, "
+                    f"정규화 적용: {len(docs)}개 문서"
+                )
+                
+                for doc in docs:
+                    relevance_score = doc.get("relevance_score") or doc.get("similarity") or doc.get("score")
+                    if relevance_score is not None:
+                        # min-max 정규화
+                        if max_score > min_score:
+                            normalized = (float(relevance_score) - min_score) / (max_score - min_score)
+                            doc["relevance_score"] = max(0.0, min(1.0, normalized))
+                            # similarity도 함께 정규화
+                            if "similarity" in doc:
+                                doc["similarity"] = doc["relevance_score"]
+                            # score도 함께 정규화
+                            if "score" in doc:
+                                doc["score"] = doc["relevance_score"]
+        
+        return docs
+
     def _ensure_scores(self, doc: Dict[str, Any]) -> Dict[str, Any]:
-        """문서에 점수가 있는지 확인하고 없으면 설정"""
+        """문서에 점수가 있는지 확인하고 없으면 설정 (0.0~1.0 범위로 정규화)"""
         relevance_score = doc.get("relevance_score") or doc.get("similarity") or doc.get("score")
         final_weighted_score = doc.get("final_weighted_score")
         
@@ -3387,6 +3520,7 @@ class EnhancedLegalQuestionWorkflow(
             if similarity is not None:
                 relevance_score = float(similarity)
             else:
+                # 기본값: 0.5 (중간 점수)
                 relevance_score = 0.5
                 self.logger.debug(
                     f"⚠️ [SCORE INIT] 점수 없음, 기본값 설정: "
@@ -3394,14 +3528,107 @@ class EnhancedLegalQuestionWorkflow(
                     f"score=0.5"
                 )
         
+        # 점수 정규화 (0.0~1.0 범위)
+        relevance_score = self._normalize_score(relevance_score)
+        
         if final_weighted_score is None:
             final_weighted_score = relevance_score
+        else:
+            # final_weighted_score도 정규화
+            final_weighted_score = self._normalize_score(final_weighted_score)
         
         doc["relevance_score"] = float(relevance_score)
         doc["final_weighted_score"] = float(final_weighted_score)
         
+        # similarity와 score도 함께 업데이트 (일관성 유지)
+        if "similarity" not in doc or doc.get("similarity") != relevance_score:
+            doc["similarity"] = float(relevance_score)
+        if "score" not in doc or doc.get("score") != relevance_score:
+            doc["score"] = float(relevance_score)
+        
         return doc
-
+    
+    def _normalize_document_metadata(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """문서의 메타데이터를 정규화하고 최상위 필드로 복사"""
+        if not isinstance(doc, dict):
+            return doc
+        
+        metadata = doc.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            doc["metadata"] = metadata
+        
+        # 🔥 CRITICAL: metadata의 source_type을 type으로 변환 (레거시 호환)
+        if metadata.get("source_type") and not doc.get("type"):
+            doc["type"] = metadata.get("source_type")
+            metadata["type"] = metadata.get("source_type")
+        
+        # metadata의 type을 최상위 필드로 복사
+        if metadata.get("type") and not doc.get("type"):
+            doc["type"] = metadata.get("type")
+        
+        # metadata의 법령/판례 관련 필드를 최상위 필드로 복사
+        for key in self.METADATA_COPY_FIELDS:
+            if metadata.get(key) and not doc.get(key):
+                doc[key] = metadata.get(key)
+        
+        return doc
+    
+    def _normalize_document_type(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """문서의 type 필드를 정규화 (메타데이터 보존)"""
+        if not isinstance(doc, dict):
+            return doc
+        
+        # type이 없거나 unknown이면 metadata에서 복원
+        current_type = doc.get("type", "").lower() if doc.get("type") else ""
+        
+        if not doc.get("type") or current_type == "unknown":
+            metadata = doc.get("metadata", {})
+            if isinstance(metadata, dict):
+                # 우선순위: metadata.type > metadata.source_type > DocumentType.from_metadata
+                metadata_type = metadata.get("type") or metadata.get("source_type")
+                if metadata_type and metadata_type.lower() != "unknown":
+                    doc["type"] = metadata_type
+                    # metadata에도 type으로 저장
+                    if "metadata" not in doc:
+                        doc["metadata"] = {}
+                    if not isinstance(doc["metadata"], dict):
+                        doc["metadata"] = {}
+                    doc["metadata"]["type"] = metadata_type
+                elif not doc.get("type"):
+                    # DocumentType.from_metadata로 추론
+                    from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                    doc_type_enum = DocumentType.from_metadata(doc)
+                    if doc_type_enum != DocumentType.UNKNOWN:
+                        doc["type"] = doc_type_enum.value
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        doc["metadata"]["type"] = doc_type_enum.value
+        
+        return doc
+    
+    def _normalize_documents(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """문서 리스트의 메타데이터와 type 필드를 정규화"""
+        if not docs:
+            return docs
+        
+        normalized_docs = []
+        for doc in docs:
+            if not isinstance(doc, dict):
+                normalized_docs.append(doc)
+                continue
+            
+            # 메타데이터 정규화
+            doc = self._normalize_document_metadata(doc)
+            # type 필드 정규화
+            doc = self._normalize_document_type(doc)
+            
+            normalized_docs.append(doc)
+        
+        return normalized_docs
+    
     def _extract_citations(
         self,
         retrieved_docs: List[Dict[str, Any]]
@@ -3420,7 +3647,7 @@ class EnhancedLegalQuestionWorkflow(
         
         for idx, doc in enumerate(retrieved_docs, 1):
             # type 정보 복구 시도 (여러 위치에서 확인)
-            doc_type = doc.get("type") or doc.get("source_type", "")
+            doc_type = doc.get("type", "")
             
             # type이 없거나 "unknown"이면 metadata에서 복구 시도
             if not doc_type or doc_type == "unknown":
@@ -3429,64 +3656,18 @@ class EnhancedLegalQuestionWorkflow(
                     # 여러 필드에서 타입 확인
                     doc_type = (
                         metadata.get("type") or 
-                        metadata.get("source_type") or 
                         metadata.get("document_type") or
                         doc_type
                     )
                     if doc_type and doc_type != "unknown":
                         doc["type"] = doc_type
-                        doc["source_type"] = doc_type
             
-            # 여전히 없으면 메타데이터 필드 기반 추론
+            # 여전히 없으면 DocumentType.from_metadata로 메타데이터 필드 기반 추론
             if not doc_type or doc_type == "unknown":
-                metadata = doc.get("metadata", {})
-                if isinstance(metadata, dict):
-                    # statute_article 판단
-                    if (metadata.get("statute_name") or metadata.get("law_name") or 
-                        metadata.get("article_no") or metadata.get("article_number")):
-                        doc_type = "statute_article"
-                        doc["type"] = doc_type
-                        doc["source_type"] = doc_type
-                    # case_paragraph 판단
-                    elif (metadata.get("case_id") or metadata.get("court") or 
-                          metadata.get("casenames") or metadata.get("case_name")):
-                        doc_type = "case_paragraph"
-                        doc["type"] = doc_type
-                        doc["source_type"] = doc_type
-                    # interpretation_paragraph 판단
-                    elif (metadata.get("interpretation_number") or 
-                          metadata.get("interpretation_serial_number") or
-                          metadata.get("expcId")):
-                        doc_type = "interpretation_paragraph"
-                        doc["type"] = doc_type
-                        doc["source_type"] = doc_type
-            
-            # 여전히 없으면 source와 content에서 추론 시도
-            if not doc_type or doc_type == "unknown":
-                source = doc.get("source", "")
-                content = doc.get("content", "") or doc.get("text", "")
-                combined_text = f"{source} {content[:200]}".lower()
-                
-                # statute_article 패턴
-                if (re.search(r'[가-힣]+법\s*제\s*\d+\s*조', combined_text) or
-                    "법령" in combined_text or "조문" in combined_text or
-                    ("민법" in source and "제" in source and "조" in source)):
-                    doc_type = "statute_article"
+                doc_type_enum = DocumentType.from_metadata(doc)
+                doc_type = doc_type_enum.value
+                if doc_type != "unknown":
                     doc["type"] = doc_type
-                    doc["source_type"] = doc_type
-                # case_paragraph 패턴
-                elif (re.search(r'(대법원|지방법원|고등법원|법원)\s*\d+[가-힣]+\s*\d+', combined_text) or
-                      "판결" in combined_text or "판례" in combined_text or
-                      "선고" in combined_text):
-                    doc_type = "case_paragraph"
-                    doc["type"] = doc_type
-                    doc["source_type"] = doc_type
-                # interpretation_paragraph 패턴
-                elif ("해석" in combined_text or "의견" in combined_text or 
-                      "질의" in combined_text):
-                    doc_type = "interpretation_paragraph"
-                    doc["type"] = doc_type
-                    doc["source_type"] = doc_type
             
             content = doc.get("content", "") or doc.get("text", "") or doc.get("content_text", "")
             
@@ -3497,7 +3678,6 @@ class EnhancedLegalQuestionWorkflow(
                 f"keys={doc_keys[:10]}, "
                 f"type={doc_type}, "
                 f"has_type_field={'type' in doc_keys}, "
-                f"has_source_type_field={'source_type' in doc_keys}, "
                 f"metadata_type={doc.get('metadata', {}).get('type') if isinstance(doc.get('metadata'), dict) else 'N/A'}"
             )
             self.logger.debug(
@@ -3509,8 +3689,12 @@ class EnhancedLegalQuestionWorkflow(
                 f"source={doc.get('source', 'N/A')[:50]}"
             )
             
+            # DocumentType Enum으로 변환
+            doc_type_enum = DocumentType.from_metadata(doc)
+            doc_type = doc_type_enum.value
+            
             # 1. 법령 조문 인용 (타입 기반)
-            if doc_type == "statute_article":
+            if doc_type_enum == DocumentType.STATUTE_ARTICLE:
                 self.logger.debug(
                     f"🔍 [CITATION] 문서 {idx}: statute_article 타입 감지, 필드 확인 중..."
                 )
@@ -3546,6 +3730,147 @@ class EnhancedLegalQuestionWorkflow(
                         if not article_no:
                             article_no = law_article_match.group(2)
                 
+                # TASK 11: article_no 정규화 개선 (선행 0만 제거, 중간/후행 0은 유지)
+                # 데이터베이스 형식:
+                #   - "제750조" = "075000" (앞에 0, 뒤에 000) -> "75000" (선행 0만 제거)
+                #   - "제75조" = "007500" (앞에 00, 뒤에 00) -> "7500" (선행 0만 제거)
+                #   - "제537조" = "053700" (앞에 0, 뒤에 00) -> "53700" (선행 0만 제거)
+                # 하지만 실제로는 content에서 확인하여 정확한 번호 사용
+                if article_no:
+                    article_no_str = str(article_no).strip()
+                    original_article_no = article_no_str  # 디버깅용
+                    
+                    # content에서 실제 조문 번호 확인 (정규화 검증용)
+                    content = doc.get("content", "") or doc.get("text", "")
+                    content_article_match = None
+                    if content:
+                        content_article_match = re.search(r'제\s*(\d+)\s*조', content[:200])
+                    
+                    # TASK 11: 선행 0만 제거 (중간/후행 0은 유지)
+                    # 예: '007500' → '7500', '075000' → '75000', '000123' → '123'
+                    # 🔥 개선: 6자리 형식 처리 (예: '075000' = 법령ID(3자리) + 조문번호(3자리) 형식일 수 있음)
+                    article_no_clean = article_no_str.lstrip('0')
+                    
+                    # 모두 0이면 '0' 반환
+                    if not article_no_clean:
+                        article_no = "0"
+                    else:
+                        # 🔥 개선: 6자리 형식 처리 (075000 → 750)
+                        # 데이터베이스에서 6자리 형식으로 저장된 경우 (법령ID 3자리 + 조문번호 3자리)
+                        # 예: '075000' → '750', '001234' → '1234'
+                        if len(article_no_str) == 6 and article_no_str.isdigit():
+                            # 앞의 3자리(법령ID)를 제거하고 뒤의 3자리(조문번호)만 사용
+                            # 단, 앞의 3자리가 모두 0이 아니면 조문번호로 간주
+                            first_three = article_no_str[:3]
+                            last_three = article_no_str[3:]
+                            
+                            # 앞의 3자리가 모두 0이면 뒤의 3자리를 조문번호로 사용
+                            if first_three == '000':
+                                last_three_clean = last_three.lstrip('0')
+                                if last_three_clean:
+                                    article_no_clean = last_three_clean
+                                    self.logger.debug(
+                                        f"🔍 [CITATION NORMALIZE] 6자리 형식 처리: "
+                                        f"'{article_no_str}' -> '{article_no_clean}' (뒤의 3자리 사용)"
+                                    )
+                                else:
+                                    article_no_clean = "0"
+                            # 앞의 3자리가 0이 아니면 전체를 조문번호로 간주 (예: '123456' → '123456')
+                            # 하지만 일반적으로 조문번호는 4자리 이하이므로, content 기반 검증 사용
+                        
+                        # 🔥 개선: 정규화된 번호가 범위를 초과하면 content 기반으로 재시도
+                        try:
+                            clean_num = int(article_no_clean)
+                            if clean_num > 9999 and content_article_match:
+                                # 범위 초과 시 content에서 추출한 번호 사용
+                                content_article = content_article_match.group(1).lstrip('0')
+                                if content_article and content_article.isdigit():
+                                    content_num = int(content_article)
+                                    if 1 <= content_num <= 9999:
+                                        self.logger.debug(
+                                            f"🔍 [CITATION NORMALIZE] 범위 초과로 content 기반 수정: "
+                                            f"'{article_no_clean}' -> '{content_article}' (content: {content[:50]})"
+                                        )
+                                        article_no_clean = content_article
+                        except ValueError:
+                            pass
+                    
+                    if not article_no_clean or article_no_clean == "0":
+                        article_no = "0"
+                    else:
+                        # 개선: content 기반 수정은 신중하게 적용
+                        # content가 잘못되어 있을 수 있으므로, 원본 article_no를 우선 사용
+                        if content_article_match:
+                            content_article = content_article_match.group(1).lstrip('0')
+                            if content_article:
+                                # content의 조문 번호와 정규화된 번호 비교
+                                # 차이가 크면 (예: 7500 vs 75) content가 잘못된 것으로 간주하고 원본 사용
+                                try:
+                                    clean_num = int(article_no_clean)
+                                    content_num = int(content_article)
+                                    # 🔥 개선: 10배 차이 체크 강화 (절대값 차이로도 확인)
+                                    diff_ratio = max(clean_num, content_num) / min(clean_num, content_num) if min(clean_num, content_num) > 0 else 0
+                                    abs_diff = abs(clean_num - content_num)
+                                    
+                                    # 10배 이상 차이거나, 절대값 차이가 큰 경우 content가 잘못된 것으로 간주
+                                    if clean_num > 0 and (diff_ratio >= 10 or (abs_diff >= clean_num * 9)):
+                                        # 10배 관계면 content가 잘못된 것으로 간주 (예: 7500 -> 75)
+                                        self.logger.debug(
+                                            f"🔍 [CITATION NORMALIZE] content 기반 수정 스킵 (10배 차이): "
+                                            f"'{article_no_clean}' vs '{content_article}' (ratio={diff_ratio:.1f}, diff={abs_diff}, content: {content[:50]})"
+                                        )
+                                        article_no = article_no_clean
+                                    elif content_article == article_no_clean:
+                                        # 일치하면 정규화된 값 사용
+                                        article_no = article_no_clean
+                                    elif abs_diff < 10:
+                                        # 작은 차이(10 미만)면 content 기준 사용 (예: 750 vs 751)
+                                        self.logger.debug(
+                                            f"🔍 [CITATION NORMALIZE] content 기반 수정 (작은 차이): "
+                                            f"'{article_no_clean}' -> '{content_article}' (diff={abs_diff}, content: {content[:50]})"
+                                        )
+                                        article_no = content_article
+                                    else:
+                                        # 중간 차이면 원본 정규화된 값 사용 (content 신뢰 불가)
+                                        self.logger.debug(
+                                            f"🔍 [CITATION NORMALIZE] content 기반 수정 스킵 (중간 차이): "
+                                            f"'{article_no_clean}' vs '{content_article}' (diff={abs_diff}, content: {content[:50]})"
+                                        )
+                                        article_no = article_no_clean
+                                except ValueError:
+                                    # 숫자 변환 실패 시 정규화된 값 사용
+                                    article_no = article_no_clean
+                            else:
+                                article_no = article_no_clean
+                        else:
+                            # content에서 확인 불가능하면 선행 0만 제거한 값 사용
+                            article_no = article_no_clean
+                    
+                    # TASK 11: 형식 검증 추가
+                    if article_no and article_no.isdigit():
+                        try:
+                            num = int(article_no)
+                            # 1~9999 범위 검증
+                            if not (1 <= num <= 9999):
+                                self.logger.warning(
+                                    f"⚠️ [ARTICLE NO] 조문 번호 범위 초과: {article_no} (1~9999 범위 아님). "
+                                    f"원본 사용: {original_article_no}"
+                                )
+                                article_no = original_article_no
+                        except ValueError:
+                            self.logger.warning(
+                                f"⚠️ [ARTICLE NO] 조문 번호 형식 오류: {article_no}. "
+                                f"원본 사용: {original_article_no}"
+                            )
+                            article_no = original_article_no
+                    
+                    # 디버깅: 정규화 결과 로깅
+                    if original_article_no != article_no:
+                        self.logger.debug(
+                            f"🔍 [CITATION NORMALIZE] article_no 정규화: "
+                            f"'{original_article_no}' -> '{article_no}'"
+                        )
+                
                 self.logger.debug(
                     f"🔍 [CITATION] 문서 {idx}: law_name={law_name}, article_no={article_no}"
                 )
@@ -3571,9 +3896,9 @@ class EnhancedLegalQuestionWorkflow(
                     )
             
             # 2. 판례 인용 (타입 기반)
-            elif doc_type == "case_paragraph":
+            elif doc_type_enum == DocumentType.PRECEDENT_CONTENT:
                 self.logger.debug(
-                    f"🔍 [CITATION] 문서 {idx}: case_paragraph 타입 감지, 필드 확인 중..."
+                    f"🔍 [CITATION] 문서 {idx}: precedent_content 타입 감지, 필드 확인 중..."
                 )
                 case_name = (
                     doc.get("casenames") or 
@@ -3654,53 +3979,10 @@ class EnhancedLegalQuestionWorkflow(
                             )
                     else:
                         self.logger.warning(
-                            f"⚠️ [CITATION] 문서 {idx}: case_paragraph 타입이지만 case_name 없음 (폴백도 실패)"
+                            f"⚠️ [CITATION] 문서 {idx}: precedent_content 타입이지만 case_name 없음 (폴백도 실패)"
                         )
             
-            # 3. 해석례 인용
-            elif doc_type == "interpretation_paragraph":
-                interpretation_id = (
-                    doc.get("interpretation_id") or 
-                    doc.get("metadata", {}).get("interpretation_id")
-                )
-                org = (
-                    doc.get("org") or 
-                    doc.get("metadata", {}).get("org")
-                )
-                
-                if interpretation_id:
-                    citation_key = f"interpretation_{interpretation_id}"
-                    if citation_key not in seen_citations:
-                        citations.append({
-                            "type": "interpretation",
-                            "interpretation_id": interpretation_id,
-                            "org": org or "관할기관",
-                            "source": doc.get("source", ""),
-                            "doc_id": doc.get("id")
-                        })
-                        seen_citations.add(citation_key)
-            
-            # 4. 결정례 인용
-            elif doc_type == "decision_paragraph":
-                doc_id = doc.get("doc_id") or doc.get("id")
-                org = (
-                    doc.get("org") or 
-                    doc.get("metadata", {}).get("org")
-                )
-                
-                if doc_id:
-                    citation_key = f"decision_{doc_id}"
-                    if citation_key not in seen_citations:
-                        citations.append({
-                            "type": "decision",
-                            "doc_id": doc_id,
-                            "org": org or "관할기관",
-                            "source": doc.get("source", ""),
-                            "id": doc.get("id")
-                        })
-                        seen_citations.add(citation_key)
-            
-            # 5. 개선: 문서 내용에서 직접 법령/판례 패턴 추출 (타입 기반과 독립적으로 수행)
+            # 3. 개선: 문서 내용에서 직접 법령/판례 패턴 추출 (타입 기반과 독립적으로 수행)
             if content and isinstance(content, str):
                 self.logger.debug(
                     f"🔍 [CITATION] 문서 {idx}: 패턴 기반 추출 시도 (content_length={len(content)})"
@@ -3760,7 +4042,7 @@ class EnhancedLegalQuestionWorkflow(
         # 문서 타입별 통계
         doc_types = {}
         for doc in retrieved_docs:
-            doc_type = doc.get("type") or doc.get("source_type", "unknown")
+            doc_type = doc.get("type", "unknown")
             doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
         
         self.logger.debug(
@@ -3960,6 +4242,25 @@ class EnhancedLegalQuestionWorkflow(
             )
 
             context_dict = self._inject_search_results_into_context(state, context_dict, retrieved_docs, query)
+            
+            # 🔥 개선: context_dict에 retrieved_docs와 structured_documents가 명시적으로 포함되도록 보장
+            if isinstance(context_dict, dict) and retrieved_docs:
+                if "retrieved_docs" not in context_dict:
+                    context_dict["retrieved_docs"] = retrieved_docs
+                    context_dict["retrieved_docs_count"] = len(retrieved_docs)
+                    self.logger.info(f"✅ [CONTEXT DICT] Added {len(retrieved_docs)} retrieved_docs to context_dict")
+                
+                # structured_documents가 없으면 생성
+                if "structured_documents" not in context_dict or not context_dict.get("structured_documents"):
+                    normalized_documents = self._normalize_retrieved_docs_to_structured(retrieved_docs)
+                    if normalized_documents:
+                        structured_docs = self._create_structured_documents_from_normalized(
+                            normalized_documents, retrieved_docs, context_dict, state
+                        )
+                        context_dict["structured_documents"] = structured_docs
+                        context_dict["document_count"] = len(normalized_documents)
+                        context_dict["docs_included"] = len(normalized_documents)
+                        self.logger.info(f"✅ [CONTEXT DICT] Created structured_documents from {len(normalized_documents)} retrieved_docs")
             
             optimized_prompt, prompt_file, prompt_length, structured_docs_count = self._generate_and_validate_prompt(
                 state, context_dict, query, question_type, domain, model_type, base_prompt_type, retrieved_docs
@@ -6068,6 +6369,68 @@ class EnhancedLegalQuestionWorkflow(
             # 1. 쿼리별 그룹화 및 통계 수집
             results_by_query = {}
             for doc in semantic_results:
+                # 🔥 개선: 메타데이터 보존 (metadata에서 최상위 필드로 복사)
+                if "metadata" not in doc:
+                    doc["metadata"] = {}
+                if not isinstance(doc["metadata"], dict):
+                    doc["metadata"] = {}
+                
+                metadata = doc["metadata"]
+                # metadata에서 최상위 필드로 복사 (우선순위: metadata > 최상위 필드)
+                if metadata.get("type") and not doc.get("type"):
+                    doc["type"] = metadata.get("type")
+                
+                # 🔥 개선: type 필드 정규화 (메타데이터 보존)
+                # type이 없거나 unknown이면 metadata에서 복원
+                current_type = doc.get("type", "").lower()
+                if not doc.get("type") or current_type == "unknown":
+                    metadata_type = metadata.get("type")
+                    if metadata_type and metadata_type != "unknown":
+                        doc["type"] = metadata_type
+                    elif not doc.get("type"):
+                        # DocumentType.from_metadata로 추론
+                        from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                        doc_type_enum = DocumentType.from_metadata(doc)
+                        if doc_type_enum != DocumentType.UNKNOWN:
+                            doc["type"] = doc_type_enum.value
+                            metadata["type"] = doc_type_enum.value
+                if metadata.get("statute_name") and not doc.get("statute_name"):
+                    doc["statute_name"] = metadata.get("statute_name")
+                if metadata.get("law_name") and not doc.get("law_name"):
+                    doc["law_name"] = metadata.get("law_name")
+                if metadata.get("article_no") and not doc.get("article_no"):
+                    doc["article_no"] = metadata.get("article_no")
+                if metadata.get("case_id") and not doc.get("case_id"):
+                    doc["case_id"] = metadata.get("case_id")
+                if metadata.get("court") and not doc.get("court"):
+                    doc["court"] = metadata.get("court")
+                if metadata.get("doc_id") and not doc.get("doc_id"):
+                    doc["doc_id"] = metadata.get("doc_id")
+                if metadata.get("casenames") and not doc.get("casenames"):
+                    doc["casenames"] = metadata.get("casenames")
+                if metadata.get("precedent_id") and not doc.get("precedent_id"):
+                    doc["precedent_id"] = metadata.get("precedent_id")
+                
+                # 최상위 필드를 metadata에도 복사 (일관성 유지)
+                if doc.get("type") and not metadata.get("type"):
+                    metadata["type"] = doc.get("type")
+                if doc.get("statute_name") and not metadata.get("statute_name"):
+                    metadata["statute_name"] = doc.get("statute_name")
+                if doc.get("law_name") and not metadata.get("law_name"):
+                    metadata["law_name"] = doc.get("law_name")
+                if doc.get("article_no") and not metadata.get("article_no"):
+                    metadata["article_no"] = doc.get("article_no")
+                if doc.get("case_id") and not metadata.get("case_id"):
+                    metadata["case_id"] = doc.get("case_id")
+                if doc.get("court") and not metadata.get("court"):
+                    metadata["court"] = doc.get("court")
+                if doc.get("doc_id") and not metadata.get("doc_id"):
+                    metadata["doc_id"] = doc.get("doc_id")
+                if doc.get("casenames") and not metadata.get("casenames"):
+                    metadata["casenames"] = doc.get("casenames")
+                if doc.get("precedent_id") and not metadata.get("precedent_id"):
+                    metadata["precedent_id"] = doc.get("precedent_id")
+                
                 query_id = (
                     doc.get("expanded_query_id") or 
                     doc.get("sub_query") or 
@@ -6124,6 +6487,21 @@ class EnhancedLegalQuestionWorkflow(
                             
                             if new_score > existing_score:
                                 # 기존 결과 제거하고 새 결과 추가 (성능 최적화: 인덱스 사용)
+                                # 🔥 개선: 기존 문서의 메타데이터를 새 문서에 복사 (메타데이터 보존)
+                                existing_metadata = existing_doc.get("metadata", {})
+                                if isinstance(existing_metadata, dict):
+                                    if "metadata" not in doc:
+                                        doc["metadata"] = {}
+                                    if not isinstance(doc["metadata"], dict):
+                                        doc["metadata"] = {}
+                                    # 기존 문서의 메타데이터를 새 문서에 복사 (우선순위: 기존 > 새)
+                                    for key in ["type", "statute_name", "law_name", "article_no", 
+                                               "case_id", "court", "doc_id", "casenames", "precedent_id"]:
+                                        if existing_metadata.get(key) and not doc["metadata"].get(key):
+                                            doc["metadata"][key] = existing_metadata.get(key)
+                                        if existing_doc.get(key) and not doc.get(key):
+                                            doc[key] = existing_doc.get(key)
+                                
                                 existing_idx = None
                                 for idx, consolidated_doc in enumerate(consolidated):
                                     if consolidated_doc is existing_doc:
@@ -6205,6 +6583,8 @@ class EnhancedLegalQuestionWorkflow(
         # 검색 타입 라벨링 강화: semantic_results와 keyword_results에 search_type 명시적으로 설정
         # 병합 전에 원본 리스트에 search_type을 강제로 설정하여 병합 과정에서 손실 방지
         for doc in semantic_results:
+            if not isinstance(doc, dict):
+                continue
             # search_type이 없거나 빈 문자열이면 강제로 설정
             if not doc.get("search_type"):
                 doc["search_type"] = "semantic"
@@ -6216,6 +6596,8 @@ class EnhancedLegalQuestionWorkflow(
             doc["metadata"]["original_search_type"] = "semantic"
         
         for doc in keyword_results:
+            if not isinstance(doc, dict):
+                continue
             # search_type이 없거나 빈 문자열이면 강제로 설정
             if not doc.get("search_type"):
                 doc["search_type"] = "keyword"
@@ -6225,6 +6607,10 @@ class EnhancedLegalQuestionWorkflow(
             if not isinstance(doc["metadata"], dict):
                 doc["metadata"] = {}
             doc["metadata"]["original_search_type"] = "keyword"
+        
+        # 🔥 개선: 메타데이터 및 type 필드 정규화 (중복 코드 제거)
+        semantic_results = self._normalize_documents(semantic_results)
+        keyword_results = self._normalize_documents(keyword_results)
         
         if self.search_handler and semantic_results and keyword_results:
             # 개선된 merge_search_results 사용
@@ -6236,7 +6622,97 @@ class EnhancedLegalQuestionWorkflow(
                 extracted_keywords=extracted_keywords
             )
             self.logger.debug(f"🔀 [MERGE] Using improved merge_search_results: {len(merged_docs)} docs")
+            
+            # 🔥 개선: merge_search_results 반환 후 메타데이터 복원 (원본 문서에서)
+            # 원본 문서를 ID와 content 해시로 매핑하여 메타데이터 복원
+            original_docs_by_id = {}
+            original_docs_by_content = {}
+            for doc in semantic_results + keyword_results:
+                if isinstance(doc, dict):
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    if doc_id:
+                        original_docs_by_id[doc_id] = doc
+                    # content 기반 매칭도 추가
+                    content = doc.get("text") or doc.get("content", "")
+                    if content:
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                        original_docs_by_content[content_hash] = doc
+            
+            # merged_docs의 메타데이터를 원본 문서에서 복원
+            for merged_doc in merged_docs:
+                if not isinstance(merged_doc, dict):
+                    continue
+                
+                # ID 기반 매칭 시도
+                merged_id = merged_doc.get("id") or merged_doc.get("chunk_id") or merged_doc.get("document_id")
+                original_doc = None
+                
+                if merged_id and merged_id in original_docs_by_id:
+                    original_doc = original_docs_by_id[merged_id]
+                else:
+                    # content 기반 매칭 시도
+                    content = merged_doc.get("text") or merged_doc.get("content", "")
+                    if content:
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                        if content_hash in original_docs_by_content:
+                            original_doc = original_docs_by_content[content_hash]
+                
+                if original_doc:
+                    # 🔥 CRITICAL: metadata의 source_type을 type으로 변환 (레거시 호환)
+                    original_metadata = original_doc.get("metadata", {})
+                    if isinstance(original_metadata, dict):
+                        if original_metadata.get("source_type") and not merged_doc.get("type"):
+                            merged_doc["type"] = original_metadata.get("source_type")
+                            if "metadata" not in merged_doc:
+                                merged_doc["metadata"] = {}
+                            if not isinstance(merged_doc["metadata"], dict):
+                                merged_doc["metadata"] = {}
+                            merged_doc["metadata"]["type"] = original_metadata.get("source_type")
+                    
+                    # 원본 문서의 메타데이터를 merged_doc에 복원
+                    # 🔥 개선: unknown 타입도 복원하도록 수정
+                    current_type = merged_doc.get("type", "").lower()
+                    if original_doc.get("type") and (not merged_doc.get("type") or current_type == "unknown"):
+                        merged_doc["type"] = original_doc.get("type")
+                    
+                    # 법령/판례 관련 필드 복원
+                    for key in ["statute_name", "law_name", "article_no", "article_number", 
+                               "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
+                        if not merged_doc.get(key) and original_doc.get(key):
+                            merged_doc[key] = original_doc.get(key)
+                    
+                    # metadata에도 복원
+                    if "metadata" not in merged_doc:
+                        merged_doc["metadata"] = {}
+                    if not isinstance(merged_doc["metadata"], dict):
+                        merged_doc["metadata"] = {}
+                    
+                    original_metadata = original_doc.get("metadata", {})
+                    if isinstance(original_metadata, dict):
+                        # 원본 metadata의 필드를 merged_doc의 metadata에 복원
+                        for key in ["type", "statute_name", "law_name", "article_no", 
+                                   "article_number", "case_id", "court", "ccourt", "doc_id", 
+                                   "casenames", "precedent_id"]:
+                            if original_metadata.get(key) and not merged_doc["metadata"].get(key):
+                                merged_doc["metadata"][key] = original_metadata.get(key)
         else:
+            # 🔥 CRITICAL: _merge_search_results_internal 호출 전에 원본 문서의 타입 정보 백업
+            original_docs_by_id = {}
+            original_docs_by_content = {}
+            for doc in semantic_results + keyword_results:
+                if isinstance(doc, dict):
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    if doc_id:
+                        original_docs_by_id[doc_id] = doc
+                    # content 기반 매칭도 추가
+                    content = doc.get("text") or doc.get("content", "")
+                    if content:
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                        original_docs_by_content[content_hash] = doc
+            
             merged_docs = self._merge_search_results_internal(
                 semantic_results, 
                 keyword_results,
@@ -6245,6 +6721,71 @@ class EnhancedLegalQuestionWorkflow(
                 extracted_keywords=extracted_keywords
             )
             self.logger.debug(f"🔀 [MERGE] Using _merge_search_results_internal: {len(merged_docs)} docs")
+            
+            # 🔥 CRITICAL: _merge_search_results_internal 호출 후 원본 문서에서 타입 복원
+            for merged_doc in merged_docs:
+                if not isinstance(merged_doc, dict):
+                    continue
+                
+                # ID 기반 매칭 시도
+                merged_id = merged_doc.get("id") or merged_doc.get("chunk_id") or merged_doc.get("document_id")
+                original_doc = None
+                
+                if merged_id and merged_id in original_docs_by_id:
+                    original_doc = original_docs_by_id[merged_id]
+                else:
+                    # content 기반 매칭 시도
+                    content = merged_doc.get("text") or merged_doc.get("content", "")
+                    if content:
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                        if content_hash in original_docs_by_content:
+                            original_doc = original_docs_by_content[content_hash]
+                
+                if original_doc:
+                    # 🔥 CRITICAL: 타입 복원 (원본 문서에서)
+                    current_type = merged_doc.get("type", "").lower()
+                    original_type = original_doc.get("type", "").lower()
+                    
+                    if original_type and original_type != "unknown":
+                        if (not merged_doc.get("type") or current_type == "unknown" or current_type == ""):
+                            merged_doc["type"] = original_doc.get("type")
+                            self.logger.info(
+                                f"🔍 [TYPE RESTORE AFTER MERGE] Doc ID={merged_id}: "
+                                f"타입 복원: {current_type} → {original_type}"
+                            )
+                    
+                    # metadata에서도 타입 복원 시도
+                    original_metadata = original_doc.get("metadata", {})
+                    if isinstance(original_metadata, dict):
+                        metadata_type = original_metadata.get("type") or original_metadata.get("source_type")
+                        if metadata_type and metadata_type.lower() != "unknown":
+                            if (not merged_doc.get("type") or merged_doc.get("type", "").lower() == "unknown"):
+                                merged_doc["type"] = metadata_type
+                                if "metadata" not in merged_doc:
+                                    merged_doc["metadata"] = {}
+                                if not isinstance(merged_doc["metadata"], dict):
+                                    merged_doc["metadata"] = {}
+                                merged_doc["metadata"]["type"] = metadata_type
+                    
+                    # 법령/판례 관련 필드 복원
+                    for key in ["statute_name", "law_name", "article_no", "article_number", 
+                               "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
+                        if not merged_doc.get(key) and original_doc.get(key):
+                            merged_doc[key] = original_doc.get(key)
+                    
+                    # metadata에도 복원
+                    if "metadata" not in merged_doc:
+                        merged_doc["metadata"] = {}
+                    if not isinstance(merged_doc["metadata"], dict):
+                        merged_doc["metadata"] = {}
+                    
+                    if isinstance(original_metadata, dict):
+                        for key in ["type", "statute_name", "law_name", "article_no", 
+                                   "article_number", "case_id", "court", "ccourt", "doc_id", 
+                                   "casenames", "precedent_id"]:
+                            if original_metadata.get(key) and not merged_doc["metadata"].get(key):
+                                merged_doc["metadata"][key] = original_metadata.get(key)
         
         # 병합 후에도 search_type이 없는 문서에 대해 강화된 추론 로직 적용
         for doc in merged_docs:
@@ -6254,27 +6795,38 @@ class EnhancedLegalQuestionWorkflow(
                 if isinstance(metadata, dict) and metadata.get("original_search_type"):
                     doc["search_type"] = metadata["original_search_type"]
                     continue
-                
-                # 2. source_type이나 type으로 추론
-                source_type = doc.get("source_type", "").lower()
-                doc_type = doc.get("type", "").lower()
-                
-                # 법령/판례 관련 문서는 semantic으로 분류
-                if (source_type in ["statute_article", "precedent_content", "statute", "precedent", "precedent_content"] or 
-                    doc_type in ["statute_article", "precedent_content", "statute", "precedent"]):
-                    doc["search_type"] = "semantic"
-                # law_name이나 article_no가 있으면 semantic (법령 조문)
-                elif doc.get("law_name") or doc.get("article_no"):
-                    doc["search_type"] = "semantic"
-                # case_number나 court_name이 있으면 semantic (판례)
-                elif doc.get("case_number") or doc.get("court_name"):
-                    doc["search_type"] = "semantic"
-                # direct_match가 있으면 database
-                elif doc.get("direct_match", False):
-                    doc["search_type"] = "database"
-                else:
-                    # 기본적으로 keyword로 분류
-                    doc["search_type"] = "keyword"
+            
+            # 🔥 개선: type 필드 정규화 (메타데이터 보존)
+            # type이 없거나 unknown이면 metadata에서 복원
+            current_type = doc.get("type", "").lower()
+            if not doc.get("type") or current_type == "unknown":
+                metadata_type = doc.get("metadata", {}).get("type")
+                if metadata_type and metadata_type != "unknown":
+                    doc["type"] = metadata_type
+                    if "metadata" not in doc:
+                        doc["metadata"] = {}
+                    if not isinstance(doc["metadata"], dict):
+                        doc["metadata"] = {}
+                    doc["metadata"]["type"] = metadata_type
+            
+            # 2. type으로 추론
+            doc_type = doc.get("type", "").lower()
+            
+            # 법령/판례 관련 문서는 semantic으로 분류
+            if doc_type in ["statute_article", "precedent_content", "statute", "precedent"]:
+                doc["search_type"] = "semantic"
+            # law_name이나 article_no가 있으면 semantic (법령 조문)
+            elif doc.get("law_name") or doc.get("article_no"):
+                doc["search_type"] = "semantic"
+            # case_number나 court_name이 있으면 semantic (판례)
+            elif doc.get("case_number") or doc.get("court_name"):
+                doc["search_type"] = "semantic"
+            # direct_match가 있으면 database
+            elif doc.get("direct_match", False):
+                doc["search_type"] = "database"
+            else:
+                # 기본적으로 keyword로 분류
+                doc["search_type"] = "keyword"
             
             # search_type이 있더라도 metadata에 원본 정보 보존
             if "metadata" not in doc:
@@ -6283,6 +6835,59 @@ class EnhancedLegalQuestionWorkflow(
                 doc["metadata"] = {}
             if "original_search_type" not in doc["metadata"]:
                 doc["metadata"]["original_search_type"] = doc.get("search_type", "unknown")
+        
+        # 🔥 개선: merged_docs에 메타데이터 보존 로직 추가
+        # merge_search_results 또는 _merge_search_results_internal에서 반환된 문서의 메타데이터 보존
+        for doc in merged_docs:
+            # metadata 필드 보존 및 보강
+            if "metadata" not in doc:
+                doc["metadata"] = {}
+            if not isinstance(doc["metadata"], dict):
+                doc["metadata"] = {}
+            
+            # 기존 metadata의 정보를 최상위 필드로 복사 (우선순위: metadata > 최상위 필드)
+            metadata = doc["metadata"]
+            if isinstance(metadata, dict):
+                # metadata에서 최상위 필드로 복사
+                if metadata.get("type") and not doc.get("type"):
+                    doc["type"] = metadata.get("type")
+                if metadata.get("statute_name") and not doc.get("statute_name"):
+                    doc["statute_name"] = metadata.get("statute_name")
+                if metadata.get("law_name") and not doc.get("law_name"):
+                    doc["law_name"] = metadata.get("law_name")
+                if metadata.get("article_no") and not doc.get("article_no"):
+                    doc["article_no"] = metadata.get("article_no")
+                if metadata.get("article_number") and not doc.get("article_no"):
+                    doc["article_no"] = metadata.get("article_number")
+                if metadata.get("case_id") and not doc.get("case_id"):
+                    doc["case_id"] = metadata.get("case_id")
+                if metadata.get("court") and not doc.get("court"):
+                    doc["court"] = metadata.get("court")
+                if metadata.get("ccourt") and not doc.get("court"):
+                    doc["court"] = metadata.get("ccourt")
+                if metadata.get("doc_id") and not doc.get("doc_id"):
+                    doc["doc_id"] = metadata.get("doc_id")
+                if metadata.get("casenames") and not doc.get("casenames"):
+                    doc["casenames"] = metadata.get("casenames")
+                if metadata.get("precedent_id") and not doc.get("precedent_id"):
+                    doc["precedent_id"] = metadata.get("precedent_id")
+            
+            # 최상위 필드의 정보를 metadata에 복사 (DocumentType 추론을 위해)
+            if doc.get("statute_name") or doc.get("law_name") or doc.get("article_no"):
+                doc["metadata"]["statute_name"] = doc.get("statute_name") or doc.get("law_name")
+                doc["metadata"]["law_name"] = doc.get("law_name") or doc.get("statute_name")
+                doc["metadata"]["article_no"] = doc.get("article_no") or doc.get("article_number")
+            
+            if doc.get("case_id") or doc.get("court") or doc.get("doc_id") or doc.get("casenames"):
+                doc["metadata"]["case_id"] = doc.get("case_id")
+                doc["metadata"]["court"] = doc.get("court") or doc.get("ccourt")
+                doc["metadata"]["doc_id"] = doc.get("doc_id")
+                doc["metadata"]["casenames"] = doc.get("casenames")
+                doc["metadata"]["precedent_id"] = doc.get("precedent_id")
+            
+            # type도 metadata에 복사
+            if doc.get("type"):
+                doc["metadata"]["type"] = doc.get("type")
         
         if debug_mode:
             doc_structure_stats = {
@@ -6329,6 +6934,82 @@ class EnhancedLegalQuestionWorkflow(
             f"merged_docs={len(merged_docs)}, query='{query[:50]}...', quality={overall_quality:.2f}"
         )
         debug_mode = os.getenv("DEBUG_SEARCH_RESULTS", "false").lower() == "true"
+        
+        # 🔥 CRITICAL: 메타데이터 복원 (문서 분류 전에 수행)
+        # 원본 검색 결과에서 메타데이터를 가져와서 merged_docs에 복원
+        semantic_results = self._get_state_value(state, "semantic_results", [])
+        keyword_results = self._get_state_value(state, "keyword_results", [])
+        original_docs = semantic_results + keyword_results
+        
+        # 원본 문서를 ID와 content 해시로 매핑
+        original_docs_by_id = {}
+        original_docs_by_content = {}
+        for doc in original_docs:
+            if isinstance(doc, dict):
+                doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                if doc_id:
+                    original_docs_by_id[doc_id] = doc
+                # content 기반 매칭도 추가
+                content = doc.get("text") or doc.get("content", "")
+                if content:
+                    import hashlib
+                    content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                    original_docs_by_content[content_hash] = doc
+        
+        # merged_docs의 메타데이터를 원본 문서에서 복원
+        restored_count = 0
+        for merged_doc in merged_docs:
+            if not isinstance(merged_doc, dict):
+                continue
+            
+            # ID 기반 매칭 시도
+            merged_id = merged_doc.get("id") or merged_doc.get("chunk_id") or merged_doc.get("document_id")
+            original_doc = None
+            
+            if merged_id and merged_id in original_docs_by_id:
+                original_doc = original_docs_by_id[merged_id]
+            else:
+                # content 기반 매칭 시도
+                content = merged_doc.get("text") or merged_doc.get("content", "")
+                if content:
+                    import hashlib
+                    content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                    if content_hash in original_docs_by_content:
+                        original_doc = original_docs_by_content[content_hash]
+            
+            if original_doc:
+                # 원본 문서의 메타데이터를 merged_doc에 복원
+                # 🔥 개선: unknown 타입도 복원하도록 수정
+                current_type = merged_doc.get("type", "").lower()
+                if original_doc.get("type") and (not merged_doc.get("type") or current_type == "unknown"):
+                    merged_doc["type"] = original_doc.get("type")
+                    restored_count += 1
+                
+                # 법령/판례 관련 필드 복원
+                for key in ["statute_name", "law_name", "article_no", "article_number",
+                           "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
+                    if not merged_doc.get(key) and original_doc.get(key):
+                        merged_doc[key] = original_doc.get(key)
+                
+                # metadata에도 복원
+                if "metadata" not in merged_doc:
+                    merged_doc["metadata"] = {}
+                if not isinstance(merged_doc["metadata"], dict):
+                    merged_doc["metadata"] = {}
+                
+                original_metadata = original_doc.get("metadata", {})
+                if isinstance(original_metadata, dict):
+                    for key in ["type", "statute_name", "law_name", "article_no",
+                               "article_number", "case_id", "court", "ccourt", "doc_id",
+                               "casenames", "precedent_id"]:
+                        if original_metadata.get(key) and not merged_doc["metadata"].get(key):
+                            merged_doc["metadata"][key] = original_metadata.get(key)
+        
+        if restored_count > 0:
+            self.logger.info(
+                f"✅ [METADATA RESTORE] _apply_keyword_weights_and_rerank 시작 시 "
+                f"메타데이터 복원: {restored_count}/{len(merged_docs)}개 문서"
+            )
         
         # extracted_keywords가 비어있을 때 쿼리에서 추출 시도
         if not extracted_keywords or len(extracted_keywords) == 0:
@@ -6431,12 +7112,88 @@ class EnhancedLegalQuestionWorkflow(
             keyword_results = []
             unknown_results = []  # 분류 실패 문서 추적용
             
+            # 🔥 CRITICAL: 문서 분류 전에 타입 정보 백업 (타입 손실 방지)
+            doc_type_backup = {}
+            for doc in merged_docs:
+                if isinstance(doc, dict):
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    if doc_id:
+                        # 🔥 CRITICAL: 타입 정보를 최대한 확보 (최상위 필드, metadata, source_type 모두 확인)
+                        doc_type = doc.get("type")
+                        metadata = doc.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            metadata_type = metadata.get("type") or metadata.get("source_type")
+                            # 타입이 없거나 unknown이면 metadata에서 복원 시도
+                            if not doc_type or doc_type.lower() == "unknown":
+                                if metadata_type and metadata_type.lower() != "unknown":
+                                    doc_type = metadata_type
+                                    doc["type"] = metadata_type  # 최상위 필드에도 복원
+                                    self.logger.debug(
+                                        f"🔍 [BACKUP TYPE RESTORE] Doc ID={doc_id}: "
+                                        f"백업 생성 전 타입 복원: {doc.get('type')} → {metadata_type}"
+                                    )
+                        
+                        doc_type_backup[doc_id] = {
+                            "type": doc_type,
+                            "metadata_type": metadata.get("type") if isinstance(metadata, dict) else None,
+                            "statute_fields": {
+                                "statute_name": doc.get("statute_name") or (metadata.get("statute_name") if isinstance(metadata, dict) else None),
+                                "law_name": doc.get("law_name") or (metadata.get("law_name") if isinstance(metadata, dict) else None),
+                                "article_no": doc.get("article_no") or (metadata.get("article_no") if isinstance(metadata, dict) else None),
+                            },
+                            "case_fields": {
+                                "case_id": doc.get("case_id") or (metadata.get("case_id") if isinstance(metadata, dict) else None),
+                                "court": doc.get("court") or (metadata.get("court") if isinstance(metadata, dict) else None),
+                                "doc_id": doc.get("doc_id") or (metadata.get("doc_id") if isinstance(metadata, dict) else None),
+                            }
+                        }
+            
             for doc in merged_docs:
                 # 원본 점수 보존을 위해 별도 필드에 저장
                 if "original_relevance_score" not in doc:
                     doc["original_relevance_score"] = doc.get("relevance_score", 0.0)
                 if "original_similarity" not in doc and "similarity" in doc:
                     doc["original_similarity"] = doc.get("similarity")
+                
+                # 🔥 CRITICAL: 먼저 백업에서 타입 복원 (문서 분류 전에 타입 보존)
+                doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                if doc_id and doc_id in doc_type_backup:
+                    backup_info = doc_type_backup[doc_id]
+                    backup_type = backup_info.get("type")
+                    current_type = doc.get("type", "").lower() if doc.get("type") else ""
+                    
+                    # 백업된 타입이 있고, 현재 타입이 없거나 unknown이거나 백업과 다른 경우 복원
+                    if backup_type and backup_type.lower() != "unknown":
+                        if (not doc.get("type") or 
+                            current_type == "unknown" or 
+                            current_type == "" or
+                            (current_type != backup_type.lower() and current_type != "")):
+                            doc["type"] = backup_type
+                            self.logger.info(
+                                f"🔍 [TYPE RESTORE FROM BACKUP] Doc ID={doc_id}: "
+                                f"타입 복원: {current_type} → {backup_type}"
+                            )
+                            
+                            # 법령/판례 관련 필드도 복원
+                            for key, value in backup_info.get("statute_fields", {}).items():
+                                if value and not doc.get(key):
+                                    doc[key] = value
+                            for key, value in backup_info.get("case_fields", {}).items():
+                                if value and not doc.get(key):
+                                    doc[key] = value
+                
+                # 🔥 개선: 메타데이터 및 type 필드 정규화 (중복 코드 제거)
+                # 🔥 개선: 메타데이터 및 type 필드 정규화 (중복 코드 제거)
+                doc = self._normalize_document_metadata(doc)
+                doc = self._normalize_document_type(doc)
+                
+                # 메타데이터에 type 저장 (일관성 유지)
+                if doc.get("type") and not doc.get("metadata", {}).get("type"):
+                    if "metadata" not in doc:
+                        doc["metadata"] = {}
+                    if not isinstance(doc["metadata"], dict):
+                        doc["metadata"] = {}
+                    doc["metadata"]["type"] = doc.get("type")
                 
                 search_type = doc.get("search_type", "").lower()
                 classified = False
@@ -6471,14 +7228,36 @@ class EnhancedLegalQuestionWorkflow(
                             doc["search_type"] = "keyword"  # 복원
                             classified = True
                     
-                    # source_type이나 type으로 판단
+                    # type으로 판단
                     if not classified:
-                        source_type = doc.get("source_type", "").lower()
+                        # 🔥 CRITICAL: 문서 분류 전에 백업에서 타입 복원 시도
+                        doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                        if doc_id and doc_id in doc_type_backup:
+                            backup_info = doc_type_backup[doc_id]
+                            backup_type = backup_info.get("type")
+                            current_type = doc.get("type", "").lower() if doc.get("type") else ""
+                            
+                            # 백업된 타입이 있고, 현재 타입이 없거나 unknown인 경우 복원
+                            if backup_type and backup_type.lower() != "unknown":
+                                if (not doc.get("type") or current_type == "unknown" or current_type == ""):
+                                    doc["type"] = backup_type
+                                    self.logger.info(
+                                        f"🔍 [TYPE RESTORE BEFORE CLASSIFY] Doc ID={doc_id}: "
+                                        f"문서 분류 전 타입 복원: {current_type} → {backup_type}"
+                                    )
+                                    
+                                    # 법령/판례 관련 필드도 복원
+                                    for key, value in backup_info.get("statute_fields", {}).items():
+                                        if value and not doc.get(key):
+                                            doc[key] = value
+                                    for key, value in backup_info.get("case_fields", {}).items():
+                                        if value and not doc.get(key):
+                                            doc[key] = value
+                        
                         doc_type = doc.get("type", "").lower()
                         
                         # 법령/판례 관련 문서는 semantic으로 분류
-                        if (source_type in ["statute_article", "precedent_content", "statute", "precedent"] or
-                            doc_type in ["statute_article", "precedent_content", "statute", "precedent"]):
+                        if doc_type in ["statute_article", "precedent_content", "statute", "precedent"]:
                             vector_results.append(doc)
                             doc["search_type"] = "semantic"  # 설정
                             classified = True
@@ -6515,6 +7294,113 @@ class EnhancedLegalQuestionWorkflow(
                 f"Keyword={len(keyword_results)}, Unknown={len(unknown_results)}"
             )
             
+            # 🔥 CRITICAL: 문서 분류 후 메타데이터 복원 (원본 문서에서)
+            # 분류된 모든 문서에 대해 메타데이터 복원
+            all_classified_docs = db_results + vector_results + keyword_results
+            for classified_doc in all_classified_docs:
+                if not isinstance(classified_doc, dict):
+                    continue
+                
+                # 🔥 개선: 먼저 백업된 타입 정보로 복원 시도 (분류 전 타입 보존)
+                classified_id = classified_doc.get("id") or classified_doc.get("chunk_id") or classified_doc.get("document_id")
+                if classified_id and classified_id in doc_type_backup:
+                    backup_info = doc_type_backup[classified_id]
+                    current_type = classified_doc.get("type", "").lower() if classified_doc.get("type") else ""
+                    backup_type = backup_info.get("type", "").lower() if backup_info.get("type") else ""
+                    
+                    # 백업된 타입이 있고, 현재 타입이 없거나 unknown이거나 백업과 다른 경우 복원
+                    if backup_type and backup_type != "unknown":
+                        if (not classified_doc.get("type") or 
+                            current_type == "unknown" or 
+                            (current_type != backup_type and current_type != "")):
+                            classified_doc["type"] = backup_info.get("type")
+                            if "metadata" not in classified_doc:
+                                classified_doc["metadata"] = {}
+                            if not isinstance(classified_doc["metadata"], dict):
+                                classified_doc["metadata"] = {}
+                            classified_doc["metadata"]["type"] = backup_info.get("type")
+                            
+                            # 법령/판례 관련 필드도 복원
+                            for key, value in backup_info.get("statute_fields", {}).items():
+                                if value and not classified_doc.get(key):
+                                    classified_doc[key] = value
+                            for key, value in backup_info.get("case_fields", {}).items():
+                                if value and not classified_doc.get(key):
+                                    classified_doc[key] = value
+                            
+                            self.logger.debug(
+                                f"🔍 [TYPE RESTORE FROM BACKUP] Doc ID={classified_id}: "
+                                f"타입 복원: {current_type} → {backup_type}"
+                            )
+                
+                # 원본 문서에서 메타데이터 복원 시도
+                original_doc = None
+                
+                if classified_id and classified_id in original_docs_by_id:
+                    original_doc = original_docs_by_id[classified_id]
+                else:
+                    # content 기반 매칭 시도
+                    content = classified_doc.get("text") or classified_doc.get("content", "")
+                    if content:
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                        if content_hash in original_docs_by_content:
+                            original_doc = original_docs_by_content[content_hash]
+                
+                if original_doc:
+                    # 🔥 CRITICAL: metadata의 source_type을 type으로 변환 (레거시 호환)
+                    original_metadata = original_doc.get("metadata", {})
+                    if isinstance(original_metadata, dict):
+                        if original_metadata.get("source_type") and not classified_doc.get("type"):
+                            classified_doc["type"] = original_metadata.get("source_type")
+                            if "metadata" not in classified_doc:
+                                classified_doc["metadata"] = {}
+                            if not isinstance(classified_doc["metadata"], dict):
+                                classified_doc["metadata"] = {}
+                            classified_doc["metadata"]["type"] = original_metadata.get("source_type")
+                    
+                    # type 필드 복원
+                    # 🔥 개선: 이미 타입이 설정되어 있어도 원본 타입과 다르면 복원
+                    current_type = classified_doc.get("type", "").lower()
+                    original_type = original_doc.get("type", "").lower() if original_doc.get("type") else ""
+                    
+                    # 원본 타입이 있고, 현재 타입이 없거나 unknown이거나 원본과 다른 경우 복원
+                    if original_type and original_type != "unknown":
+                        if (not classified_doc.get("type") or 
+                            current_type == "unknown" or 
+                            (current_type != original_type and current_type != "")):
+                            # 원본 타입으로 복원
+                            classified_doc["type"] = original_doc.get("type")
+                            self.logger.debug(
+                                f"🔍 [TYPE RESTORE AFTER CLASSIFY] Doc ID={classified_doc.get('id', 'unknown')}: "
+                                f"타입 복원: {current_type} → {original_type}"
+                            )
+                    
+                    # 법령/판례 관련 필드 복원
+                    for key in ["statute_name", "law_name", "article_no", "article_number",
+                               "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id",
+                               "chunk_id", "source_id"]:
+                        if not classified_doc.get(key) and original_doc.get(key):
+                            classified_doc[key] = original_doc.get(key)
+                    
+                    # metadata에도 복원
+                    if "metadata" not in classified_doc:
+                        classified_doc["metadata"] = {}
+                    if not isinstance(classified_doc["metadata"], dict):
+                        classified_doc["metadata"] = {}
+                    
+                    if isinstance(original_metadata, dict):
+                        # source_type을 type으로 변환하여 복원
+                        original_type = original_metadata.get("type") or original_metadata.get("source_type")
+                        if original_type and not classified_doc["metadata"].get("type"):
+                            classified_doc["metadata"]["type"] = original_type
+                        
+                        for key in ["statute_name", "law_name", "article_no", "article_number",
+                                   "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id",
+                                   "chunk_id", "source_id"]:
+                            if original_metadata.get(key) and not classified_doc["metadata"].get(key):
+                                classified_doc["metadata"][key] = original_metadata.get(key)
+            
             # 통합 reranking 파이프라인 호출 (원본 점수 보존)
             search_quality = self._get_state_value(state, "search_quality", {})
             overall_quality = search_quality.get("overall_quality", 0.7) if isinstance(search_quality, dict) else 0.7
@@ -6536,11 +7422,158 @@ class EnhancedLegalQuestionWorkflow(
             
             if not should_skip_rerank:
                 top_k = search_params.get("max_results", 20)
+                
+                # 🔍 로깅: integrated_rerank_pipeline 호출 전 입력 문서의 메타데이터 확인
+                input_docs = db_results + vector_results + keyword_results
+                
+                # 🔥 개선: integrated_rerank_pipeline 호출 전 메타데이터 보존
+                # 🔥 CRITICAL: merged_docs에 대해 메타데이터 복원 (백업 정보 활용)
+                # 🔥 CRITICAL: input_docs 대신 merged_docs를 사용하여 백업 정보와 일치시킴
+                for doc in merged_docs:
+                    if not isinstance(doc, dict):
+                        continue
+                    
+                    # 🔥 CRITICAL: metadata의 source_type을 type으로 변환 (레거시 호환)
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        if metadata.get("source_type") and not doc.get("type"):
+                            doc["type"] = metadata.get("source_type")
+                            metadata["type"] = metadata.get("source_type")
+                    
+                    # type 필드 정규화
+                    # 🔥 개선: unknown 타입도 복원하도록 수정
+                    current_type = doc.get("type", "").lower()
+                    if not doc.get("type") or current_type == "unknown":
+                        if not isinstance(metadata, dict):
+                            metadata = doc.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            metadata_type = metadata.get("type") or metadata.get("source_type")
+                            if metadata_type and metadata_type != "unknown":
+                                doc["type"] = metadata_type
+                                if "metadata" not in doc:
+                                    doc["metadata"] = {}
+                                if not isinstance(doc["metadata"], dict):
+                                    doc["metadata"] = {}
+                                doc["metadata"]["type"] = metadata_type
+                            elif not doc.get("type"):
+                                # DocumentType.from_metadata로 추론
+                                from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                                doc_type_enum = DocumentType.from_metadata(doc)
+                                if doc_type_enum != DocumentType.UNKNOWN:
+                                    doc["type"] = doc_type_enum.value
+                                    if "metadata" not in doc:
+                                        doc["metadata"] = {}
+                                    if not isinstance(doc["metadata"], dict):
+                                        doc["metadata"] = {}
+                                    doc["metadata"]["type"] = doc_type_enum.value
+                    
+                    # 🔥 CRITICAL: content 기반 추론 (메타데이터 완전 손실 시 폴백)
+                    # 🔥 개선: 판례 패턴을 우선적으로 확인 (판례가 법률 조문 패턴과 겹칠 수 있음)
+                    # 🔥 CRITICAL: 이미 타입이 설정되어 있으면 content 기반 추론하지 않음 (타입 손실 방지)
+                    # 🔥 CRITICAL: 백업된 타입이 있으면 content 기반 추론을 건너뜀
+                    current_type_after_restore = doc.get("type", "").lower() if doc.get("type") else ""
+                    doc_id_for_backup = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    has_backup_type = doc_id_for_backup and doc_id_for_backup in doc_type_backup and doc_type_backup[doc_id_for_backup].get("type")
+                    
+                    # content 기반 추론은 타입이 완전히 없거나 unknown이고, 백업도 없을 때만 실행
+                    if (not doc.get("type") or current_type_after_restore == "unknown" or current_type_after_restore == "") and not has_backup_type:
+                        content = doc.get("content", "") or doc.get("text", "")
+                        if content:
+                            import re
+                            
+                            # 판례 패턴 (우선 확인 - 판례가 법률 조문 패턴도 포함할 수 있음)
+                            precedent_patterns = [
+                                r'【원고',  # 【원고, 피상고인】
+                                r'【피고',  # 【피고, 상고인】
+                                r'【청구인',  # 【청구인, 재항고인】
+                                r'【사건본인',  # 【사건본인】
+                                r'대법원.*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}',  # 대법원 2023. 9. 27.
+                                r'고등법원.*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}',
+                                r'지방법원.*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}',
+                                r'선고.*판결',  # 선고 2021다255655 판결
+                                r'선고.*결정',  # 선고 2017브10 결정
+                                r'원심판결',  # 【원심판결】
+                                r'원심결정',  # 【원심결정】
+                                r'소송대리인',  # 소송대리인 변호사
+                                r'담당변호사',  # 담당변호사 이종희
+                                r'사건번호',  # 사건번호
+                                r'사건.*\d+',  # 사건 2015르3081
+                                r'판결 참조',  # 판결 참조
+                                r'판례',  # 판례
+                            ]
+                            
+                            # 법률 조문 패턴 (판례 패턴이 없을 때만 확인)
+                            statute_patterns = [
+                                r'제\d+조\s*제\d+항',  # 제750조 제1항 (구체적인 조문 형식)
+                                r'제\d+조\s*제\d+호',  # 제750조 제1호
+                                r'법률.*제\d+조.*제\d+항',  # 법률 제750조 제1항
+                                r'민법.*제\d+조.*제\d+항',  # 민법 제750조 제1항
+                                r'형법.*제\d+조.*제\d+항',  # 형법 제750조 제1항
+                                r'상법.*제\d+조.*제\d+항',  # 상법 제750조 제1항
+                            ]
+                            
+                            # 판례 패턴 우선 확인
+                            is_precedent = any(re.search(p, content, re.IGNORECASE) for p in precedent_patterns)
+                            
+                            # 판례 패턴이 없을 때만 법률 조문 패턴 확인
+                            is_statute = False
+                            if not is_precedent:
+                                is_statute = any(re.search(p, content, re.IGNORECASE) for p in statute_patterns)
+                            
+                            if is_precedent:
+                                doc["type"] = "precedent_content"
+                                if "metadata" not in doc:
+                                    doc["metadata"] = {}
+                                if not isinstance(doc["metadata"], dict):
+                                    doc["metadata"] = {}
+                                doc["metadata"]["type"] = "precedent_content"
+                                self.logger.debug(f"🔍 [CONTENT INFERENCE] 판례로 추론: {doc.get('id', 'unknown')}")
+                            elif is_statute:
+                                doc["type"] = "statute_article"
+                                if "metadata" not in doc:
+                                    doc["metadata"] = {}
+                                if not isinstance(doc["metadata"], dict):
+                                    doc["metadata"] = {}
+                                doc["metadata"]["type"] = "statute_article"
+                                self.logger.debug(f"🔍 [CONTENT INFERENCE] 법률 조문으로 추론: {doc.get('id', 'unknown')}")
+                    
+                    # metadata에서 최상위 필드로 복사
+                    if not isinstance(metadata, dict):
+                        metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        if metadata.get("type") and not doc.get("type"):
+                            doc["type"] = metadata.get("type")
+                        
+                        # 법령/판례 관련 필드 복원
+                        for key in ["statute_name", "law_name", "article_no", "article_number",
+                                   "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id",
+                                   "chunk_id", "source_id"]:
+                            if metadata.get(key) and not doc.get(key):
+                                doc[key] = metadata.get(key)
+                
+                input_type_count = sum(1 for doc in input_docs if doc.get("type"))
+                input_metadata_type_count = sum(
+                    1 for doc in input_docs 
+                    if isinstance(doc.get("metadata"), dict) and 
+                    doc.get("metadata").get("type")
+                )
                 self.logger.info(
                     f"🔄 [INTEGRATED RERANK] 통합 reranking 시작 (원본 점수 보존): "
                     f"DB={len(db_results)}, Vector={len(vector_results)}, "
-                    f"Keyword={len(keyword_results)}, top_k={top_k}"
+                    f"Keyword={len(keyword_results)}, top_k={top_k}, "
+                    f"입력 문서 타입 정보: 최상위={input_type_count}개, metadata={input_metadata_type_count}개"
                 )
+                
+                # 샘플 입력 문서 메타데이터 로깅
+                if input_docs:
+                    sample_input = input_docs[0]
+                    self.logger.info(
+                        f"🔍 [INTEGRATED RERANK INPUT SAMPLE] "
+                        f"type={sample_input.get('type')}, "
+                        f"metadata_type={sample_input.get('metadata', {}).get('type') if isinstance(sample_input.get('metadata'), dict) else 'N/A'}, "
+                        f"has_statute_fields={bool(sample_input.get('statute_name') or sample_input.get('law_name') or sample_input.get('article_no'))}, "
+                        f"has_case_fields={bool(sample_input.get('case_id') or sample_input.get('court') or sample_input.get('doc_id'))}"
+                    )
                 
                 try:
                     weighted_docs = self.result_ranker.integrated_rerank_pipeline(
@@ -6554,8 +7587,18 @@ class EnhancedLegalQuestionWorkflow(
                         search_quality=overall_quality
                     )
                     
+                    # 🔥 개선: integrated_rerank_pipeline 내부에서 이미 메타데이터 복원이 완료되었으므로
+                    # 추가 복원 로직은 제거 (중복 방지)
+                    # 다만, 복원된 메타데이터가 제대로 반환되었는지 확인
+                    restored_metadata_count = sum(
+                        1 for doc in weighted_docs 
+                        if doc.get("type") or 
+                           (isinstance(doc.get("metadata"), dict) and 
+                            doc.get("metadata").get("type"))
+                    )
                     self.logger.info(
-                        f"✅ [INTEGRATED RERANK] 통합 reranking 완료: {len(weighted_docs)}개 문서"
+                        f"✅ [INTEGRATED RERANK] 통합 reranking 완료: {len(weighted_docs)}개 문서 "
+                        f"(메타데이터 복원 확인: {restored_metadata_count}/{len(weighted_docs)}개 문서에 타입 정보 있음)"
                     )
                     
                     # 통합 reranking 완료 후 weighted_docs 반환
@@ -6822,20 +7865,18 @@ class EnhancedLegalQuestionWorkflow(
                 
                 if "type" not in doc or not doc.get("type"):
                     metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                    if metadata.get("source_type"):
-                        doc["type"] = metadata.get("source_type")
-                        doc["source_type"] = metadata.get("source_type")
+                    if metadata.get("type"):
+                        doc["type"] = metadata.get("type")
                 
                 content = self._extract_doc_content(doc)
                 doc_type = self._extract_doc_type(doc)
                 if doc.get("type") != doc_type:
                     doc["type"] = doc_type
-                    doc["source_type"] = doc_type
                 
                 is_precedent_or_decision = any(keyword in doc_type for keyword in ["precedent", "case", "decision", "판례", "결정"])
                 is_statute = any(keyword in doc_type for keyword in ["statute", "article", "법령", "조문"]) or doc_type == "statute_article"
                 
-                min_content_length = 10
+                min_content_length = 200  # TASK 3: 최소 내용 길이 기준 상향 (10 → 200)
                 if not content or len(content.strip()) < min_content_length:
                     with skipped_content_lock:
                         skipped_content += 1
@@ -6882,13 +7923,21 @@ class EnhancedLegalQuestionWorkflow(
                     (doc.get("type") == "statute_article" and doc.get("statute_name") and doc.get("article_no"))
                 )
                 
-                # 점수 필터링 (벡터화된 계산 결과 활용)
-                min_score_threshold = 0.0 if is_text2sql else default_min_score_threshold
+                # TASK 6: 점수 필터링 (벡터화된 계산 결과 활용) + 법령 조문 예외 처리
+                if is_text2sql:
+                    min_score_threshold = 0.0
+                else:
+                    # TASK 6: 관련도 임계값 강화 (최소 0.4)
+                    min_score_threshold = max(0.4, default_min_score_threshold)
                 
                 if score < min_score_threshold:
-                    with skipped_score_lock:
-                        skipped_score += 1
-                    return None
+                    # TASK 6: 낮은 관련도지만 예외 조건 충족 시 포함
+                    if self._should_include_statute_despite_low_relevance(doc, query):
+                        self.logger.debug(f"✅ [TASK 6] 낮은 관련도지만 예외 조건 충족하여 포함: score={score:.3f}, article_no={doc.get('article_no')}")
+                    else:
+                        with skipped_score_lock:
+                            skipped_score += 1
+                        return None
                 
                 return doc
             
@@ -6906,20 +7955,18 @@ class EnhancedLegalQuestionWorkflow(
             for doc in weighted_docs:
                 if "type" not in doc or not doc.get("type"):
                     metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                    if metadata.get("source_type"):
-                        doc["type"] = metadata.get("source_type")
-                        doc["source_type"] = metadata.get("source_type")
+                    if metadata.get("type"):
+                        doc["type"] = metadata.get("type")
                 
                 content = self._extract_doc_content(doc)
                 doc_type = self._extract_doc_type(doc)
                 if doc.get("type") != doc_type:
                     doc["type"] = doc_type
-                    doc["source_type"] = doc_type
                 
                 is_precedent_or_decision = any(keyword in doc_type for keyword in ["precedent", "case", "decision", "판례", "결정"])
                 is_statute = any(keyword in doc_type for keyword in ["statute", "article", "법령", "조문"]) or doc_type == "statute_article"
                 
-                min_content_length = 10
+                min_content_length = 200  # TASK 3: 최소 내용 길이 기준 상향 (10 → 200)
                 if not content or len(content.strip()) < min_content_length:
                     skipped_content += 1
                     if skipped_content <= 3:
@@ -6968,11 +8015,18 @@ class EnhancedLegalQuestionWorkflow(
                 if is_text2sql:
                     min_score_threshold = 0.0
                 else:
-                    min_score_threshold = default_min_score_threshold
+                    # TASK 2: 관련도 임계값 강화 (최소 0.4)
+                    min_score_threshold = max(0.4, default_min_score_threshold)
                 
                 if score < min_score_threshold:
                     skipped_score += 1
                     self.logger.debug(f"🔍 [SCORE FILTER] 점수 부족으로 제외: score={score:.3f} < {min_score_threshold}, source={doc.get('source', 'Unknown')[:50]}")
+                    continue
+                
+                # TASK 2: 의미적 관련성 검증 추가
+                if not self._check_semantic_relevance(doc, query, extracted_keywords):
+                    skipped_relevance += 1
+                    self.logger.debug(f"🔍 [SEMANTIC FILTER] 의미적 관련성 부족으로 제외: {doc.get('id', 'unknown')[:50]}")
                     continue
                 
                 filtered_docs.append(doc)
@@ -6984,12 +8038,96 @@ class EnhancedLegalQuestionWorkflow(
         
         return filtered_docs
     
+    def _check_semantic_relevance(
+        self, 
+        doc: Dict[str, Any], 
+        query: str, 
+        keywords: List[str]
+    ) -> bool:
+        """문서와 질문 간 의미적 관련성 검증 (TASK 2)"""
+        content = doc.get("content", "") or doc.get("text", "")
+        if not content:
+            return False
+        
+        # 키워드 매칭 검증
+        if keywords:
+            keyword_matches = sum(1 for kw in keywords if kw in content)
+            if keyword_matches < len(keywords) * 0.3:  # 최소 30% 키워드 매칭
+                return False
+        
+        # 법령 조문 번호 매칭 검증 (강화)
+        if "제" in query and "조" in query:
+            import re
+            article_match = re.search(r'제\s*(\d+)\s*조', query)
+            if article_match:
+                question_article = article_match.group(1).lstrip('0')
+                if not question_article:
+                    question_article = "0"
+                
+                doc_article = str(doc.get("article_no", "")).strip()
+                # 조문 번호가 일치하지 않으면 관련성 낮음
+                if doc_article:
+                    # 선행 0 제거하여 비교
+                    doc_article_normalized = doc_article.lstrip('0')
+                    if not doc_article_normalized:
+                        doc_article_normalized = "0"
+                    
+                    # 정확한 매칭 확인 (10배 차이 체크)
+                    try:
+                        question_num = int(question_article)
+                        doc_num = int(doc_article_normalized)
+                        
+                        # 정확히 일치하거나, 직접 검색된 조문인 경우만 통과
+                        if question_num == doc_num:
+                            return True
+                        elif doc.get("direct_match", False):
+                            # 직접 검색된 조문이지만 번호가 다르면 추가 검증
+                            # 10배 차이면 완전히 다른 조문으로 간주
+                            if doc_num > 0 and (question_num * 10 == doc_num or doc_num * 10 == question_num):
+                                return False
+                            # 작은 차이면 통과 (예: 750 vs 7500)
+                            return True
+                        else:
+                            # 직접 검색되지 않았고 번호가 다르면 제외
+                            return False
+                    except (ValueError, TypeError):
+                        # 숫자 변환 실패 시 문자열 비교
+                        if question_article != doc_article_normalized:
+                            if not doc.get("direct_match", False):
+                                return False
+        
+        return True
+    
+    def _should_include_statute_despite_low_relevance(
+        self, 
+        doc: Dict[str, Any], 
+        query: str
+    ) -> bool:
+        """낮은 관련도에도 법령 조문을 포함할지 결정 (TASK 6)"""
+        # 직접 검색된 조문만 예외 적용
+        if not doc.get("direct_match", False):
+            return False
+        
+        # 질문에서 조문 번호 추출
+        import re
+        article_match = re.search(r'제\s*(\d+)\s*조', query)
+        if article_match:
+            question_article = article_match.group(1)
+            doc_article = str(doc.get("article_no", "")).strip()
+            # 조문 번호가 일치하는 경우만 예외
+            if doc_article:
+                doc_article_normalized = doc_article.lstrip('0')
+                if question_article == doc_article_normalized:
+                    return True
+        
+        return False
+    
     def _validate_document_metadata(self, doc: Dict[str, Any]) -> bool:
         """우선순위 2: 메타데이터 검증 강화"""
         # 필수 필드 검증
         has_content = bool(doc.get("content") or doc.get("text"))
         has_source = bool(doc.get("source"))
-        has_type = bool(doc.get("type") or doc.get("source_type"))
+        has_type = bool(doc.get("type"))
         
         if not has_content:
             return False
@@ -7137,7 +8275,9 @@ class EnhancedLegalQuestionWorkflow(
             similarity = doc.get("similarity", 0.0)
             keyword_score = doc.get("keyword_match_score", 0.0)
             doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or "unknown"
-            doc_type = doc.get("type") or doc.get("source_type", "unknown")
+            # 🔥 개선: doc_id가 int일 수 있으므로 문자열로 변환
+            doc_id = str(doc_id) if doc_id != "unknown" else "unknown"
+            doc_type = doc.get("type", "unknown")
             source = doc.get("source", "")[:100] or "unknown"
             content_preview = (doc.get("content", "")[:100] or "").replace("\n", " ")
             doc_scores.append((score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc))
@@ -7376,7 +8516,7 @@ class EnhancedLegalQuestionWorkflow(
             for i, doc in enumerate(final_docs, 1):
                 score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
                 doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or "unknown"
-                doc_type = doc.get("type") or doc.get("source_type", "unknown")
+                doc_type = doc.get("type", "unknown")
                 source = doc.get("source", "")[:50] or "unknown"
                 search_type = doc.get("search_type", "unknown")
                 self.logger.debug(
@@ -7411,7 +8551,7 @@ class EnhancedLegalQuestionWorkflow(
             if weighted_docs:
                 sample_doc = weighted_docs[0] if isinstance(weighted_docs[0], dict) else {}
                 self.logger.debug(f"🔀 [DIVERSITY] weighted_docs sample keys: {list(sample_doc.keys())[:10]}")
-                self.logger.debug(f"🔀 [DIVERSITY] weighted_docs sample type: {sample_doc.get('type')}, source_type: {sample_doc.get('source_type')}, metadata: {type(sample_doc.get('metadata'))}")
+                self.logger.debug(f"🔀 [DIVERSITY] weighted_docs sample type: {sample_doc.get('type')}, metadata: {type(sample_doc.get('metadata'))}")
             
             restored_count = 0
             precedent_candidates = []
@@ -7637,7 +8777,7 @@ class EnhancedLegalQuestionWorkflow(
                 converted_docs = []
                 for doc in semantic_results[:10]:
                     if isinstance(doc, dict):
-                        doc_type = doc.get("type") or doc.get("source_type") or (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None)
+                        doc_type = doc.get("type") or (doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None)
                         text_content = doc.get("text", "") or doc.get("content", "") or str(doc.get("metadata", {}).get("text", "")) or str(doc.get("metadata", {}).get("content", ""))
                         converted_doc = {
                             "content": text_content,
@@ -7646,7 +8786,6 @@ class EnhancedLegalQuestionWorkflow(
                             "relevance_score": doc.get("relevance_score", 0.5),
                             "search_type": "semantic",
                             "type": doc_type,
-                            "source_type": doc_type,
                             "metadata": doc.get("metadata", {})
                         }
                         if doc_type == "statute_article":
@@ -8063,6 +9202,41 @@ class EnhancedLegalQuestionWorkflow(
             query_type_str = search_inputs["query_type_str"]
             search_params = search_inputs["search_params"]
             extracted_keywords = search_inputs["extracted_keywords"]
+            
+            # TASK 5: Fallback 키워드 추출 (extracted_keywords가 비어있을 경우)
+            if not extracted_keywords:
+                self.logger.warning(f"⚠️ [KEYWORD FALLBACK] extracted_keywords가 비어있음. 쿼리에서 직접 추출: {query}")
+                legal_field = self._get_state_value(state, "legal_field", "")
+                extracted_keywords = self._extract_keywords_fallback(query, query_type_str, legal_field)
+                # Fallback으로 추출한 키워드도 state에 저장
+                if extracted_keywords:
+                    self._save_keywords_to_state(state, extracted_keywords)
+                    self.logger.info(f"✅ [KEYWORD FALLBACK] {len(extracted_keywords)}개 키워드 추출 및 저장 완료")
+            
+            # 🔥 개선: 입력 검색 결과의 metadata에서 최상위 필드로 메타데이터 복사 및 type 정규화
+            semantic_results = self._normalize_documents(semantic_results)
+            keyword_results = self._normalize_documents(keyword_results)
+            
+            # 🔍 로깅: 입력 검색 결과의 메타데이터 확인
+            self.logger.info(f"🔍 [METADATA TRACE] process_search_results_combined 시작 - semantic={len(semantic_results)}, keyword={len(keyword_results)}")
+            if semantic_results:
+                sample_semantic = semantic_results[0] if semantic_results else {}
+                self.logger.info(
+                    f"🔍 [METADATA TRACE] Semantic result sample (after metadata copy): "
+                    f"type={sample_semantic.get('type')}, "
+                    f"has_statute_fields={bool(sample_semantic.get('statute_name') or sample_semantic.get('law_name') or sample_semantic.get('article_no'))}, "
+                    f"has_case_fields={bool(sample_semantic.get('case_id') or sample_semantic.get('court') or sample_semantic.get('doc_id'))}, "
+                    f"metadata_keys={list(sample_semantic.get('metadata', {}).keys())[:10] if isinstance(sample_semantic.get('metadata'), dict) else 'N/A'}"
+                )
+            if keyword_results:
+                sample_keyword = keyword_results[0] if keyword_results else {}
+                self.logger.info(
+                    f"🔍 [METADATA TRACE] Keyword result sample (after metadata copy): "
+                    f"type={sample_keyword.get('type')}, "
+                    f"has_statute_fields={bool(sample_keyword.get('statute_name') or sample_keyword.get('law_name') or sample_keyword.get('article_no'))}, "
+                    f"has_case_fields={bool(sample_keyword.get('case_id') or sample_keyword.get('court') or sample_keyword.get('doc_id'))}, "
+                    f"metadata_keys={list(sample_keyword.get('metadata', {}).keys())[:10] if isinstance(sample_keyword.get('metadata'), dict) else 'N/A'}"
+                )
 
             # 🔥 개선 1: 검색 결과가 0개일 때 즉시 Early Exit (timeout 방지)
             # semantic_count/keyword_count와 실제 리스트 길이 모두 확인
@@ -8110,7 +9284,7 @@ class EnhancedLegalQuestionWorkflow(
             has_statute_article = False
             all_results = semantic_results + keyword_results
             for doc in all_results:
-                doc_type = doc.get("type", "") or doc.get("source_type", "") or ""
+                doc_type = doc.get("type", "") or ""
                 if "statute" in doc_type.lower() or (doc.get("law_name") and doc.get("article_no")):
                     has_statute_article = True
                     break
@@ -8161,64 +9335,139 @@ class EnhancedLegalQuestionWorkflow(
                     if has_sub_query:
                         self.logger.debug(f"🔄 [MERGE EXPANDED] Found expanded query results: {len(semantic_results)} docs with sub_query fields")
                     semantic_results = self._consolidate_expanded_query_results(semantic_results, query)
+                
+                # 🔥 개선: _merge_and_rerank_results 호출 전에 메타데이터 보존
+                # semantic_results와 keyword_results의 메타데이터를 최상위 필드로 복사
+                for doc in semantic_results + keyword_results:
+                    if "metadata" not in doc:
+                        doc["metadata"] = {}
+                    if not isinstance(doc["metadata"], dict):
+                        doc["metadata"] = {}
+                    
+                    metadata = doc["metadata"]
+                    # metadata에서 최상위 필드로 복사 (우선순위: metadata > 최상위 필드)
+                    if metadata.get("type") and not doc.get("type"):
+                        doc["type"] = metadata.get("type")
+                    if metadata.get("statute_name") and not doc.get("statute_name"):
+                        doc["statute_name"] = metadata.get("statute_name")
+                    if metadata.get("law_name") and not doc.get("law_name"):
+                        doc["law_name"] = metadata.get("law_name")
+                    if metadata.get("article_no") and not doc.get("article_no"):
+                        doc["article_no"] = metadata.get("article_no")
+                    if metadata.get("case_id") and not doc.get("case_id"):
+                        doc["case_id"] = metadata.get("case_id")
+                    if metadata.get("court") and not doc.get("court"):
+                        doc["court"] = metadata.get("court")
+                    if metadata.get("doc_id") and not doc.get("doc_id"):
+                        doc["doc_id"] = metadata.get("doc_id")
+                    if metadata.get("casenames") and not doc.get("casenames"):
+                        doc["casenames"] = metadata.get("casenames")
+                    if metadata.get("precedent_id") and not doc.get("precedent_id"):
+                        doc["precedent_id"] = metadata.get("precedent_id")
+                
                 # 재검색 생략하고 바로 병합 진행
+                # 🔥 성능 최적화: 확장된 쿼리 결과 병합을 먼저 수행
+                if semantic_results:
+                    semantic_results = self._consolidate_expanded_query_results(semantic_results, query)
+                
                 merged_docs = self._merge_and_rerank_results(
                     state, semantic_results, keyword_results, query
                 )
+                # 🔥 성능 최적화: 이미 병합 완료했으므로 중복 호출 방지 플래그 설정
+                already_merged = True
             else:
                 semantic_results, keyword_results, semantic_count, keyword_count = self._perform_conditional_retry_search(
                     state, semantic_results, keyword_results, semantic_count, keyword_count,
                     quality_evaluation, query, query_type_str, search_params, extracted_keywords
                 )
+                already_merged = False
 
-            # 🔥 확장된 쿼리 결과 병합 및 중복 제거 (최소 변경)
-            if semantic_results:
-                # 디버그: sub_query 필드 확인
-                has_sub_query = any(
-                    doc.get("sub_query") or doc.get("multi_query_source") or doc.get("expanded_query_id")
-                    for doc in semantic_results if isinstance(doc, dict)
+            # 🔥 확장된 쿼리 결과 병합 및 중복 제거 (이미 병합되지 않은 경우만)
+            if not already_merged:
+                if semantic_results:
+                    # 디버그: sub_query 필드 확인
+                    has_sub_query = any(
+                        doc.get("sub_query") or doc.get("multi_query_source") or doc.get("expanded_query_id")
+                        for doc in semantic_results if isinstance(doc, dict)
+                    )
+                    if has_sub_query:
+                        self.logger.debug(f"🔄 [MERGE EXPANDED] Found expanded query results: {len(semantic_results)} docs with sub_query fields")
+                    semantic_results = self._consolidate_expanded_query_results(semantic_results, query)
+
+                # 🔥 성능 최적화: 중복 호출 방지 - 이미 병합되지 않은 경우만 호출
+                merged_docs = self._merge_and_rerank_results(
+                    state, semantic_results, keyword_results, query
                 )
-                if has_sub_query:
-                    self.logger.debug(f"🔄 [MERGE EXPANDED] Found expanded query results: {len(semantic_results)} docs with sub_query fields")
-                semantic_results = self._consolidate_expanded_query_results(semantic_results, query)
 
-            merged_docs = self._merge_and_rerank_results(
-                state, semantic_results, keyword_results, query
-            )
-
-            # 개선 3.1: 모든 문서에 점수 보장 및 type 정보 보존
-            for doc in semantic_results + keyword_results:
+            # 개선 3.1: 모든 문서에 점수 보장 및 type 정보 보존 (DocumentType Enum 사용)
+            from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+            
+            # 🔥 개선: merged_docs에 직접 메타데이터 보존 로직 적용
+            # 먼저 모든 문서의 점수를 일괄 정규화
+            if merged_docs:
+                merged_docs = self._normalize_scores_batch(merged_docs)
+            
+            for doc in merged_docs:
+                # 점수 보장 (정규화된 점수 사용)
                 doc = self._ensure_scores(doc)
-                # type 정보 보존 (검색 결과에서 가져온 type 정보 유지)
-                # 1. 이미 type이 있으면 유지
-                if "type" in doc and doc.get("type") and doc.get("type") != "unknown":
-                    if "source_type" not in doc:
-                        doc["source_type"] = doc["type"]
-                    continue
                 
-                # 2. source_type이 있으면 type으로 복사
-                if "source_type" in doc and doc.get("source_type") and doc.get("source_type") != "unknown":
-                    doc["type"] = doc["source_type"]
-                    continue
+                # metadata 필드 보존 및 보강
+                if "metadata" not in doc:
+                    doc["metadata"] = {}
+                if not isinstance(doc["metadata"], dict):
+                    doc["metadata"] = {}
                 
-                # 3. metadata에서 복구 시도
-                metadata = doc.get("metadata", {})
+                # 🔥 개선: 기존 metadata의 정보를 먼저 최상위 필드로 복사 (일관성 유지)
+                metadata = doc["metadata"]
                 if isinstance(metadata, dict):
-                    original_type = metadata.get("type") or metadata.get("source_type")
-                    if original_type and original_type != "unknown":
-                        doc["type"] = original_type
-                        doc["source_type"] = original_type
-                        continue
+                    # metadata에서 최상위 필드로 복사 (우선순위: metadata > 최상위 필드)
+                    if metadata.get("statute_name") and not doc.get("statute_name"):
+                        doc["statute_name"] = metadata.get("statute_name")
+                    if metadata.get("law_name") and not doc.get("law_name"):
+                        doc["law_name"] = metadata.get("law_name")
+                    if metadata.get("article_no") and not doc.get("article_no"):
+                        doc["article_no"] = metadata.get("article_no")
+                    if metadata.get("article_number") and not doc.get("article_no"):
+                        doc["article_no"] = metadata.get("article_number")
+                    if metadata.get("case_id") and not doc.get("case_id"):
+                        doc["case_id"] = metadata.get("case_id")
+                    if metadata.get("court") and not doc.get("court"):
+                        doc["court"] = metadata.get("court")
+                    if metadata.get("ccourt") and not doc.get("court"):
+                        doc["court"] = metadata.get("ccourt")
+                    if metadata.get("doc_id") and not doc.get("doc_id"):
+                        doc["doc_id"] = metadata.get("doc_id")
+                    if metadata.get("casenames") and not doc.get("casenames"):
+                        doc["casenames"] = metadata.get("casenames")
+                    if metadata.get("precedent_id") and not doc.get("precedent_id"):
+                        doc["precedent_id"] = metadata.get("precedent_id")
+                    # type도 복사
+                    if metadata.get("type") and not doc.get("type"):
+                        doc["type"] = metadata.get("type")
                 
-                # 4. source에서 추론 시도
-                source = doc.get("source", "")
-                if source:
-                    if "민법" in source or "법" in source or "규칙" in source:
-                        doc["type"] = "statute_article"
-                        doc["source_type"] = "statute_article"
-                    elif "대법원" in source or "법원" in source or "판결" in source or "사건" in source:
-                        doc["type"] = "case_paragraph"
-                        doc["source_type"] = "case_paragraph"
+                # 최상위 필드의 정보를 metadata에 복사 (DocumentType 추론을 위해)
+                # statute_article 관련 필드
+                if doc.get("statute_name") or doc.get("law_name") or doc.get("article_no"):
+                    doc["metadata"]["statute_name"] = doc.get("statute_name") or doc.get("law_name")
+                    doc["metadata"]["law_name"] = doc.get("law_name") or doc.get("statute_name")
+                    doc["metadata"]["article_no"] = doc.get("article_no") or doc.get("article_number")
+                
+                # precedent_content 관련 필드
+                if doc.get("case_id") or doc.get("court") or doc.get("doc_id") or doc.get("casenames"):
+                    doc["metadata"]["case_id"] = doc.get("case_id")
+                    doc["metadata"]["court"] = doc.get("court") or doc.get("ccourt")
+                    doc["metadata"]["doc_id"] = doc.get("doc_id")
+                    doc["metadata"]["casenames"] = doc.get("casenames")
+                    doc["metadata"]["precedent_id"] = doc.get("precedent_id")
+                
+                # DocumentType Enum을 사용하여 타입 추출
+                doc_type = DocumentType.from_metadata(doc)
+                doc_type_str = doc_type.value
+                
+                # 타입 정보 설정
+                doc["type"] = doc_type_str
+                # metadata에도 타입 정보 저장 (일관성 유지)
+                doc["metadata"]["type"] = doc_type_str
 
             # 로깅 최적화: DEBUG 레벨로 변경 (성능 향상)
             if self.logger.isEnabledFor(logging.DEBUG):
@@ -8231,6 +9480,17 @@ class EnhancedLegalQuestionWorkflow(
                 state, merged_docs, query, query_type_str, extracted_keywords,
                 search_params, overall_quality
             )
+            
+            # 🔍 로깅: 재랭킹 후 메타데이터 확인
+            if weighted_docs:
+                sample_weighted = weighted_docs[0] if weighted_docs else {}
+                self.logger.info(
+                    f"🔍 [METADATA TRACE] After rerank sample: "
+                    f"type={sample_weighted.get('type')}, "
+                    f"has_statute_fields={bool(sample_weighted.get('statute_name') or sample_weighted.get('law_name') or sample_weighted.get('article_no'))}, "
+                    f"has_case_fields={bool(sample_weighted.get('case_id') or sample_weighted.get('court') or sample_weighted.get('doc_id'))}, "
+                    f"metadata_keys={list(sample_weighted.get('metadata', {}).keys())[:10] if isinstance(sample_weighted.get('metadata'), dict) else 'N/A'}"
+                )
             
             # 로깅 최적화: DEBUG 레벨로 변경 (성능 향상)
             if self.logger.isEnabledFor(logging.DEBUG):
@@ -8361,76 +9621,93 @@ class EnhancedLegalQuestionWorkflow(
                         "검색이 완전히 실패했을 수 있습니다."
                     )
             
-            # 개선: final_docs의 모든 문서에 type 정보 보장 (성능 최적화: O(n²) → O(n))
-            # 사전에 ID -> 타입 매핑 생성 (O(n) 한 번만 실행) + hashset으로 중복 처리 방지
-            type_mapping = {}
-            processed_ids = set()  # hashset으로 이미 처리된 ID 추적 (중복 처리 방지)
-            all_source_docs = semantic_results + keyword_results + merged_docs
-            for source_doc in all_source_docs:
-                if not isinstance(source_doc, dict):
-                    continue
-                doc_id = source_doc.get("id") or source_doc.get("doc_id") or source_doc.get("chunk_id")
-                # hashset으로 빠른 중복 체크 (O(1))
-                if doc_id and doc_id not in processed_ids:
-                    doc_type = source_doc.get("type") or source_doc.get("source_type")
-                    if doc_type and doc_type != "unknown":
-                        type_mapping[doc_id] = doc_type
-                        processed_ids.add(doc_id)  # hashset에 추가하여 중복 처리 방지
+            # 개선: final_docs의 모든 문서에 type 정보 보장 (DocumentType Enum 사용)
+            from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
             
-            # final_docs의 각 문서에 타입 정보 보장 (O(n) 딕셔너리 조회 + hashset으로 빠른 스킵)
-            docs_with_type = set()  # 이미 타입이 있는 문서 ID 추적 (빠른 스킵)
+            # 🔍 로깅: final_docs 처리 전 메타데이터 확인
+            if final_docs:
+                sample_final_before = final_docs[0] if final_docs else {}
+                self.logger.info(
+                    f"🔍 [METADATA TRACE] Final docs before type setting (sample): "
+                    f"type={sample_final_before.get('type')}, "
+                    f"has_statute_fields={bool(sample_final_before.get('statute_name') or sample_final_before.get('law_name') or sample_final_before.get('article_no'))}, "
+                    f"has_case_fields={bool(sample_final_before.get('case_id') or sample_final_before.get('court') or sample_final_before.get('doc_id'))}"
+                )
+            
+            # final_docs의 각 문서에 타입 정보 보장
             for doc in final_docs:
                 if not isinstance(doc, dict):
                     continue
                 
-                doc_id = doc.get("id") or doc.get("doc_id") or doc.get("chunk_id")
+                # metadata 필드 보존 및 보강
+                if "metadata" not in doc:
+                    doc["metadata"] = {}
+                if not isinstance(doc["metadata"], dict):
+                    doc["metadata"] = {}
                 
-                # 1. 이미 type이 있으면 hashset에 추가하고 유지
-                if "type" in doc and doc.get("type") and doc.get("type") != "unknown":
-                    if "source_type" not in doc:
-                        doc["source_type"] = doc["type"]
-                    if doc_id:
-                        docs_with_type.add(doc_id)  # hashset에 추가
-                    continue
+                # 최상위 필드의 정보를 metadata에 복사 (DocumentType 추론을 위해)
+                # statute_article 관련 필드
+                if doc.get("statute_name") or doc.get("law_name") or doc.get("article_no"):
+                    doc["metadata"]["statute_name"] = doc.get("statute_name") or doc.get("law_name")
+                    doc["metadata"]["law_name"] = doc.get("law_name") or doc.get("statute_name")
+                    doc["metadata"]["article_no"] = doc.get("article_no") or doc.get("article_number")
                 
-                # 2. source_type이 있으면 type으로 복사
-                if "source_type" in doc and doc.get("source_type") and doc.get("source_type") != "unknown":
-                    doc["type"] = doc["source_type"]
-                    if doc_id:
-                        docs_with_type.add(doc_id)  # hashset에 추가
-                    continue
+                # precedent_content 관련 필드
+                if doc.get("case_id") or doc.get("court") or doc.get("doc_id") or doc.get("casenames"):
+                    doc["metadata"]["case_id"] = doc.get("case_id")
+                    doc["metadata"]["court"] = doc.get("court") or doc.get("ccourt")
+                    doc["metadata"]["doc_id"] = doc.get("doc_id")
+                    doc["metadata"]["casenames"] = doc.get("casenames")
+                    doc["metadata"]["precedent_id"] = doc.get("precedent_id")
                 
-                # 3. 타입 매핑에서 조회 (O(1) 딕셔너리 조회, 이미 처리된 문서는 스킵)
-                if doc_id and doc_id not in docs_with_type and doc_id in type_mapping:
-                    doc["type"] = type_mapping[doc_id]
-                    doc["source_type"] = type_mapping[doc_id]
-                    docs_with_type.add(doc_id)  # hashset에 추가
-                    continue
+                # 기존 metadata의 정보도 최상위 필드로 복사 (일관성 유지)
+                metadata = doc["metadata"]
+                if metadata.get("statute_name") and not doc.get("statute_name"):
+                    doc["statute_name"] = metadata.get("statute_name")
+                if metadata.get("law_name") and not doc.get("law_name"):
+                    doc["law_name"] = metadata.get("law_name")
+                if metadata.get("article_no") and not doc.get("article_no"):
+                    doc["article_no"] = metadata.get("article_no")
+                if metadata.get("case_id") and not doc.get("case_id"):
+                    doc["case_id"] = metadata.get("case_id")
+                if metadata.get("court") and not doc.get("court"):
+                    doc["court"] = metadata.get("court")
+                if metadata.get("doc_id") and not doc.get("doc_id"):
+                    doc["doc_id"] = metadata.get("doc_id")
+                if metadata.get("casenames") and not doc.get("casenames"):
+                    doc["casenames"] = metadata.get("casenames")
                 
-                # 4. metadata에서 복구 시도
-                metadata = doc.get("metadata", {})
-                if isinstance(metadata, dict):
-                    original_type = metadata.get("type") or metadata.get("source_type")
-                    if original_type and original_type != "unknown":
-                        doc["type"] = original_type
-                        doc["source_type"] = original_type
-                        continue
+                # DocumentType Enum을 사용하여 타입 추출
+                doc_type = DocumentType.from_metadata(doc)
+                doc_type_str = doc_type.value
                 
-                # 5. source에서 추론 시도 (최후의 수단)
-                source = doc.get("source", "")
-                if source:
-                    if "민법" in source or "법" in source or "규칙" in source:
-                        doc["type"] = "statute_article"
-                        doc["source_type"] = "statute_article"
-                    elif "대법원" in source or "법원" in source or "판결" in source or "사건" in source:
-                        doc["type"] = "case_paragraph"
-                        doc["source_type"] = "case_paragraph"
+                # 🔍 로깅: final_docs 타입 추론 과정 추적 (처음 3개만)
+                if final_docs.index(doc) < 3:
+                    self.logger.info(
+                        f"🔍 [METADATA TRACE] Final doc {final_docs.index(doc)} type inference: "
+                        f"inferred_type={doc_type_str}, "
+                        f"has_statute_fields={bool(doc.get('statute_name') or doc.get('law_name') or doc.get('article_no') or doc.get('metadata', {}).get('statute_name') or doc.get('metadata', {}).get('law_name') or doc.get('metadata', {}).get('article_no'))}, "
+                        f"has_case_fields={bool(doc.get('case_id') or doc.get('court') or doc.get('doc_id') or doc.get('metadata', {}).get('case_id') or doc.get('metadata', {}).get('court') or doc.get('metadata', {}).get('doc_id'))}, "
+                        f"top_level_keys={[k for k in doc.keys() if k in ['statute_name', 'law_name', 'article_no', 'case_id', 'court', 'doc_id', 'casenames', 'precedent_id']][:5]}, "
+                        f"metadata_keys={[k for k in doc.get('metadata', {}).keys() if k in ['statute_name', 'law_name', 'article_no', 'case_id', 'court', 'doc_id', 'casenames', 'precedent_id']][:5]}"
+                    )
                 
-                # type과 source_type 모두 설정 (일관성 보장)
-                if "type" in doc and "source_type" not in doc:
-                    doc["source_type"] = doc["type"]
-                elif "source_type" in doc and "type" not in doc:
-                    doc["type"] = doc["source_type"]
+                # 타입 정보 설정
+                doc["type"] = doc_type_str
+                # metadata에도 타입 정보 저장 (일관성 유지)
+                doc["metadata"]["type"] = doc_type_str
+                
+                # 점수도 보장 (정규화)
+                doc = self._ensure_scores(doc)
+            
+            # 🔍 로깅: final_docs 처리 후 메타데이터 확인
+            if final_docs:
+                sample_final_after = final_docs[0] if final_docs else {}
+                self.logger.info(
+                    f"🔍 [METADATA TRACE] Final docs after type setting (sample): "
+                    f"type={sample_final_after.get('type')}, "
+                    f"metadata_type={sample_final_after.get('metadata', {}).get('type') if isinstance(sample_final_after.get('metadata'), dict) else 'N/A'}"
+                )
 
             # 개선 1.1: 최소 문서 수 보장
             MIN_DOCUMENTS_FOR_ANSWER = 5
@@ -8462,7 +9739,7 @@ class EnhancedLegalQuestionWorkflow(
             if len(final_docs) < MIN_DOCS_FOR_DIVERSITY:
                 type_distribution = {}
                 for doc in final_docs:
-                    doc_type = doc.get("type") or doc.get("source_type", "unknown")
+                    doc_type = doc.get("type", "unknown")
                     type_distribution[doc_type] = type_distribution.get(doc_type, 0) + 1
                 
                 required_types = ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]
@@ -8473,7 +9750,7 @@ class EnhancedLegalQuestionWorkflow(
                         additional = [
                             doc for doc in merged_docs
                             if doc not in final_docs
-                            and (doc.get("type") or doc.get("source_type")) == doc_type
+                            and doc.get("type") == doc_type
                         ]
                         if additional:
                             additional.sort(
@@ -8500,6 +9777,14 @@ class EnhancedLegalQuestionWorkflow(
             
             # top-level에 명시적으로 저장 (가장 안전한 위치)
             if final_docs:
+                # 🔍 로깅: 최종 저장 전 메타데이터 확인
+                sample_save = final_docs[0] if final_docs else {}
+                self.logger.info(
+                    f"🔍 [METADATA TRACE] 최종 저장 전 (sample): "
+                    f"type={sample_save.get('type')}, "
+                    f"metadata_type={sample_save.get('metadata', {}).get('type') if isinstance(sample_save.get('metadata'), dict) else 'N/A'}"
+                )
+                
                 state["retrieved_docs"] = final_docs.copy()
                 state["structured_documents"] = final_docs.copy()
 
@@ -9178,7 +10463,7 @@ class EnhancedLegalQuestionWorkflow(
             query_article_no = match.group(2)
             
             for doc in documents:
-                if doc.get("type") == "statute_article" or doc.get("source_type") == "statute_article":
+                if doc.get("type") == "statute_article":
                     # 법령 조문 타입: 기본 부스팅
                     score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
                     doc["final_weighted_score"] = min(1.0, score * 1.3)  # 30% 부스팅
@@ -10244,7 +11529,7 @@ class EnhancedLegalQuestionWorkflow(
                         context_dict["structured_documents"] = structured_docs
                         context_dict["document_count"] = len(normalized_documents)
                         context_dict["docs_included"] = len(normalized_documents)
-                    self.logger.debug(
+                    self.logger.info(
                         f"✅ [SEARCH RESULTS INJECTION] Added {len(normalized_documents)} documents "
                         f"from retrieved_docs to context_dict.structured_documents"
                     )
@@ -10255,6 +11540,14 @@ class EnhancedLegalQuestionWorkflow(
                     )
             else:
                 doc_count = len(documents_in_structured)
+                # 🔥 개선: has_valid_documents가 True여도 retrieved_docs를 context_dict에 명시적으로 포함
+                if isinstance(context_dict, dict) and retrieved_docs:
+                    context_dict["retrieved_docs"] = retrieved_docs
+                    context_dict["retrieved_docs_count"] = len(retrieved_docs)
+                    self.logger.debug(
+                        f"✅ [SEARCH RESULTS INJECTION] retrieved_docs already in structured_documents, "
+                        f"also added to context_dict.retrieved_docs ({len(retrieved_docs)} docs)"
+                    )
                 # 🔥 개선: 기존 structured_docs도 context_dict에 명시적으로 할당 (이중 보장)
                 if isinstance(context_dict, dict) and structured_docs:
                     context_dict["structured_documents"] = structured_docs
@@ -10339,6 +11632,55 @@ class EnhancedLegalQuestionWorkflow(
                 if doc.get("original_query"):
                     doc_metadata["original_query"] = doc.get("original_query")
                 
+                # 문서 타입 정보 보존 (DocumentType 추론을 위해)
+                from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                
+                # 최상위 필드의 정보를 metadata에 복사
+                if doc.get("statute_name") or doc.get("law_name") or doc.get("article_no"):
+                    doc_metadata["statute_name"] = doc.get("statute_name") or doc.get("law_name")
+                    doc_metadata["law_name"] = doc.get("law_name") or doc.get("statute_name")
+                    doc_metadata["article_no"] = doc.get("article_no") or doc.get("article_number")
+                
+                if doc.get("case_id") or doc.get("court") or doc.get("doc_id") or doc.get("casenames"):
+                    doc_metadata["case_id"] = doc.get("case_id")
+                    doc_metadata["court"] = doc.get("court") or doc.get("ccourt")
+                    doc_metadata["doc_id"] = doc.get("doc_id")
+                    doc_metadata["casenames"] = doc.get("casenames")
+                    doc_metadata["precedent_id"] = doc.get("precedent_id")
+                
+                # 기존 metadata의 정보도 최상위 필드로 복사
+                if doc_metadata.get("statute_name") and not doc.get("statute_name"):
+                    doc["statute_name"] = doc_metadata.get("statute_name")
+                if doc_metadata.get("law_name") and not doc.get("law_name"):
+                    doc["law_name"] = doc_metadata.get("law_name")
+                if doc_metadata.get("article_no") and not doc.get("article_no"):
+                    doc["article_no"] = doc_metadata.get("article_no")
+                if doc_metadata.get("case_id") and not doc.get("case_id"):
+                    doc["case_id"] = doc_metadata.get("case_id")
+                if doc_metadata.get("court") and not doc.get("court"):
+                    doc["court"] = doc_metadata.get("court")
+                if doc_metadata.get("doc_id") and not doc.get("doc_id"):
+                    doc["doc_id"] = doc_metadata.get("doc_id")
+                if doc_metadata.get("casenames") and not doc.get("casenames"):
+                    doc["casenames"] = doc_metadata.get("casenames")
+                
+                # DocumentType Enum을 사용하여 타입 추출
+                doc_type = DocumentType.from_metadata(doc)
+                doc_type_str = doc_type.value
+                
+                # 🔍 로깅: 정규화 중 타입 추론 과정 추적 (처음 3개만)
+                if idx < 3:
+                    self.logger.info(
+                        f"🔍 [METADATA TRACE] Normalize doc {idx} type inference: "
+                        f"inferred_type={doc_type_str}, "
+                        f"has_statute_fields={bool(doc.get('statute_name') or doc.get('law_name') or doc.get('article_no') or doc_metadata.get('statute_name') or doc_metadata.get('law_name') or doc_metadata.get('article_no'))}, "
+                        f"has_case_fields={bool(doc.get('case_id') or doc.get('court') or doc.get('doc_id') or doc_metadata.get('case_id') or doc_metadata.get('court') or doc_metadata.get('doc_id'))}"
+                    )
+                
+                # 타입 정보를 metadata와 최상위 필드에 저장 (명시적으로 설정)
+                doc["type"] = doc_type_str
+                doc_metadata["type"] = doc_type_str
+                
                 # content가 너무 짧으면 source로 보완
                 if len(content.strip()) < 10 and has_multi_query:
                     content = f"{source}: {content}".strip() if source else content
@@ -10348,11 +11690,25 @@ class EnhancedLegalQuestionWorkflow(
                     "source": source,
                     "content": content[:2000],
                     "relevance_score": float(relevance_score),
+                    "type": doc_type_str,  # type 정보 추가
+                    "law_name": doc.get("law_name") or doc_metadata.get("law_name"),  # 법령명 추가
+                    "article_no": doc.get("article_no") or doc_metadata.get("article_no"),  # 조문번호 추가
+                    "court": doc.get("court") or doc_metadata.get("court"),  # 법원명 추가
+                    "doc_id": doc.get("doc_id") or doc_metadata.get("doc_id"),  # 판례 ID 추가
                     "metadata": doc_metadata
                 })
             else:
                 self.logger.debug(f"⚠️ [NORMALIZE] Doc {idx} skipped: content length={len(content) if content else 0}, "
                                 f"min_length={min_content_length}, has_multi_query={has_multi_query}")
+        
+        # 🔍 로깅: 정규화 후 출력 문서 메타데이터 확인
+        if normalized_documents:
+            sample_output = normalized_documents[0] if normalized_documents else {}
+            self.logger.info(
+                f"🔍 [METADATA TRACE] _normalize_retrieved_docs_to_structured 출력 (sample): "
+                f"type={sample_output.get('type')}, "
+                f"metadata_type={sample_output.get('metadata', {}).get('type') if isinstance(sample_output.get('metadata'), dict) else 'N/A'}"
+            )
         
         return normalized_documents
     
@@ -10434,7 +11790,15 @@ class EnhancedLegalQuestionWorkflow(
             if isinstance(context_dict, dict) else 0
         )
 
-        has_documents_section = isinstance(optimized_prompt, str) and ("검색된 법률 문서" in optimized_prompt or "## 🔍" in optimized_prompt)
+        # 🔥 개선: 문서 섹션 검증 로직 개선 (다양한 섹션 제목 지원)
+        has_documents_section = isinstance(optimized_prompt, str) and (
+            "검색된 법률 문서" in optimized_prompt or 
+            "검색된 참고 문서" in optimized_prompt or
+            "## 검색된" in optimized_prompt or
+            "## 🔍" in optimized_prompt or
+            "[문서 1]" in optimized_prompt or
+            "[문서 2]" in optimized_prompt
+        )
         documents_in_prompt = optimized_prompt.count("문서") if (isinstance(optimized_prompt, str) and has_documents_section) else 0
         structured_docs_count = 0
         structured_docs_in_context = context_dict.get("structured_documents", {}) if isinstance(context_dict, dict) else {}
@@ -10490,7 +11854,7 @@ class EnhancedLegalQuestionWorkflow(
 
             prompt_file = None
             try:
-                debug_dir = lawfirm_langgraph_path / "logs" / "test" / "prompts"
+                debug_dir = lawfirm_langgraph_path.parent.parent / "logs" / "test" / "prompts"
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 prompt_file = debug_dir / f"prompt_{int(time.time())}.txt"
                 with open(prompt_file, "w", encoding="utf-8") as f:
@@ -10500,7 +11864,15 @@ class EnhancedLegalQuestionWorkflow(
                 self.logger.debug(f"Could not save prompt to file: {e}")
         else:
             # 성능 최적화: 프로덕션 환경에서는 간소화된 검증만 수행
-            has_documents_section = isinstance(optimized_prompt, str) and ("검색된 법률 문서" in optimized_prompt or "## 🔍" in optimized_prompt)
+            # 🔥 개선: 문서 섹션 검증 로직 개선 (다양한 섹션 제목 지원)
+            has_documents_section = isinstance(optimized_prompt, str) and (
+                "검색된 법률 문서" in optimized_prompt or 
+                "검색된 참고 문서" in optimized_prompt or
+                "## 검색된" in optimized_prompt or
+                "## 🔍" in optimized_prompt or
+                "[문서 1]" in optimized_prompt or
+                "[문서 2]" in optimized_prompt
+            )
             prompt_validation_result = {
                 "has_documents_section": has_documents_section,
                 "prompt_length": prompt_length,
@@ -10521,7 +11893,15 @@ class EnhancedLegalQuestionWorkflow(
         structured_docs_count: int
     ) -> Dict[str, Any]:
         """프롬프트 내용 검증 (성능 최적화: 간소화된 검증)"""
-        has_documents_section = isinstance(optimized_prompt, str) and ("검색된 법률 문서" in optimized_prompt or "## 🔍" in optimized_prompt)
+        # 🔥 개선: 문서 섹션 검증 로직 개선 (다양한 섹션 제목 지원)
+        has_documents_section = isinstance(optimized_prompt, str) and (
+            "검색된 법률 문서" in optimized_prompt or 
+            "검색된 참고 문서" in optimized_prompt or
+            "## 검색된" in optimized_prompt or
+            "## 🔍" in optimized_prompt or
+            "[문서 1]" in optimized_prompt or
+            "[문서 2]" in optimized_prompt
+        )
         documents_in_prompt = optimized_prompt.count("문서") if (isinstance(optimized_prompt, str) and has_documents_section) else 0
         
         # 성능 최적화: 상세 검증은 최대 3개 문서만 확인

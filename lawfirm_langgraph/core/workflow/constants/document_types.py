@@ -16,7 +16,7 @@ class DocumentType(str, Enum):
     
     분류 기준: 메타데이터 필드 기준만 사용
     - 문서의 metadata 필드에 있는 키를 기반으로 타입을 결정
-    - type, source_type 필드가 있으면 우선 사용
+    - type 필드가 있으면 우선 사용
     - 없으면 metadata 필드의 키를 기반으로 추론
     """
     
@@ -62,12 +62,12 @@ class DocumentType(str, Enum):
         문서 딕셔너리로부터 DocumentType 추론 (메타데이터 필드 기준)
         
         우선순위:
-        1. doc.get("type") 또는 doc.get("source_type")
-        2. doc.get("metadata", {}).get("source_type")
+        1. doc.get("type")
+        2. doc.get("metadata", {}).get("type")
         3. metadata 필드의 키를 기반으로 추론
         
         Args:
-            doc: 문서 딕셔너리 (type, source_type, metadata 필드 포함 가능)
+            doc: 문서 딕셔너리 (type, metadata 필드 포함 가능)
         
         Returns:
             DocumentType
@@ -75,11 +75,10 @@ class DocumentType(str, Enum):
         if not isinstance(doc, dict):
             return cls.UNKNOWN
         
-        # 1단계: type 또는 source_type 필드 직접 확인
+        # 1단계: type 필드 직접 확인
         doc_type = (
             doc.get("type") or
-            doc.get("source_type") or
-            (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None)
+            (doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None)
         )
         
         if doc_type:

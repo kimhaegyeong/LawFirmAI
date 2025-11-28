@@ -125,10 +125,32 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     def on_llm_error(self, error: Exception, **kwargs: Any) -> None:
         """LLM 오류 시 호출"""
         self.streaming_active = False
-        logger.error(f"❌ [CALLBACK] on_llm_error: node={self.node_name}, error={error}")
         
-        # 오류 신호를 큐에 추가
-        if self.queue:
+        # 🔥 개선: 스트림 중단 관련 에러는 경고로 처리 (정상적인 중단일 수 있음)
+        error_str = str(error)
+        error_type = type(error).__name__
+        
+        # 스트림 중단 관련 에러인지 확인
+        is_stream_interrupt = (
+            "stream" in error_str.lower() or
+            "interrupt" in error_str.lower() or
+            "cancelled" in error_str.lower() or
+            "StopIteration" in error_type or
+            "GeneratorExit" in error_type
+        )
+        
+        if is_stream_interrupt:
+            # 스트림 중단 관련 에러는 경고로 처리 (정상적인 중단일 수 있음)
+            logger.warning(
+                f"⚠️ [CALLBACK] on_llm_error (스트림 중단): node={self.node_name}, "
+                f"error={error_type}: {error_str[:100]}"
+            )
+        else:
+            # 실제 에러는 에러로 로깅
+            logger.error(f"❌ [CALLBACK] on_llm_error: node={self.node_name}, error={error}")
+        
+        # 오류 신호를 큐에 추가 (스트림 중단 에러는 제외)
+        if self.queue and not is_stream_interrupt:
             try:
                 self.queue.put_nowait({
                     "type": "error",

@@ -70,6 +70,11 @@ class SearchState(TypedDict, total=False):
     merged_documents: Optional[List[Dict[str, Any]]]  # 병합된 문서
     keyword_weights: Optional[Dict[str, Any]]  # 키워드별 가중치
     prompt_optimized_context: Optional[Dict[str, Any]]  # 프롬프트 최적화 컨텍스트
+    # 🔥 개선: 누락된 필드 추가 (State Reduction 손실 방지)
+    structured_documents: Optional[List[Dict[str, Any]]]  # 구조화된 문서
+    search: Optional[Dict[str, Any]]  # search 그룹 (중첩 구조)
+    results: Optional[List[Dict[str, Any]]]  # 검색 결과 (일부 노드에서 사용)
+    total_results: Optional[int]  # 전체 검색 결과 수
 
 
 # ============================================

@@ -4,15 +4,16 @@
 리팩토링: legal_workflow_enhanced.py에서 상수 분리
 """
 
+import os
+
 
 class WorkflowConstants:
     """워크플로우 상수 정의"""
 
     # LLM 설정
     # Gemini 2.5 Flash Lite 최대 출력 토큰: 65,536
-    # 실제 사용 시 성능을 고려하여 적절한 값으로 설정 가능
-    MAX_OUTPUT_TOKENS = 8192  # 실용적인 값 (약 32,000자, 법률 답변에 충분)
-    # MAX_OUTPUT_TOKENS = 65536  # 최대값 (매우 긴 답변을 위한 경우)
+    # 환경 변수로 설정 가능, 기본값: 65,536 (Gemini 2.5 Flash Lite 최대값)
+    MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "65536"))  # 최대값 (약 260,000자, 한국어 기준 1토큰≈4자)
     TEMPERATURE = 0.3
     
     # Timeout 설정 (Google Gemini 가이드라인 기준)

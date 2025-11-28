@@ -565,6 +565,91 @@ class MultiQuerySearchAgentNode:
             state.setdefault("retrieved_docs", [])
             return state
     
+    def _get_source_types_from_query_type(self, query_type: Optional[str]) -> Optional[List[str]]:
+        """
+        질의 타입에 따라 검색할 문서 타입 결정
+        
+        Args:
+            query_type: 질의 타입 (law_inquiry, precedent_search, general_question 등)
+        
+        Returns:
+            검색할 문서 타입 리스트 (None이면 모든 타입 검색)
+        """
+        if not query_type:
+            return None
+        
+        query_type_lower = query_type.lower()
+        
+        # 질의 타입별 문서 타입 매핑
+        type_mapping = {
+            "law_inquiry": ["statute_article"],  # 법령 질의 → 법령 조문만 검색
+            "precedent_search": ["precedent_content"],  # 판례 검색 → 판례만 검색
+            "general_question": None,  # 일반 질의 → 모든 타입 검색
+            "legal_advice": None,  # 법률 조언 → 모든 타입 검색
+        }
+        
+        source_types = type_mapping.get(query_type_lower)
+        
+        if source_types:
+            self.logger.info(f"🔍 [SEARCH TYPE FILTER] 질의 타입 '{query_type}' → 문서 타입: {source_types}")
+        else:
+            self.logger.info(f"🔍 [SEARCH TYPE FILTER] 질의 타입 '{query_type}' → 모든 타입 검색")
+        
+        return source_types
+    
+    def _search_keywords_with_type_filter(
+        self, 
+        query: str, 
+        source_types: Optional[List[str]], 
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        타입 필터링을 적용한 키워드 검색
+        
+        Args:
+            query: 검색 쿼리
+            source_types: 검색할 문서 타입 리스트 (None이면 모든 타입)
+            limit: 최대 결과 수
+        
+        Returns:
+            검색 결과 리스트
+        """
+        if not self.keyword_search:
+            return []
+        
+        # source_types가 지정된 경우 해당 타입만 검색
+        if source_types:
+            results = []
+            for doc_type in source_types:
+                if doc_type == "statute_article":
+                    # 법령 조문 검색
+                    statute_results = self.keyword_search.search_statutes_fts(query, limit=limit)
+                    results.extend(statute_results)
+                elif doc_type == "precedent_content":
+                    # 판례 검색
+                    case_results = self.keyword_search.search_cases_fts(query, limit=limit)
+                    results.extend(case_results)
+            
+            # 중복 제거 및 정렬
+            seen_ids = set()
+            unique_results = []
+            for doc in results:
+                doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                if doc_id and doc_id not in seen_ids:
+                    seen_ids.add(doc_id)
+                    unique_results.append(doc)
+            
+            # relevance_score 기준 정렬
+            unique_results.sort(
+                key=lambda x: x.get("relevance_score", 0.0) or x.get("score", 0.0) or 0.0,
+                reverse=True
+            )
+            
+            return unique_results[:limit]
+        else:
+            # 모든 타입 검색
+            return self.keyword_search.search_documents(query, limit=limit, force_fts=True)
+    
     def _execute_direct_multi_query(self, state: LegalWorkflowState, query: str) -> LegalWorkflowState:
         """에이전트 없이 직접 멀티 질의 검색 실행 (폴백)"""
         try:
@@ -576,6 +661,19 @@ class MultiQuerySearchAgentNode:
                 state.setdefault("retrieved_docs", [])
                 return state
             
+            # 🔥 개선: 질의 타입에 따라 검색할 문서 타입 결정
+            query_type = None
+            if self.workflow:
+                # workflow에서 질의 타입 가져오기
+                query_type_raw = self.workflow._get_state_value(state, "query_type", "")
+                if query_type_raw:
+                    if hasattr(query_type_raw, 'value'):
+                        query_type = query_type_raw.value
+                    else:
+                        query_type = str(query_type_raw)
+            
+            source_types = self._get_source_types_from_query_type(query_type)
+            
             # 멀티 질의 생성
             multi_queries = self._generate_multi_queries(query, max_queries=3)
             
@@ -586,13 +684,16 @@ class MultiQuerySearchAgentNode:
             with ThreadPoolExecutor(max_workers=6) as executor:
                 futures = []
                 for sub_query in multi_queries:
+                    # 🔥 개선: source_types에 따라 키워드 검색도 필터링
+                    # source_types가 지정된 경우 해당 타입만 검색
                     keyword_future = executor.submit(
-                        self.keyword_search.search_documents,
-                        sub_query, limit=5, force_fts=True
+                        self._search_keywords_with_type_filter,
+                        sub_query, source_types, limit=5
                     )
+                    # 🔥 개선: source_types 파라미터 전달
                     vector_future = executor.submit(
                         self.semantic_search.search,
-                        sub_query, k=5
+                        sub_query, k=5, source_types=source_types
                     )
                     futures.append(("keyword", sub_query, keyword_future))
                     futures.append(("vector", sub_query, vector_future))
@@ -620,6 +721,22 @@ class MultiQuerySearchAgentNode:
             state["retrieved_docs"] = retrieved_docs
             state["semantic_results"] = ranked_results
             state["semantic_count"] = len(ranked_results)
+            
+            # 🔥 개선: search 그룹에도 저장 (State Reduction 손실 방지)
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["retrieved_docs"] = retrieved_docs
+            state["search"]["semantic_results"] = ranked_results
+            state["search"]["semantic_count"] = len(ranked_results)
+            
+            # common 그룹에도 저장
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["retrieved_docs"] = retrieved_docs
+            state["common"]["search"]["semantic_results"] = ranked_results
+            state["common"]["search"]["semantic_count"] = len(ranked_results)
             
             # search 그룹에도 저장 (여러 위치에 저장하여 안전성 확보)
             if "search" not in state:
