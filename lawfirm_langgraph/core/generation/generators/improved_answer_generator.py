@@ -17,14 +17,14 @@ from ...services.gemini_client import GeminiClient, GeminiResponse
 from ...services.prompt_templates import PromptTemplateManager
 from ...services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
 from ...services.prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
-from ...services.semantic_domain_classifier import SemanticDomainClassifier
-from ...services.confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
+from ...classification.classifiers.semantic_domain_classifier import SemanticDomainClassifier
+from ...generation.validators.confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
 try:
     from ...classification.classifiers.question_classifier import QuestionType, QuestionClassification
 except ImportError:
-    # 호환성을 위한 fallback
-    from ...services.question_classifier import QuestionType, QuestionClassification
-from ...services.answer_formatter import AnswerFormatter, FormattedAnswer
+    QuestionType = None
+    QuestionClassification = None
+from ...generation.formatters.answer_formatter import AnswerFormatter, FormattedAnswer
 from .context_builder import ContextBuilder
 
 logger = get_logger(__name__)

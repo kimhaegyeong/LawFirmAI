@@ -623,23 +623,42 @@ class AnswerValidator:
                             has_law_in_docs = True
                             break
 
-            # 문서 인용 패턴 확인 (개선: "[문서 N]" 형식도 감지)
+            # TASK 4: 문서 인용 패턴 확인 개선 ([문서 N] 형식 강화)
             document_citation_patterns = [
                 r'\[문서:\s*[^\]]+\]',  # [문서: ...] 형식
-                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식
+                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식 (강화)
+                r'\[문서\s*(\d+)\]',  # [문서 1], [문서 2] 형식 (그룹 캡처)
                 r'문서\s*\[\s*\d+\s*\]',  # 문서[1], 문서[2] 형식
                 r'문서\s*\d+',  # 문서1, 문서2 형식 (표 내에서 사용)
             ]
             document_citations = 0
             unique_doc_citations = set()
+            document_reference_numbers = []  # TASK 4: 문서 번호 추출
             for pattern in document_citation_patterns:
                 matches = re.findall(pattern, answer)
                 for match in matches:
-                    unique_doc_citations.add(match)
+                    if isinstance(match, tuple):
+                        # 그룹 캡처된 경우 번호 추출
+                        if match:
+                            doc_num = match[0] if match[0] else match
+                            document_reference_numbers.append(int(doc_num))
+                            unique_doc_citations.add(f"[문서 {doc_num}]")
+                    else:
+                        unique_doc_citations.add(match)
+                        # 번호 추출 시도
+                        num_match = re.search(r'\d+', match)
+                        if num_match:
+                            document_reference_numbers.append(int(num_match.group()))
             document_citations = len(unique_doc_citations)
 
+            # TASK 4: 문서 참조 검증 강화
+            # 문서 참조가 있는지 확인 (document_citations 또는 document_reference_numbers 사용)
+            has_document_references = document_citations > 0 or len(document_reference_numbers) > 0
+            
+            # 최소 2개 이상의 문서 참조 필요 (TASK 4)
+            has_sufficient_doc_refs = document_citations >= 2 or len(document_reference_numbers) >= 2
+            
             # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
-            has_document_references = False
             if document_sources:
                 # re 모듈은 이미 파일 상단에서 import됨
                 for source in document_sources:
@@ -953,6 +972,36 @@ class AnswerValidator:
                 )
                 # 표 형식이 없으면 coverage_score 약간 감소 (5%)
                 coverage_score = max(0.0, coverage_score - 0.05)
+            
+            # 🔥 개선: 표에서 문서 번호 누락 검증 (사소한 문제 개선)
+            if has_table_format:
+                # 표의 각 행에서 문서 번호가 비어있는지 확인
+                table_rows = re.findall(r'\|[^|]*\|[^|]*\|[^|]*\|', answer)
+                empty_doc_number_count = 0
+                for row in table_rows:
+                    # 첫 번째 열이 비어있거나 [문서 N] 형식이 없는지 확인
+                    # |  | ... | ... | 형식 (첫 번째 열이 비어있음)
+                    # 또는 |[문서 N]| 형식이 없는 경우
+                    first_col = row.split('|')[1].strip() if len(row.split('|')) > 1 else ""
+                    if not first_col or not re.search(r'\[문서\s*\d+\]', first_col):
+                        # 헤더 행이 아닌 경우에만 체크 (문서 번호, 출처 등이 아닌 경우)
+                        if not re.search(r'문서\s*번호|출처|핵심\s*근거', first_col, re.IGNORECASE):
+                            empty_doc_number_count += 1
+                
+                if empty_doc_number_count > 0:
+                    logger.warning(
+                        f"⚠️ [TABLE VALIDATION] Found {empty_doc_number_count} table rows with empty document numbers. "
+                        f"Each row must start with [문서 N] format."
+                    )
+                    # 문서 번호가 비어있으면 coverage_score 감소 (5%) 및 재생성 요구
+                    coverage_score = max(0.0, coverage_score - 0.05)
+                    # 문서 번호가 비어있으면 재생성 필요 (표 형식이 있지만 형식이 잘못됨)
+                    if empty_doc_number_count >= 2:  # 2개 이상 비어있으면 재생성 요구
+                        needs_regeneration = True
+                        logger.warning(
+                            f"⚠️ [TABLE VALIDATION] Too many empty document numbers ({empty_doc_number_count}), "
+                            f"requiring answer regeneration."
+                        )
 
             # 법령 조문 인용 필수 체크 결과 (검색 결과에 법령 조문이 있는데 답변에 없으면 경고)
             law_citation_required = has_law_in_docs and not has_law_citation
@@ -964,6 +1013,7 @@ class AnswerValidator:
             uses_context = coverage_score >= 0.3
             needs_regeneration = needs_regeneration or (coverage_score < 0.3) or (normalized_expected_citations and found_citations == 0)
 
+            # TASK 4: 문서 참조 검증 결과 추가
             validation_result = {
                 "uses_context": uses_context,
                 "coverage_score": coverage_score,
@@ -976,8 +1026,10 @@ class AnswerValidator:
                 "citations_in_answer": citations_in_answer,
                 "precedents_in_answer": precedents_in_answer,
                 "document_citations": document_citations,
+                "document_reference_numbers": document_reference_numbers,  # TASK 4: 문서 번호 목록
                 "total_citations_in_answer": total_citations_in_answer,
                 "has_document_references": has_document_references,
+                "has_sufficient_doc_refs": has_sufficient_doc_refs,  # TASK 4: 충분한 문서 참조 여부
                 "document_sources_count": len(document_sources),
                 "needs_regeneration": needs_regeneration,
                 "missing_key_info": missing_citations[:5],

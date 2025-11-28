@@ -71,6 +71,25 @@ class AnswerResult:
 class AnswerGenerator:
     """답변 생성 엔진"""
     
+    # 성능 최적화: 답변 길이 제한
+    # MAX_OUTPUT_TOKENS 기반으로 계산 (한국어 기준 1토큰≈4자)
+    # WorkflowConstants.MAX_OUTPUT_TOKENS를 사용하여 일관성 유지
+    try:
+        from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+        MAX_OUTPUT_TOKENS = WorkflowConstants.MAX_OUTPUT_TOKENS
+    except ImportError:
+        try:
+            from core.workflow.utils.workflow_constants import WorkflowConstants
+            MAX_OUTPUT_TOKENS = WorkflowConstants.MAX_OUTPUT_TOKENS
+        except ImportError:
+            # 폴백: 환경 변수 또는 기본값
+            MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "65536"))
+    
+    # MAX_OUTPUT_TOKENS 기반으로 답변 길이 계산 (한국어 기준 1토큰≈4자)
+    # 환경 변수로 직접 설정도 가능 (우선순위: 환경 변수 > MAX_OUTPUT_TOKENS 기반 계산)
+    MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", str(MAX_OUTPUT_TOKENS * 4)))  # 기본값: MAX_OUTPUT_TOKENS * 4
+    MAX_ANSWER_TOKENS = MAX_OUTPUT_TOKENS  # MAX_OUTPUT_TOKENS와 동일하게 설정
+    
     def __init__(self, config, langfuse_client=None, llm=None):
         """답변 생성기 초기화"""
         self.config = config
@@ -638,30 +657,100 @@ class AnswerGenerator:
                             stream_kwargs["callbacks"] = callbacks
                             self.logger.debug(f"Using {len(callbacks)} callback(s) for streaming")
                         
-                        for chunk in self.llm.stream(optimized_prompt, **stream_kwargs):
-                            chunk_count += 1
-                            # 각 청크 추출
-                            chunk_content = ""
-                            if hasattr(chunk, 'content'):
-                                chunk_content = chunk.content
-                            elif isinstance(chunk, str):
-                                chunk_content = chunk
-                            elif hasattr(chunk, 'text'):
-                                chunk_content = chunk.text
-                            else:
-                                chunk_content = str(chunk)
-                            
-                            # 전체 답변에 누적 (최종 반환용)
-                            if chunk_content:
-                                full_answer += chunk_content
-                            
-                            # 디버그 로깅 (처음 5개 청크만)
-                            if chunk_count <= 5:
-                                self.logger.debug(
-                                    f"📡 [STREAM CHUNK #{chunk_count}] "
-                                    f"Received chunk: {chunk_content[:50]}... "
-                                    f"(total so far: {len(full_answer)} chars)"
-                                )
+                        try:
+                            for chunk in self.llm.stream(optimized_prompt, **stream_kwargs):
+                                chunk_count += 1
+                                # 각 청크 추출
+                                chunk_content = ""
+                                if hasattr(chunk, 'content'):
+                                    chunk_content = chunk.content
+                                elif isinstance(chunk, str):
+                                    chunk_content = chunk
+                                elif hasattr(chunk, 'text'):
+                                    chunk_content = chunk.text
+                                else:
+                                    chunk_content = str(chunk)
+                                
+                                # 전체 답변에 누적 (최종 반환용)
+                                if chunk_content:
+                                    # 🔥 성능 최적화: 답변 길이 제한 (청크 추가 전 체크)
+                                    current_length = len(full_answer)
+                                    remaining_length = self.MAX_ANSWER_LENGTH - current_length
+                                    
+                                    # 길이 제한 도달 확인
+                                    if current_length >= self.MAX_ANSWER_LENGTH:
+                                        self.logger.warning(
+                                            f"⚠️ [STREAM LIMIT] 답변 길이 제한 도달 ({current_length}자 >= {self.MAX_ANSWER_LENGTH}자). "
+                                            f"조기 종료하여 성능 최적화. (청크 {chunk_count}개 수신)"
+                                        )
+                                        # 마지막 문장 완성 시도
+                                        if full_answer and not full_answer.rstrip().endswith(('.', '!', '?', '。')):
+                                            # 마지막 문장이 완성되지 않았으면 마침표 추가
+                                            last_period = full_answer.rfind('.')
+                                            if last_period > len(full_answer) * 0.8:  # 마지막 20% 내에 마침표가 있으면
+                                                full_answer = full_answer[:last_period + 1]
+                                            else:
+                                                full_answer = full_answer.rstrip() + "..."
+                                        # 스트림 정상 종료 (break로 루프 종료)
+                                        break
+                                    
+                                    # 청크가 남은 길이를 초과하는 경우
+                                    if len(chunk_content) > remaining_length:
+                                        # 남은 길이만큼만 추가
+                                        if remaining_length > 0:
+                                            chunk_content = chunk_content[:remaining_length]
+                                            full_answer += chunk_content
+                                        self.logger.warning(
+                                            f"⚠️ [STREAM LIMIT] 청크가 길이 제한을 초과하여 잘림. "
+                                            f"현재 길이: {len(full_answer)}자 (제한: {self.MAX_ANSWER_LENGTH}자)"
+                                        )
+                                        # 스트림 정상 종료 (break로 루프 종료)
+                                        break
+                                    else:
+                                        # 정상적으로 추가
+                                        full_answer += chunk_content
+                                        
+                                        # 추가 후 길이 재확인 (청크 추가로 인한 초과 방지)
+                                        if len(full_answer) >= self.MAX_ANSWER_LENGTH:
+                                            self.logger.warning(
+                                                f"⚠️ [STREAM LIMIT] 청크 추가 후 길이 제한 도달 ({len(full_answer)}자). "
+                                                f"조기 종료. (청크 {chunk_count}개 수신)"
+                                            )
+                                            # 마지막 문장 완성 시도
+                                            if full_answer and not full_answer.rstrip().endswith(('.', '!', '?', '。')):
+                                                last_period = full_answer.rfind('.')
+                                                if last_period > len(full_answer) * 0.8:
+                                                    full_answer = full_answer[:last_period + 1]
+                                                else:
+                                                    full_answer = full_answer.rstrip() + "..."
+                                            break
+                                
+                                # 디버그 로깅 (처음 5개 청크만)
+                                if chunk_count <= 5:
+                                    self.logger.debug(
+                                        f"📡 [STREAM CHUNK #{chunk_count}] "
+                                        f"Received chunk: {chunk_content[:50]}... "
+                                        f"(total so far: {len(full_answer)} chars)"
+                                    )
+                                
+                                # 주기적으로 길이 확인 (매 50개 청크마다)
+                                if chunk_count % 50 == 0:
+                                    if len(full_answer) >= self.MAX_ANSWER_LENGTH * 0.9:  # 90% 도달 시 경고
+                                        self.logger.debug(
+                                            f"📊 [STREAM PROGRESS] 답변 길이 {len(full_answer)}자 "
+                                            f"({len(full_answer) / self.MAX_ANSWER_LENGTH * 100:.1f}% of limit)"
+                                        )
+                        except StopIteration:
+                            # 스트림 정상 종료
+                            pass
+                        except Exception as stream_error:
+                            # 스트림 중 에러 발생 시 로깅만 하고 계속 진행
+                            self.logger.warning(
+                                f"⚠️ [STREAM ERROR] 스트림 처리 중 에러 발생 (무시하고 계속): {type(stream_error).__name__}: {stream_error}"
+                            )
+                            # 이미 수신한 답변이 있으면 사용
+                            if not full_answer:
+                                raise  # 답변이 없으면 에러 재발생
                         
                         self.logger.info(
                             f"✅ [STREAM COMPLETE] stream() 사용 성공 - "
