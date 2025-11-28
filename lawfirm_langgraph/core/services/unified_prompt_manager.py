@@ -67,8 +67,8 @@ class UnifiedPromptManager:
     SAFE_MARGIN = 0.1  # 10% 안전 마진
     MAX_DOCUMENTS = 8  # 최대 문서 수
     MAX_LAW_DOCS = 3  # 최대 법률 조문 수
-    MIN_CONTENT_LENGTH = 10  # 최소 content 길이
-    MIN_CONTENT_LENGTH_WITH_LAW_INFO = 3  # 법률 정보가 있을 때 최소 content 길이
+    MIN_CONTENT_LENGTH = 200  # TASK 3: 최소 content 길이 (10 → 200)
+    MIN_CONTENT_LENGTH_WITH_LAW_INFO = 200  # TASK 3: 법률 정보가 있을 때 최소 content 길이 (3 → 200)
     MAX_DOC_LENGTH_LAW = 1500  # 법률 조문 최대 길이
     MAX_DOC_LENGTH_CASE = 800  # 판례 최대 길이
     MAX_DOC_LENGTH_COMMENTARY = 500  # 해설 최대 길이
@@ -76,6 +76,7 @@ class UnifiedPromptManager:
     SUMMARY_THRESHOLD_CASE = 800  # 판례 요약 임계값
     SUMMARY_THRESHOLD_COMMENTARY = 500  # 해설 요약 임계값
     MAX_DETAILED_EXTRACTS = 5  # 최대 상세 추출 수
+    MAX_DETAILED_EXTRACT_LENGTH = 1000  # 최대 상세 추출 길이 (문자 수)
     MAX_SUMMARY_LENGTH = 500  # 최대 요약 길이
     
     # 메타데이터 제외 필드 목록
@@ -555,6 +556,9 @@ class UnifiedPromptManager:
                         for doc in documents[:8]:
                             if isinstance(doc, dict):
                                 normalized_doc = self._normalize_document_fields(doc)
+                                if not normalized_doc:
+                                    logger.debug(f"⚠️ [PROMPT BUILD] Document normalized to None, skipping: {doc.get('id', 'unknown')[:50]}")
+                                    continue
                                 doc_content = normalized_doc.get("content", "")
                                 doc_source = normalized_doc.get("source", "Unknown")
                                 doc_score = normalized_doc.get("relevance_score", 0.0)
@@ -587,7 +591,7 @@ class UnifiedPromptManager:
                         normalized_docs = []
                         for doc in documents[:8]:
                             normalized = self._normalize_document_fields(doc)
-                            if normalized.get("content"):
+                            if normalized and normalized.get("content"):
                                 normalized_docs.append(normalized)
 
                         if normalized_docs:
@@ -620,6 +624,9 @@ class UnifiedPromptManager:
                     if isinstance(doc, dict):
                         # 문서 필드 정규화
                         normalized_doc = self._normalize_document_fields(doc)
+                        if not normalized_doc:
+                            logger.debug(f"⚠️ [PROMPT BUILD] Document normalized to None, skipping: {doc.get('id', 'unknown')[:50]}")
+                            continue
                         doc_content = normalized_doc.get("content", "")
                         doc_source = normalized_doc.get("source", "Unknown")
                         doc_score = normalized_doc.get("relevance_score", 0.0)
@@ -824,8 +831,28 @@ class UnifiedPromptManager:
         return prompt
     
     def _simplify_base_prompt(self, base_prompt: str) -> str:
-        """base_prompt 간소화 (불필요한 섹션 제거)"""
+        """base_prompt 간소화 - 모든 문서 섹션 제거"""
         import re
+        
+        # 🔥 개선: 모든 문서 관련 섹션 패턴 추가
+        document_section_patterns = [
+            r'## 검색된 법률 문서.*?(?=##|$)',
+            r'## 검색된 법률 조문 문서.*?(?=##|$)',
+            r'## 검색된 판례 문서.*?(?=##|$)',
+            r'## 참고 문서 목록.*?(?=##|$)',
+            r'## 참고 문서 내용.*?(?=##|$)',
+            r'## 조문 해설.*?(?=##|$)',
+            r'## Context Summary.*?(?=##|$)',
+            r'## Detailed Extracts.*?(?=##|$)',
+            r'## \[전체 문서\].*?(?=##|$)',
+            r'### 🔴 최우선 문서.*?(?=###|##|$)',
+            r'### 🟡 중요 문서.*?(?=###|##|$)',
+            r'### 문서 \d+:.*?(?=###|##|$)',  # 개별 문서 항목
+            r'\[문서 \d+\].*?(?=\[문서|##|$)',  # 문서 인용 형식
+        ]
+        
+        for pattern in document_section_patterns:
+            base_prompt = re.sub(pattern, '', base_prompt, flags=re.DOTALL)
         
         # 불필요한 섹션 제거
         sections_to_remove = [
@@ -834,6 +861,12 @@ class UnifiedPromptManager:
             r'## 답변 품질 검증 체크리스트.*?(?=##|$)',
             r'## 모델 최적화 설정.*?(?=##|$)',
             r'## 검색 결과 통계.*?(?=##|$)',
+            # 🔥 개선: 중복되는 답변 구조 가이드 제거 (instruction_section에 이미 포함)
+            r'## 답변 구조 가이드.*?(?=##|$)',
+            r'## 법령 질의 지침.*?(?=##|$)',
+            # 🔥 개선: 도메인 특화 지침과 민사법 특화 지침 중복 제거 (간소화)
+            r'## 도메인 특화 지침.*?(?=##|$)',
+            r'## 민사법 특화 지침.*?(?=##|$)',
         ]
         
         for pattern in sections_to_remove:
@@ -844,6 +877,22 @@ class UnifiedPromptManager:
             r'한국 법률 특성.*?실무적 관점.*?(?=##|$)', 
             '## 한국 법률 특성\n- 성문법 중심, 대법원 판례 중시, 실무적 관점\n', 
             base_prompt, 
+            flags=re.DOTALL
+        )
+        
+        # 🔥 개선: 중복된 답변 생성 규칙 제거
+        base_prompt = re.sub(
+            r'## 답변 생성 지시사항.*?답변 생성 규칙.*?(?=##|$)',
+            '',
+            base_prompt,
+            flags=re.DOTALL
+        )
+        
+        # 🔥 개선: 중복된 체크리스트 제거
+        base_prompt = re.sub(
+            r'## 답변 작성 체크리스트.*?(?=##|$)',
+            '',
+            base_prompt,
             flags=re.DOTALL
         )
         
@@ -948,13 +997,124 @@ class UnifiedPromptManager:
             if doc_count == 0:
                 logger.warning(f"⚠️ [FINAL PROMPT] structured_docs has no documents! structured_docs={structured_docs}")
 
+            # 🔥 개선: retrieved_docs에서 원본 문서의 type 필드를 복원
+            retrieved_docs = context.get("retrieved_docs", [])
+            if retrieved_docs:
+                # retrieved_docs를 content/source 기반으로 매핑
+                doc_map = {}
+                for orig_doc in retrieved_docs:
+                    if isinstance(orig_doc, dict):
+                        content = orig_doc.get("content") or orig_doc.get("text", "")
+                        source = orig_doc.get("source", "")
+                        doc_id = orig_doc.get("id") or orig_doc.get("document_id")
+                        # 여러 키로 매핑 가능하도록
+                        if content:
+                            doc_map[content[:100]] = orig_doc
+                            # 🔥 개선: 짧은 content의 경우 더 짧은 키로도 매핑
+                            if len(content) > 10:
+                                doc_map[content[:50]] = orig_doc
+                        if source:
+                            doc_map[source] = orig_doc
+                        if doc_id:
+                            doc_map[str(doc_id)] = orig_doc
+                        # 🔥 개선: metadata에서도 id 추출 시도
+                        metadata = orig_doc.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            metadata_id = metadata.get("id") or metadata.get("document_id")
+                            if metadata_id:
+                                doc_map[str(metadata_id)] = orig_doc
+                        # 🔥 개선: metadata에서도 id 추출 시도
+                        metadata = orig_doc.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            metadata_id = metadata.get("id") or metadata.get("document_id")
+                            if metadata_id:
+                                doc_map[str(metadata_id)] = orig_doc
+                
+                # raw_documents의 type 필드 복원
+                for doc in raw_documents:
+                    if not isinstance(doc, dict):
+                        continue
+                    # content나 source로 원본 문서 찾기
+                    content = doc.get("content", "") or doc.get("text", "")
+                    source = doc.get("source", "")
+                    doc_id = doc.get("document_id") or doc.get("id")
+                    
+                    orig_doc = None
+                    # 🔥 개선: 여러 방법으로 원본 문서 찾기
+                    if content:
+                        orig_doc = doc_map.get(content[:100])
+                    if not orig_doc and source:
+                        orig_doc = doc_map.get(source)
+                    if not orig_doc and doc_id:
+                        orig_doc = doc_map.get(str(doc_id))
+                    # 🔥 개선: content의 일부로도 매칭 시도 (부분 일치)
+                    if not orig_doc and content and len(content) > 10:
+                        for key, orig in doc_map.items():
+                            if isinstance(key, str) and (content[:30] in key or key[:30] in content):
+                                orig_doc = orig
+                                break
+                    # 🔥 개선: content의 일부로도 매칭 시도 (짧은 content의 경우)
+                    if not orig_doc and content and len(content) > 10:
+                        for key, orig in doc_map.items():
+                            if isinstance(key, str) and content[:50] in key:
+                                orig_doc = orig
+                                break
+                    
+                    # 원본 문서에서 type 필드 및 법률 정보 복원
+                    if orig_doc and isinstance(orig_doc, dict):
+                        orig_type = orig_doc.get("type") or orig_doc.get("source_type")
+                        if orig_type and orig_type not in ["", "unknown", "other"]:
+                            doc["type"] = orig_type
+                            # source_type도 복원
+                            if orig_doc.get("source_type") and orig_doc.get("source_type") not in ["", "unknown", "other"]:
+                                doc["source_type"] = orig_doc.get("source_type")
+                            
+                            # 🔥 개선: 법률 정보 필드도 복원
+                            if orig_type in ["statute_article", "statute"]:
+                                if orig_doc.get("statute_name") and not doc.get("statute_name"):
+                                    doc["statute_name"] = orig_doc.get("statute_name")
+                                if orig_doc.get("law_name") and not doc.get("law_name"):
+                                    doc["law_name"] = orig_doc.get("law_name")
+                                if orig_doc.get("article_no") and not doc.get("article_no"):
+                                    doc["article_no"] = orig_doc.get("article_no")
+                                if orig_doc.get("article_number") and not doc.get("article_number"):
+                                    doc["article_number"] = orig_doc.get("article_number")
+                            
+                            # metadata에도 복원
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = orig_type
+                            if orig_doc.get("source_type"):
+                                doc["metadata"]["source_type"] = orig_doc.get("source_type")
+                            
+                            # 🔥 개선: metadata에서도 법률 정보 복원
+                            orig_metadata = orig_doc.get("metadata", {})
+                            if isinstance(orig_metadata, dict):
+                                if orig_metadata.get("statute_name") and not doc["metadata"].get("statute_name"):
+                                    doc["metadata"]["statute_name"] = orig_metadata.get("statute_name")
+                                if orig_metadata.get("law_name") and not doc["metadata"].get("law_name"):
+                                    doc["metadata"]["law_name"] = orig_metadata.get("law_name")
+                                if orig_metadata.get("article_no") and not doc["metadata"].get("article_no"):
+                                    doc["metadata"]["article_no"] = orig_metadata.get("article_no")
+                                if orig_metadata.get("article_number") and not doc["metadata"].get("article_number"):
+                                    doc["metadata"]["article_number"] = orig_metadata.get("article_number")
+                            
+                            logger.debug(f"✅ [DOC TYPE RESTORE] retrieved_docs에서 type 및 법률 정보 복원: {orig_type} (source_type={orig_doc.get('source_type', 'N/A')}, statute_name={orig_doc.get('statute_name', 'N/A')}, law_name={orig_doc.get('law_name', 'N/A')}, article_no={orig_doc.get('article_no', 'N/A')})")
+            
             # 문서 정규화 및 중복 제거
             normalized_count = 0
             skipped_count = 0
             for idx, doc in enumerate(raw_documents):
                 logger.debug(f"🔍 [DEBUG] Processing doc {idx+1}/{doc_count}: type={type(doc)}, keys={list(doc.keys()) if isinstance(doc, dict) else 'N/A'}")
+                # 🔥 개선: doc이 None이거나 dict가 아니면 스킵
+                if not doc or not isinstance(doc, dict):
+                    skipped_count += 1
+                    logger.warning(f"⚠️ [DEBUG] Doc {idx+1} is not a valid dict, skipping")
+                    continue
                 normalized = self._normalize_document_fields(doc)
-                if normalized:
+                if normalized and isinstance(normalized, dict):
                     # 문서 ID 생성 (중복 체크용)
                     doc_id = self._generate_document_id(normalized)
                     if doc_id not in seen_doc_ids:
@@ -966,7 +1126,7 @@ class UnifiedPromptManager:
                         logger.debug(f"⚠️ [FINAL PROMPT] Duplicate document removed: {doc_id}")
                 else:
                     skipped_count += 1
-                    logger.warning(f"⚠️ [DEBUG] Doc {idx+1} normalization returned None (skipped)")
+                    logger.warning(f"⚠️ [DEBUG] Doc {idx+1} normalization returned None or invalid (skipped)")
 
             logger.info(f"📋 [FINAL PROMPT] Normalization: {normalized_count} succeeded, {skipped_count} skipped")
 
@@ -1043,9 +1203,12 @@ class UnifiedPromptManager:
                 base_prompt_has_actual_content = False
                 if normalized_docs:
                     # 첫 번째 문서의 일부 내용이 base_prompt에 있는지 확인
-                    first_doc_content = normalized_docs[0].get("content", "")[:100]
-                    if first_doc_content and len(first_doc_content) > 10:
-                        base_prompt_has_actual_content = first_doc_content in base_prompt
+                    # TASK 3: None 체크 추가
+                    first_doc = normalized_docs[0] if normalized_docs else None
+                    if first_doc and isinstance(first_doc, dict):
+                        first_doc_content = first_doc.get("content", "")[:100]
+                        if first_doc_content and len(first_doc_content) > 10:
+                            base_prompt_has_actual_content = first_doc_content in base_prompt
                 
                 if base_prompt_has_actual_content:
                     # base_prompt에 실제 문서 내용이 있으면 중복 제거만 수행
@@ -1075,71 +1238,355 @@ class UnifiedPromptManager:
             logger.info(f"✅ [DOCUMENTS SECTION] Creating documents section: "
                        f"normalized_docs={len(normalized_docs)}, has_docs_in_base={has_docs_in_base}, "
                        f"has_multi_query_results={has_multi_query_results}")
-            # 관련도 기준 정렬 (개선: 법률 조문 우선 포함, 최소 5개 이상 포함 보장)
-            # 법률 조문과 일반 문서를 분리하여 법률 조문을 우선 포함
-            law_docs = [doc for doc in normalized_docs if doc.get("law_name") and doc.get("article_no")]
-            other_docs = [doc for doc in normalized_docs if not (doc.get("law_name") and doc.get("article_no"))]
+            # 🔥 개선: 관련도 기준 정렬 (법률/판례/기타 각각 할당량 보장)
+            # 🔥 개선: 문서 타입 분류 전에 메타데이터 복원 시도
+            # 🔥 개선: None 필터링 강화
+            normalized_docs = [doc for doc in normalized_docs if doc and isinstance(doc, dict)]
+            for doc in normalized_docs:
+                if not isinstance(doc, dict):
+                    continue
+                
+                # type이 없거나 unknown/other이면 복원 시도
+                current_type = doc.get("type", "").lower() if doc.get("type") else ""
+                if not doc.get("type") or current_type in ["unknown", "other"]:
+                    # metadata에서 복원
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        metadata_type = metadata.get("type")
+                        if metadata_type and metadata_type not in ["unknown", "other"]:
+                            doc["type"] = metadata_type
+                            logger.debug(f"🔍 [DOC TYPE RESTORE] metadata에서 type 복원: {metadata_type}")
+                    
+                    # 복원 실패 시 content 기반 추론으로 type 설정
+                    if not doc.get("type") or doc.get("type", "").lower() in ["unknown", "other"]:
+                        inferred_type = self._classify_document_type(doc)
+                        # 🔥 개선: "other"가 아닌 모든 경우 저장 (statute, precedent 모두)
+                        if inferred_type:
+                            # "statute" → "statute_article", "precedent" → "precedent_content" 변환
+                            type_mapping = {
+                                "statute": "statute_article",
+                                "precedent": "precedent_content",
+                                "other": "unknown"
+                            }
+                            mapped_type = type_mapping.get(inferred_type, inferred_type)
+                            doc["type"] = mapped_type
+                            # metadata에도 저장
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = mapped_type
+                            logger.debug(f"🔍 [DOC TYPE INFERENCE] content 기반 추론으로 type 설정: {mapped_type} (원본: {inferred_type})")
             
-            # 법률 조문을 관련도 순으로 정렬
-            sorted_law_docs = sorted(
-                law_docs,
-                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+            # 문서를 법률, 판례, 기타로 분리
+            statute_docs = []
+            precedent_docs = []
+            other_docs = []
+            
+            for doc in normalized_docs:
+                # 🔥 개선: 기존 type 필드가 있으면 우선 사용 (statute_article, precedent_content 등)
+                current_type = doc.get("type", "")
+                if current_type and current_type not in ["", "unknown", "other"]:
+                    # 이미 올바른 타입이 있으면 _classify_document_type 호출 생략
+                    doc_type = current_type
+                    logger.debug(f"✅ [DOC TYPE SAVE] 기존 type 필드 사용: {doc_type}")
+                else:
+                    doc_type = self._classify_document_type(doc)
+                    # 🔥 개선: 분류 결과를 문서에 저장 (statute → statute_article, precedent → precedent_content 변환)
+                    if doc_type != "other":
+                        # "statute" → "statute_article", "precedent" → "precedent_content" 변환
+                        type_mapping = {
+                            "statute": "statute_article",
+                            "precedent": "precedent_content",
+                            "other": "unknown"
+                        }
+                        mapped_type = type_mapping.get(doc_type, doc_type)
+                        # 분류된 타입을 문서에 저장
+                        doc["type"] = mapped_type
+                        # metadata에도 저장
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        doc["metadata"]["type"] = mapped_type
+                        logger.debug(f"🔍 [DOC TYPE SAVE] 분류 결과 저장: {mapped_type} (원본: {doc_type})")
+                        doc_type = mapped_type
+                
+                # 🔥 개선: statute_article, precedent_content도 포함
+                if doc_type in ["statute", "statute_article"]:
+                    statute_docs.append(doc)
+                elif doc_type in ["precedent", "precedent_content"]:
+                    precedent_docs.append(doc)
+                else:
+                    other_docs.append(doc)
+            
+            # 각 타입별로 관련도 순 정렬
+            sorted_statute_docs = sorted(
+                statute_docs,
+                key=lambda x: x.get("relevance_score", 0.0) or x.get("score", 0.0) or 0.0,
                 reverse=True
             )
             
-            # 일반 문서를 관련도 순으로 정렬
+            sorted_precedent_docs = sorted(
+                precedent_docs,
+                key=lambda x: x.get("relevance_score", 0.0) or x.get("score", 0.0) or 0.0,
+                reverse=True
+            )
+            
             sorted_other_docs = sorted(
                 other_docs,
-                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                key=lambda x: x.get("relevance_score", 0.0) or x.get("score", 0.0) or 0.0,
                 reverse=True
+            )
+            
+            # 🔥 개선: 각 타입별 할당량 설정 (환경 변수로 조정 가능)
+            import os
+            # 법률 조문 할당량
+            STATUTE_MIN = int(os.getenv("PROMPT_STATUTE_MIN", "2"))  # 최소 2개
+            STATUTE_MAX = int(os.getenv("PROMPT_STATUTE_MAX", "5"))  # 최대 5개
+            
+            # 판례 할당량
+            PRECEDENT_MIN = int(os.getenv("PROMPT_PRECEDENT_MIN", "2"))  # 최소 2개
+            PRECEDENT_MAX = int(os.getenv("PROMPT_PRECEDENT_MAX", "5"))  # 최대 5개
+            
+            # 기타 문서 할당량
+            OTHER_MIN = int(os.getenv("PROMPT_OTHER_MIN", "1"))  # 최소 1개
+            OTHER_MAX = int(os.getenv("PROMPT_OTHER_MAX", "3"))  # 최대 3개
+            
+            logger.info(
+                f"📊 [DOCUMENT TYPE SPLIT] 법률={len(statute_docs)}, 판례={len(precedent_docs)}, 기타={len(other_docs)}, "
+                f"할당량: 법률[{STATUTE_MIN}-{STATUTE_MAX}], 판례[{PRECEDENT_MIN}-{PRECEDENT_MAX}], 기타[{OTHER_MIN}-{OTHER_MAX}]"
             )
             
             # 토큰 제한 내에서 문서 선택 및 축약
             selected_docs = []
             current_doc_tokens = 0
             
-            # 법률 조문 우선 선택
-            for doc in sorted_law_docs[:self.MAX_LAW_DOCS]:
-                doc_content = doc.get("content", "")
+            # 토큰 할당량 계산 (각 타입별로 비율 할당)
+            total_quota = STATUTE_MAX + PRECEDENT_MAX + OTHER_MAX
+            statute_token_quota = int(available_doc_tokens * (STATUTE_MAX / total_quota)) if total_quota > 0 else available_doc_tokens // 3
+            precedent_token_quota = int(available_doc_tokens * (PRECEDENT_MAX / total_quota)) if total_quota > 0 else available_doc_tokens // 3
+            other_token_quota = available_doc_tokens - statute_token_quota - precedent_token_quota
+            
+            # 1. 법률 조문 선택 (최소/최대 할당량 보장)
+            # 🔥 개선: 조문은 원문 그대로 사용 (축약 금지)
+            import os
+            STATUTE_PRESERVE_FULL = os.getenv("PROMPT_STATUTE_PRESERVE_FULL", "true").lower() == "true"
+            STATUTE_MAX_LENGTH = int(os.getenv("PROMPT_STATUTE_MAX_LENGTH", "5000"))  # 조문 최대 길이 (원문 보존 시)
+            
+            statute_selected = []
+            statute_tokens_used = 0
+            
+            for doc in sorted_statute_docs:
+                if len(statute_selected) >= STATUTE_MAX:
+                    break
+                
+                doc_content = doc.get("content", "") or doc.get("text", "")
                 doc_tokens = self._estimate_tokens(doc_content)
                 
-                # 문서당 최대 토큰 수 제한
-                max_tokens_per_doc = min(2000, available_doc_tokens // 5)  # 문서당 최대 2000토큰 또는 평균값
-                
-                if doc_tokens > max_tokens_per_doc:
-                    # 문서 축약
-                    max_chars = int(max_tokens_per_doc * 2.5)
-                    doc_content = self._smart_truncate_document(doc_content, max_chars, query)
-                    doc_tokens = self._estimate_tokens(doc_content)
+                # 🔥 개선: 조문은 원문 그대로 사용 (축약하지 않음)
+                if STATUTE_PRESERVE_FULL:
+                    # 조문 원문 보존 - 축약하지 않고 그대로 사용
+                    # 단, 매우 긴 조문은 최대 길이 제한 적용
+                    if len(doc_content) > STATUTE_MAX_LENGTH:
+                        logger.warning(
+                            f"⚠️ [STATUTE] 조문이 최대 길이({STATUTE_MAX_LENGTH}자)를 초과합니다. "
+                            f"원문 보존 모드이므로 조문 수를 줄이는 방향으로 조정합니다."
+                        )
+                        # 조문이 너무 길면 이 조문은 건너뛰고 다음 조문으로
+                        continue
+                    
+                    # 원문 그대로 사용 (축약하지 않음)
                     doc["content"] = doc_content
-                    doc["truncated"] = True
-                
-                if current_doc_tokens + doc_tokens <= available_doc_tokens:
-                    selected_docs.append(doc)
-                    current_doc_tokens += doc_tokens
+                    doc["preserved_full"] = True
                 else:
-                    # 남은 토큰이 있으면 축약하여 추가
-                    remaining_tokens = available_doc_tokens - current_doc_tokens
-                    if remaining_tokens > 500:  # 최소 500토큰 이상 남아있을 때만
-                        max_chars = int(remaining_tokens * 2.5)
-                        doc_content = self._smart_truncate_document(doc.get("content", ""), max_chars, query)
+                    # 기존 로직 (축약 허용 모드 - 하위 호환성)
+                    max_tokens_per_doc = min(2000, statute_token_quota // max(1, STATUTE_MAX))
+                    
+                    if doc_tokens > max_tokens_per_doc:
+                        max_chars = int(max_tokens_per_doc * 2.5)
+                        doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                        doc_tokens = self._estimate_tokens(doc_content)
                         doc["content"] = doc_content
                         doc["truncated"] = True
-                        selected_docs.append(doc)
+                
+                # 토큰 제한 체크 (원문 보존 모드에서는 조문 수로 제어)
+                if STATUTE_PRESERVE_FULL:
+                    # 원문 보존 모드: 토큰 제한보다는 조문 수로 제어
+                    if statute_tokens_used + doc_tokens <= statute_token_quota * 1.5:  # 여유 있게 허용
+                        statute_selected.append(doc)
+                        statute_tokens_used += doc_tokens
+                    else:
+                        # 토큰이 부족하면 조문 수를 줄이는 방향으로 조정
+                        logger.info(
+                            f"ℹ️ [STATUTE] 토큰 제한으로 인해 조문 선택 중단. "
+                            f"현재 {len(statute_selected)}개 조문 선택됨."
+                        )
+                        break
+                else:
+                    # 기존 로직
+                    if statute_tokens_used + doc_tokens <= statute_token_quota:
+                        statute_selected.append(doc)
+                        statute_tokens_used += doc_tokens
+                    else:
+                        remaining_tokens = statute_token_quota - statute_tokens_used
+                        if remaining_tokens > 500 and len(statute_selected) < STATUTE_MIN:
+                            max_chars = int(remaining_tokens * 2.5)
+                            doc_content = self._smart_truncate_document(doc.get("content", "") or doc.get("text", ""), max_chars, query)
+                            doc["content"] = doc_content
+                            doc["truncated"] = True
+                            statute_selected.append(doc)
+                        break
+            
+            # 최소 할당량 보장 (토큰이 부족해도 최소한은 포함)
+            if len(statute_selected) < STATUTE_MIN and len(sorted_statute_docs) >= STATUTE_MIN:
+                # 최소 할당량만큼 추가
+                for doc in sorted_statute_docs[len(statute_selected):STATUTE_MIN]:
+                    if doc not in statute_selected:
+                        doc_content = doc.get("content", "") or doc.get("text", "")
+                        if STATUTE_PRESERVE_FULL:
+                            # 원문 보존 모드: 원문 그대로 사용
+                            doc["content"] = doc_content
+                            doc["preserved_full"] = True
+                        else:
+                            # 기존 로직: 축약
+                            max_chars = 1000
+                            if len(doc_content) > max_chars:
+                                doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                                doc["content"] = doc_content
+                                doc["truncated"] = True
+                        statute_selected.append(doc)
+            
+            selected_docs.extend(statute_selected)
+            current_doc_tokens += statute_tokens_used
+            
+            # 2. 판례 선택 (최소/최대 할당량 보장)
+            # 🔥 개선: 판례는 길이에 따라 요약 또는 축약
+            PRECEDENT_SUMMARY_THRESHOLD = int(os.getenv("PRECEDENT_SUMMARY_THRESHOLD", "2000"))  # 판례 요약 임계값 (문자 수)
+            PRECEDENT_SUMMARY_MAX_LENGTH = int(os.getenv("PRECEDENT_SUMMARY_MAX_LENGTH", "1000"))  # 판례 요약 최대 길이
+            PRECEDENT_SUMMARY_USE_LLM = os.getenv("PRECEDENT_SUMMARY_USE_LLM", "true").lower() == "true"
+            
+            precedent_selected = []
+            precedent_tokens_used = 0
+            
+            for doc in sorted_precedent_docs:
+                if len(precedent_selected) >= PRECEDENT_MAX:
+                    break
+                
+                doc_content = doc.get("content", "") or doc.get("text", "")
+                doc_length = len(doc_content)
+                doc_tokens = self._estimate_tokens(doc_content)
+                
+                # 🔥 개선: 판례는 길이에 따라 요약 또는 축약
+                if doc_length > PRECEDENT_SUMMARY_THRESHOLD and PRECEDENT_SUMMARY_USE_LLM:
+                    # 긴 판례는 LLM 요약 사용
+                    try:
+                        summary_result = self._summarize_precedent(doc, query)
+                        if summary_result and summary_result.get("summary"):
+                            doc["content"] = summary_result["summary"]
+                            doc["summary_data"] = summary_result
+                            doc["summarized"] = True
+                            doc_tokens = self._estimate_tokens(summary_result["summary"])
+                            logger.info(
+                                f"✅ [PRECEDENT SUMMARY] 판례 요약 완료: "
+                                f"원본={doc_length}자 → 요약={len(summary_result['summary'])}자 "
+                                f"(축약률={(1 - len(summary_result['summary'])/doc_length)*100:.1f}%)"
+                            )
+                        else:
+                            # 요약 실패 시 스마트 축약
+                            max_tokens_per_doc = min(1500, precedent_token_quota // max(1, PRECEDENT_MAX))
+                            max_chars = int(max_tokens_per_doc * 2.5)
+                            doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                            doc_tokens = self._estimate_tokens(doc_content)
+                            doc["content"] = doc_content
+                            doc["truncated"] = True
+                            logger.warning(f"⚠️ [PRECEDENT SUMMARY] 요약 실패, 스마트 축약 사용: {doc_length}자 → {len(doc_content)}자")
+                    except Exception as e:
+                        # 요약 실패 시 스마트 축약
+                        logger.warning(f"⚠️ [PRECEDENT SUMMARY] 요약 중 오류 발생: {e}, 스마트 축약 사용")
+                        max_tokens_per_doc = min(1500, precedent_token_quota // max(1, PRECEDENT_MAX))
+                        max_chars = int(max_tokens_per_doc * 2.5)
+                        doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                        doc_tokens = self._estimate_tokens(doc_content)
+                        doc["content"] = doc_content
+                        doc["truncated"] = True
+                else:
+                    # 짧은 판례는 스마트 축약만 수행
+                    max_tokens_per_doc = min(1500, precedent_token_quota // max(1, PRECEDENT_MAX))
+                    
+                    if doc_tokens > max_tokens_per_doc:
+                        max_chars = int(max_tokens_per_doc * 2.5)
+                        doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                        doc_tokens = self._estimate_tokens(doc_content)
+                        doc["content"] = doc_content
+                        doc["truncated"] = True
+                
+                if precedent_tokens_used + doc_tokens <= precedent_token_quota:
+                    precedent_selected.append(doc)
+                    precedent_tokens_used += doc_tokens
+                else:
+                    remaining_tokens = precedent_token_quota - precedent_tokens_used
+                    if remaining_tokens > 500 and len(precedent_selected) < PRECEDENT_MIN:
+                        max_chars = int(remaining_tokens * 2.5)
+                        doc_content = self._smart_truncate_document(doc.get("content", "") or doc.get("text", ""), max_chars, query)
+                        doc["content"] = doc_content
+                        doc["truncated"] = True
+                        precedent_selected.append(doc)
                     break
             
-            # 일반 문서 선택 (멀티 질의 결과는 더 많이 포함)
-            max_other_docs = self.MAX_DOCUMENTS * 2 if has_multi_query_results else self.MAX_DOCUMENTS
-            logger.debug(f"🔍 [DOCUMENTS SECTION] max_other_docs={max_other_docs} (multi_query={has_multi_query_results})")
+            # 최소 할당량 보장
+            if len(precedent_selected) < PRECEDENT_MIN and len(sorted_precedent_docs) >= PRECEDENT_MIN:
+                for doc in sorted_precedent_docs[len(precedent_selected):PRECEDENT_MIN]:
+                    if doc not in precedent_selected:
+                        doc_content = doc.get("content", "") or doc.get("text", "")
+                        doc_length = len(doc_content)
+                        
+                        # 최소 할당량 문서도 요약 적용
+                        if doc_length > PRECEDENT_SUMMARY_THRESHOLD and PRECEDENT_SUMMARY_USE_LLM:
+                            try:
+                                summary_result = self._summarize_precedent(doc, query)
+                                if summary_result and summary_result.get("summary"):
+                                    doc["content"] = summary_result["summary"]
+                                    doc["summary_data"] = summary_result
+                                    doc["summarized"] = True
+                                else:
+                                    # 요약 실패 시 축약
+                                    max_chars = 1000
+                                    if len(doc_content) > max_chars:
+                                        doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                                        doc["content"] = doc_content
+                                        doc["truncated"] = True
+                            except Exception as e:
+                                logger.warning(f"⚠️ [PRECEDENT SUMMARY] 최소 할당량 문서 요약 실패: {e}")
+                                max_chars = 1000
+                                if len(doc_content) > max_chars:
+                                    doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                                    doc["content"] = doc_content
+                                    doc["truncated"] = True
+                        else:
+                            max_chars = 1000
+                            if len(doc_content) > max_chars:
+                                doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                                doc["content"] = doc_content
+                                doc["truncated"] = True
+                        precedent_selected.append(doc)
+            
+            selected_docs.extend(precedent_selected)
+            current_doc_tokens += precedent_tokens_used
+            
+            # 3. 기타 문서 선택 (남은 토큰 사용)
+            remaining_tokens = available_doc_tokens - current_doc_tokens
+            other_selected = []
+            other_tokens_used = 0
             
             for doc in sorted_other_docs:
-                if len(selected_docs) >= max_other_docs:
+                if len(other_selected) >= OTHER_MAX:
                     break
                 
-                doc_content = doc.get("content", "")
+                doc_content = doc.get("content", "") or doc.get("text", "")
                 doc_tokens = self._estimate_tokens(doc_content)
                 
-                max_tokens_per_doc = min(1000, available_doc_tokens // 8)  # 문서당 최대 1000토큰
+                max_tokens_per_doc = min(1000, remaining_tokens // max(1, OTHER_MAX - len(other_selected)))
                 
                 if doc_tokens > max_tokens_per_doc:
                     max_chars = int(max_tokens_per_doc * 2.5)
@@ -1148,28 +1595,47 @@ class UnifiedPromptManager:
                     doc["content"] = doc_content
                     doc["truncated"] = True
                 
-                if current_doc_tokens + doc_tokens <= available_doc_tokens:
-                    selected_docs.append(doc)
-                    current_doc_tokens += doc_tokens
+                if other_tokens_used + doc_tokens <= remaining_tokens:
+                    other_selected.append(doc)
+                    other_tokens_used += doc_tokens
                 else:
-                    remaining_tokens = available_doc_tokens - current_doc_tokens
-                    if remaining_tokens > 500:
-                        max_chars = int(remaining_tokens * 2.5)
-                        doc_content = self._smart_truncate_document(doc.get("content", ""), max_chars, query)
+                    remaining_tokens_final = remaining_tokens - other_tokens_used
+                    if remaining_tokens_final > 500 and len(other_selected) < OTHER_MIN:
+                        max_chars = int(remaining_tokens_final * 2.5)
+                        doc_content = self._smart_truncate_document(doc.get("content", "") or doc.get("text", ""), max_chars, query)
                         doc["content"] = doc_content
                         doc["truncated"] = True
-                        selected_docs.append(doc)
+                        other_selected.append(doc)
                     break
+            
+            # 최소 할당량 보장
+            if len(other_selected) < OTHER_MIN and len(sorted_other_docs) >= OTHER_MIN:
+                for doc in sorted_other_docs[len(other_selected):OTHER_MIN]:
+                    if doc not in other_selected:
+                        doc_content = doc.get("content", "") or doc.get("text", "")
+                        max_chars = 800
+                        if len(doc_content) > max_chars:
+                            doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                            doc["content"] = doc_content
+                            doc["truncated"] = True
+                        other_selected.append(doc)
+            
+            selected_docs.extend(other_selected)
+            current_doc_tokens += other_tokens_used
             
             sorted_docs = selected_docs
 
             if sorted_docs:
                 documents_section = self._build_documents_section(sorted_docs, query)
 
+                # 타입별 개수 계산
+                statute_count = len([d for d in sorted_docs if self._classify_document_type(d) == "statute"])
+                precedent_count = len([d for d in sorted_docs if self._classify_document_type(d) == "precedent"])
+                other_count = len([d for d in sorted_docs if self._classify_document_type(d) == "other"])
+                
                 logger.info(
                     f"✅ [FINAL PROMPT] Added {len(sorted_docs)} documents "
-                    f"(law_docs: {len([d for d in sorted_docs if d.get('law_name')])}, "
-                    f"other_docs: {len([d for d in sorted_docs if not d.get('law_name')])}, "
+                    f"(statute: {statute_count}, precedent: {precedent_count}, other: {other_count}, "
                     f"tokens: {current_doc_tokens:,}/{available_doc_tokens:,}, "
                     f"multi_query={has_multi_query_results})"
                 )
@@ -1347,88 +1813,97 @@ class UnifiedPromptManager:
             f"docs: {current_doc_tokens if 'current_doc_tokens' in locals() else 0:,})"
         )
 
-        # 단계별 답변 지침 구성
-        if documents_section and normalized_docs:
+        # 답변 생성 지시사항 섹션 생성 (개선: 질문 유형, 답변 생성 규칙)
+        # 🔥 개선: answer_generation_instructions 최소화 (citation_requirement와 base_prompt에 이미 포함)
+        answer_generation_instructions = ""
+        
+        # 단계별 답변 지침 구성 (개선: 답변 형식 가이드 상세화)
+        # 🔥 CRITICAL: 문서가 3개 이상일 때만 문서별 근거 비교 표 포함
+        doc_count = len(normalized_docs) if normalized_docs else 0
+        has_sufficient_docs = documents_section and normalized_docs and doc_count >= 3
+        
+        if has_sufficient_docs:
             sorted_docs = sorted(
                 normalized_docs,
                 key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
                 reverse=True
             )[:5]
 
-            # 예시 기반 학습 방식 적용 (간소화)
+            # 🔥 개선: instruction_section 강화 (TASK 1 - 문서 번호 미표시 문제 해결)
             instruction_section = """
-## 📚 답변 형식 가이드
+**문서별 근거 비교 표 작성** (필수):
+- 표의 첫 번째 열('문서 번호' 열)에 반드시 [문서 1], [문서 2] 형식으로 번호 포함
+- 빈 셀 절대 금지 (문서 번호 열이 비어있으면 답변이 거부됩니다)
+- 아래 '검색된 참고 문서' 섹션에 표시된 문서 번호를 그대로 사용
+- 표의 각 행은 반드시 [문서 N] 형식으로 시작해야 합니다
 
-답변 시 다음 형식을 참고하세요:
-
-**출처 인용**: "민법 제543조에 따르면..." [문서 1]
-
-**문서별 근거 비교 표** (최소 3개 문서 포함):
+**올바른 예시**:
 | 문서 번호 | 출처 | 핵심 근거 |
 |-----------|------|----------|
-| [문서 1] | 민법 제543조 | 해지권 발생 원인 |
-| [문서 2] | 대법원 판결 | 이행지체 해제 |
+| [문서 1] | 민법 제750조 | 고의 또는 과실로 인한 위법행위로 타인에게 손해를 가한 자는 그 손해를 배상할 책임이 있다. |
+| [문서 2] | 민법 제537조 | 쌍무계약의 당사자 일방의 채무가 당사자쌍방의 책임없는 사유로 이행할 수 없게 된 때에는 채무자는 상대방의 이행을 청구하지 못한다. |
+| [문서 3] | 민법 제526조 | 계약의 해석은 당사자의 진의를 명확히 하여야 한다. |
 
-**답변 구조**: 직접 답변 → 문서별 근거 비교 → 결론 → 실무 조언
+**잘못된 예시 (절대 금지)**:
+| 문서 번호 | 출처 | 핵심 근거 |
+|-----------|------|----------|
+|  | 민법 제750조 | ... |  ← 문서 번호가 비어있음 (절대 금지)
+| [문서 2] | 민법 제537조 | ... |  ← 첫 번째 행이 비어있으면 안 됨
 
-**스타일**: 친근한 존댓말, 자연스러운 문단 흐름
+**중요**: 표를 작성할 때 반드시 각 행의 첫 번째 열에 [문서 N] 형식을 포함하세요. 빈 셀은 절대 허용되지 않습니다.
 """
         else:
-            instruction_section = """
-## 답변 작성 단계
-
-**STEP 1**: 질문에 대한 일반적인 법적 원칙 설명
-**STEP 2**: 관련 법령명과 조문번호 언급 (구체적 내용은 확인 필요 명시)
-**STEP 3**: 실무적 조언
-
-**스타일**: 친근한 존댓말
+            # 🔥 개선: instruction_section 간소화
+            if doc_count > 0 and doc_count < 3:
+                instruction_section = f"""
+⚠️ **중요**: 문서가 {doc_count}개로 부족하므로 **문서별 근거 비교 표를 생성하지 마세요**.
+"""
+            else:
+                instruction_section = """
+⚠️ **중요**: 문서가 없으므로 **문서별 근거 비교 표를 생성하지 마세요**.
 """
 
         # Citation 요구사항을 프롬프트 상단에 배치 (법률 RAG 핵심 원칙 통합 - 간소화)
-        citation_requirement = """
-⚠️ **필수 요구사항: 법률 RAG 답변 원칙**
-
-답변 생성 시 반드시 다음 핵심 원칙을 준수하세요:
-
-**원칙 1: 문서 외 내용 추론/생성 금지**
-- 검색된 문서에 없는 내용은 절대 추론하거나 생성하지 마세요
-- 문서에 없으면 "문서에는 해당 내용이 명시되어 있지 않습니다"라고 표현하세요
-
-**원칙 2: 문서 근거 필수 포함**
-- 모든 답변은 반드시 문서 근거를 포함해야 합니다
-- 주요 문단마다 문서 인용을 포함하세요
-- 최소 2개 이상의 문서를 인용하세요
-- 인용 형식: "[문서 N]에 따르면..." 또는 "민법 제XXX조에 따르면..." [문서 N]
-
-**원칙 3: 문서 기반 해석만 허용**
-- 문서 내용을 바탕으로 한 논리적 추론만 허용
-- 문서 외 일반 지식 사용 금지
-
-**원칙 4: 문서 유형 구분**
-- 법률 전문: "민법 제XXX조에 따르면..." [문서 N]
-- 판례 요약: "대법원 판결에 의하면..." [문서 N]
-- 해설: "[문서 N]의 해설에 따르면..." [문서 N]
-
-**원칙 5: 불확실성 명확히 표현**
-- 문서에 명시적 내용이 없으면 "문서에는 명시적 내용이 없습니다"라고 표현하세요
-
-**인용 형식 예시**:
-- ✅ "민법 제15조에 따르면..." [문서 1]
-- ✅ "[문서 1]에 따르면 민법 제15조는..." [문서 1]
-
-**검증 체크리스트**:
-- [ ] 모든 답변 내용이 문서에 근거를 두고 있는가?
-- [ ] 문서별 근거 비교 표를 포함했는가? (최소 3개 문서)
-- [ ] 최소 2개 이상의 문서를 명시적으로 인용했는가?
-- [ ] 결론에서 표의 내용을 종합하여 제시했는가?
-- [ ] 문서에 없는 내용을 추론하지 않았는가?
-- [ ] 불확실한 부분을 명확히 표현했는가?
-
+        # 🔥 CRITICAL: 문서 수에 따라 요구사항 조정
+        # TASK 13: 관련 없는 문서 인용 방지 강화
+        if has_sufficient_docs:
+            citation_requirement = """
+⚠️ **핵심 원칙**: 문서 기반 답변만 허용, 모든 인용에 [문서 N] 형식 사용, 문서 외 추론 금지, 최소 2개 문서 인용 필수
+⚠️ **중요**: 질문과 직접 관련된 문서만 인용하세요. 관련 없는 문서는 인용하지 마세요.
+---
+"""
+        elif doc_count > 0:
+            citation_requirement = f"""
+⚠️ **핵심 원칙**: 문서 기반 답변만 허용, 모든 인용에 [문서 N] 형식 사용, 문서 외 추론 금지
+⚠️ **중요**: 문서가 {doc_count}개로 부족하므로 **문서별 근거 비교 표를 생성하지 마세요**
+---
+"""
+        else:
+            citation_requirement = """
+⚠️ **핵심 원칙**: 일반 법적 원칙 기반 답변, 실무적 조언 중심
+⚠️ **중요**: 문서가 없으므로 **문서별 근거 비교 표를 생성하지 마세요**
 ---
 """
         
-        # 최종 프롬프트 구성 (지침 포함)
-        final_prompt_with_instructions = f"""{citation_requirement}{simplified_base}{documents_section}
+        # 🔥 개선: 질문-문서 불일치 경고를 최상단에 추가
+        mismatch_warning = ""
+        if normalized_docs:
+            mismatch_warning = self._check_query_document_mismatch(query, normalized_docs)
+        
+        # 🔥 개선: documents_section 포함 확인 로깅
+        documents_section_length = len(documents_section) if documents_section else 0
+        logger.info(
+            f"📋 [FINAL PROMPT BUILD] documents_section length: {documents_section_length}, "
+            f"mismatch_warning length: {len(mismatch_warning) if mismatch_warning else 0}, "
+            f"simplified_base length: {len(simplified_base) if simplified_base else 0}"
+        )
+        
+        # 최종 프롬프트 구성 (개선: 사용자 프롬프트 순서에 맞춰 조정)
+        # 순서: 필수 요구사항 → 질문-문서 불일치 경고 → Role → 답변 원칙 → 답변 프레임워크 → 특별 지침 → 금지 사항 → 출력 스타일 → 검색된 법률 문서 → 사용자 질문 → 답변 형식 가이드
+        # 🔥 개선: answer_generation_instructions 제거 (중복)
+        final_prompt_with_instructions = f"""{citation_requirement}
+        
+{mismatch_warning}{simplified_base}{documents_section}
 
 ---
 
@@ -1494,26 +1969,57 @@ class UnifiedPromptManager:
                         # 정규화된 문서 사용
                         normalized = self._normalize_document_fields(doc)
                         doc_content = normalized.get("content", "")
+                        
+                        # 🔥 개선: 원본 문서의 content도 확인 (정규화 전)
+                        original_content = doc.get("content", "") or doc.get("text", "")
+                        
+                        # 🔥 개선: 법률 정보가 있으면 law_name + article_no로도 확인
+                        law_name = normalized.get("law_name") or normalized.get("statute_name") or ""
+                        article_no = normalized.get("article_no") or normalized.get("article_number") or ""
+                        has_law_info = bool(law_name and article_no)
 
+                        found_in_prompt = False
+                        
+                        # 1. 정규화된 content 확인
                         if doc_content and len(doc_content) > 50:
-                            # 문서 내용 일부가 프롬프트에 포함되었는지 확인 (여러 위치 확인)
                             doc_preview = doc_content[:150].strip()
                             doc_mid = doc_content[len(doc_content)//2:len(doc_content)//2+100].strip() if len(doc_content) > 200 else ""
 
-                            found_in_prompt = False
                             if doc_preview and doc_preview in final_prompt:
                                 found_in_prompt = True
                                 doc_found_count += 1
                             elif doc_mid and doc_mid in final_prompt:
                                 found_in_prompt = True
                                 doc_found_count += 1
+                        
+                        # 2. 원본 content 확인 (정규화 전)
+                        if not found_in_prompt and original_content and len(original_content) > 50:
+                            original_preview = original_content[:150].strip()
+                            if original_preview and original_preview in final_prompt:
+                                found_in_prompt = True
+                                doc_found_count += 1
+                        
+                        # 3. 법률 정보로 확인 (law_name + article_no가 프롬프트에 있는지)
+                        if not found_in_prompt and has_law_info:
+                            # 프롬프트에 "[문서 N]" 형식이 있고, 해당 문서의 법률 정보가 포함되어 있는지 확인
+                            law_article_pattern = f"{law_name} 제{article_no}"
+                            # article_no 정규화 (앞의 0 제거)
+                            article_no_normalized = article_no.lstrip('0') if article_no else ""
+                            if article_no_normalized:
+                                law_article_pattern_normalized = f"{law_name} 제{article_no_normalized}"
+                                # 프롬프트에 법률 정보가 포함되어 있고, "[문서" 패턴도 있으면 문서가 포함된 것으로 간주
+                                if (law_article_pattern in final_prompt or law_article_pattern_normalized in final_prompt) and "[문서" in final_prompt:
+                                    found_in_prompt = True
+                                    doc_found_count += 1
 
-                            validation_result["validation_details"].append({
-                                "doc_index": idx,
-                                "source": normalized.get("source", "Unknown"),
-                                "content_length": len(doc_content),
-                                "found_in_prompt": found_in_prompt
-                            })
+                        validation_result["validation_details"].append({
+                            "doc_index": idx,
+                            "source": normalized.get("source", "Unknown"),
+                            "content_length": len(doc_content),
+                            "original_content_length": len(original_content),
+                            "has_law_info": has_law_info,
+                            "found_in_prompt": found_in_prompt
+                        })
 
                 validation_result["document_count_in_prompt"] = doc_found_count
 
@@ -1578,15 +2084,38 @@ class UnifiedPromptManager:
         content = self._clean_content(raw_content).strip()
         
         # 법률 정보가 있으면 content가 짧아도 포함 (개선: 10자 → 3자로 완화)
+        # TASK 3 개선: statute_name, type 필드도 확인
+        # 🔥 개선: type 필드 확인 로직 강화 (여러 위치에서 확인)
+        doc_type = (
+            doc.get("type") or 
+            doc.get("source_type") or 
+            (doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None) or
+            (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None)
+        )
+        # 🔥 개선: type 필드가 statute_article이면 무조건 has_law_info=True
+        # source_type도 확인 (검색 엔진에서 설정하는 필드)
+        source_type = doc.get("source_type") or (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None)
+        is_statute_type = (
+            doc_type in ["statute_article", "statute"] or
+            source_type in ["statute_article", "statute"] or
+            (isinstance(doc.get("metadata"), dict) and doc.get("metadata", {}).get("type") in ["statute_article", "statute"]) or
+            (isinstance(doc.get("metadata"), dict) and doc.get("metadata", {}).get("source_type") in ["statute_article", "statute"])
+        )
         has_law_info = bool(
             doc.get("law_name") or 
+            doc.get("statute_name") or  # TASK 3: statute_name 추가
             doc.get("article_no") or 
+            doc.get("article_number") or  # TASK 3: article_number 추가
             doc.get("case_name") or 
             doc.get("case_number") or
+            is_statute_type or  # 🔥 개선: type 필드 확인 (statute_article이면 무조건 True)
             (isinstance(doc.get("metadata"), dict) and (
                 doc.get("metadata", {}).get("law_name") or
+                doc.get("metadata", {}).get("statute_name") or  # TASK 3: metadata의 statute_name 추가
                 doc.get("metadata", {}).get("article_no") or
-                doc.get("metadata", {}).get("case_name")
+                doc.get("metadata", {}).get("article_number") or  # TASK 3: metadata의 article_number 추가
+                doc.get("metadata", {}).get("case_name") or
+                doc.get("metadata", {}).get("type") in ["statute_article", "statute"]  # TASK 3: metadata의 type 확인
             ))
         )
         
@@ -1601,7 +2130,8 @@ class UnifiedPromptManager:
         
         logger.debug(f"🔍 [DOC NORMALIZE] content length={len(content) if content else 0}, "
                     f"min_length={min_content_length}, has_law_info={has_law_info}, "
-                    f"has_multi_query_meta={has_multi_query_meta}")
+                    f"has_multi_query_meta={has_multi_query_meta}, doc_type={doc_type}, "
+                    f"is_statute_type={is_statute_type}, doc_keys={list(doc.keys())[:10]}")
         
         # 멀티 질의 결과는 content가 짧아도 포함 (최소 길이 완화)
         if has_multi_query_meta and content and len(content) < min_content_length:
@@ -1615,6 +2145,15 @@ class UnifiedPromptManager:
             if has_law_info:
                 # 법률 정보가 있으면 content가 없어도 법률 정보만으로 문서 생성
                 logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) but has law info, creating minimal doc")
+                # 법률 정보로 최소 content 생성
+                law_name = doc.get("law_name") or doc.get("statute_name") or ""
+                article_no = doc.get("article_no") or doc.get("article_number") or ""
+                if law_name and article_no:
+                    content = f"{law_name} 제{article_no}조"
+                elif law_name:
+                    content = law_name
+                elif not content or len(content.strip()) < 3:
+                    content = doc.get("source", "") or "법률 문서"
             elif has_multi_query_meta:
                 # 멀티 질의 결과는 최소 content 생성
                 logger.debug("✅ [DOC NORMALIZE] Multi-query result, creating minimal doc even with short content")
@@ -1662,7 +2201,17 @@ class UnifiedPromptManager:
         case_reasoning = self._extract_field(doc, metadata, ["reasoning", "case_reasoning", "판결요지"])
         
         # 문서 타입 판단 (DocumentType Enum 사용)
-        source_type = self._extract_field(doc, metadata, ["source_type", "type"])
+        # 🔥 개선: 원본 문서의 type 필드를 먼저 확인하고 복원
+        doc_type_str = self._extract_field(doc, metadata, ["type"])
+        
+        # 원본 문서의 type 필드가 있으면 우선 사용 (statute_article, precedent_content 등)
+        original_type = doc.get("type")
+        if original_type and original_type not in ["", "unknown", "other"]:
+            doc_type_str = str(original_type).strip()
+            logger.debug(f"✅ [DOC NORMALIZE] 원본 type 필드 사용: {doc_type_str}")
+        elif isinstance(metadata, dict) and metadata.get("type") and metadata.get("type") not in ["", "unknown", "other"]:
+            doc_type_str = str(metadata.get("type")).strip()
+            logger.debug(f"✅ [DOC NORMALIZE] metadata에서 type 복원: {doc_type_str}")
         
         # DocumentType Enum을 사용하여 타입 추론 (메타데이터 필드 기준)
         try:
@@ -1685,21 +2234,23 @@ class UnifiedPromptManager:
                 metadata["casenames"] = doc.get("casenames")
                 metadata["precedent_id"] = doc.get("precedent_id")
             
-            # DocumentType Enum을 사용하여 타입 추출
-            doc_type = DocumentType.from_metadata(doc)
-            doc_type_str = doc_type.value
-            
-            # source_type이 없거나 unknown이면 추론된 타입 사용
-            if not source_type or source_type == "unknown":
-                source_type = doc_type_str
+            # type이 없거나 unknown/other인 경우에만 DocumentType Enum으로 추론
+            if not doc_type_str or doc_type_str in ["unknown", "other"]:
+                # DocumentType Enum을 사용하여 타입 추출
+                doc_type = DocumentType.from_metadata(doc)
+                inferred_type = doc_type.value
+                
+                # 추론된 타입이 unknown이 아니면 사용
+                if inferred_type and inferred_type != "unknown":
+                    doc_type_str = inferred_type
+                    logger.debug(f"✅ [DOC NORMALIZE] DocumentType 추론: {doc_type_str}")
             
             # metadata에도 타입 정보 저장
             if not isinstance(metadata, dict):
                 metadata = {}
             metadata["type"] = doc_type_str
-            metadata["source_type"] = doc_type_str
         except Exception as e:
-            logger.debug(f"⚠️ [DOC NORMALIZE] DocumentType 추론 실패: {e}, source_type={source_type}")
+            logger.debug(f"⚠️ [DOC NORMALIZE] DocumentType 추론 실패: {e}, type={doc_type_str}")
 
         # 🔥 개선: 관련성 점수 추출 (메타데이터에서도 추출)
         relevance_score = float(
@@ -1730,7 +2281,7 @@ class UnifiedPromptManager:
             if court:
                 doc_title = f"{court} {doc_title}"
         else:
-            doc_title = source or doc.get("source_type", "법률 문서")
+            doc_title = source or doc.get("type", "법률 문서")
         
         # content가 없거나 짧아도 법률 정보가 있으면 최소 content 생성 (개선)
         if not content or len(content) < min_content_length:
@@ -1775,8 +2326,7 @@ class UnifiedPromptManager:
             "case_summary": str(case_summary).strip(),
             "case_holding": str(case_holding).strip(),
             "case_reasoning": str(case_reasoning).strip(),
-            "source_type": str(source_type).strip(),
-            "type": str(source_type).strip(),  # type 필드 추가 (DocumentType Enum 호환)
+            "type": str(doc_type_str).strip() if doc_type_str else "unknown",  # type 필드 (DocumentType Enum 호환)
             # 원본 메타데이터 보존 (멀티 질의 메타데이터 포함)
             "metadata": metadata
         }
@@ -1819,6 +2369,9 @@ class UnifiedPromptManager:
         documents_section += "다음 문서들은 질문에 대한 답변을 위해 검색된 관련 법률 정보입니다.\n\n"
 
         for idx, doc in enumerate(documents, 1):
+            # TASK 3: None 체크 추가
+            if not doc or not isinstance(doc, dict):
+                continue
             formatted_doc = self._format_document_for_prompt(doc, idx, is_high_priority=(idx <= 3))
             if formatted_doc:
                 documents_section += formatted_doc
@@ -1837,6 +2390,9 @@ class UnifiedPromptManager:
         import re
 
         for idx, doc in enumerate(documents[:10], 1):  # 최대 10개
+            # TASK 3: None 체크 추가
+            if not doc or not isinstance(doc, dict):
+                continue
             content = doc.get("content", "")
             source = doc.get("source", "Unknown")
             score = doc.get("relevance_score", 0.0)
@@ -1925,7 +2481,7 @@ class UnifiedPromptManager:
                             "case_summary": doc.get("case_summary", ""),
                             "case_holding": doc.get("case_holding", ""),
                             "case_reasoning": doc.get("case_reasoning", ""),
-                            "source_type": doc.get("source_type", "")
+                            "type": doc.get("type", "")
                         }
                         document_contents.append(doc_dict)
 
@@ -1954,42 +2510,23 @@ class UnifiedPromptManager:
 
         structured_parts = []
 
-        # 개선: 문서 내용을 가장 먼저 추가하여 경고 방지
-        # 질문 유형과 관계없이 document_contents가 있으면 항상 먼저 포함
-        if document_contents:
-            # 문서 내용을 질문 유형에 맞게 구조화하되, 항상 포함되도록 보장
-            sorted_docs = sorted(
-                document_contents,
-                key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
-                reverse=True
-            )
-            
-            high_relevance = [d for d in sorted_docs if d.get("score", 0.0) >= 0.65]
-            medium_relevance = [d for d in sorted_docs if 0.35 <= d.get("score", 0.0) < 0.65]
-
+        # 🔥 개선: document_contents가 있더라도 문서 섹션은 생성하지 않음
+        # 문서 섹션은 _build_documents_section()에서만 생성
         try:
+            # 🔥 개선: document_contents가 있더라도 문서 섹션은 생성하지 않음
+            # 문서 섹션은 _build_documents_section()에서만 생성
+            if document_contents:
+                # 문서 섹션 생성 제거
+                # 대신 간단한 참고 메시지만 추가
+                structured_parts.append(
+                    f"\n⚠️ 참고: {len(document_contents)}개의 관련 문서가 검색되었습니다. "
+                    f"문서 내용은 아래 '검색된 참고 문서' 섹션을 참고하세요.\n"
+                )
+            
             # 질문 유형별 구조화
             if question_type == QuestionType.PRECEDENT_SEARCH:
                 # 판례 정보 우선 배치
-                # 문서 내용 강제 포함 (가장 중요) - 이미 위에서 정렬됨
-                if document_contents:
-
-                    structured_parts.append("## 검색된 판례 문서\n")
-                    structured_parts.append("다음은 질문에 대한 답변을 위해 검색된 관련 판례 문서입니다. **반드시 이 문서들의 내용을 참고하여 답변하세요.**\n")
-
-                    if high_relevance:
-                        structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
-                        )
-
-                    if medium_relevance:
-                        structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
-                        )
-
-                    structured_parts.append("")
+                # 🔥 개선: 문서 섹션 생성 제거 (위에서 참고 메시지 추가됨)
 
                 if citations:
                     precedent_citations = [cit for cit in citations if isinstance(cit, dict) and cit.get("type") == "precedent"]
@@ -2027,23 +2564,7 @@ class UnifiedPromptManager:
                             structured_parts.append(f"- {cit.get('text', '')}")
                         structured_parts.append("")
 
-                # 문서 내용 강제 포함 - 이미 위에서 정렬됨
-                if document_contents:
-                    structured_parts.append("## 검색된 법률 조문 문서\n")
-
-                    if high_relevance:
-                        structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
-                        )
-
-                    if medium_relevance:
-                        structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
-                        )
-
-                    structured_parts.append("")
+                # 🔥 개선: 문서 섹션 생성 제거 (위에서 참고 메시지 추가됨)
 
                 if context_text:
                     structured_parts.append("## 조문 해설\n")
@@ -2064,23 +2585,7 @@ class UnifiedPromptManager:
                             structured_parts.append(f"- {cit.get('text', '')}")
                         structured_parts.append("")
 
-                # 문서 내용 강제 포함 - 이미 위에서 정렬됨
-                if document_contents:
-                    structured_parts.append("## 검색된 법률 문서 및 판례\n")
-
-                    if high_relevance:
-                        structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
-                        )
-
-                    if medium_relevance:
-                        structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
-                        )
-
-                    structured_parts.append("")
+                # 🔥 개선: 문서 섹션 생성 제거 (위에서 참고 메시지 추가됨)
 
                 if context_text:
                     structured_parts.append("## 법률 분석 및 실무 조언\n")
@@ -2091,24 +2596,7 @@ class UnifiedPromptManager:
                     for insight in insights[:3]:
                         structured_parts.append(f"- {insight}")
             else:
-                # 기본 구조: 문서 내용 우선 포함 - 이미 위에서 정렬됨
-                if document_contents:
-                    structured_parts.append("## 검색된 법률 문서\n")
-                    structured_parts.append("다음은 질문에 대한 답변을 위해 검색된 관련 법률 문서입니다.\n")
-
-                    if high_relevance:
-                        structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
-                        )
-
-                    if medium_relevance:
-                        structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        structured_parts.extend(
-                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
-                        )
-
-                    structured_parts.append("")
+                # 🔥 개선: 문서 섹션 생성 제거 (위에서 참고 메시지 추가됨)
 
                 if legal_references:
                     structured_parts.append("## 관련 법령\n")
@@ -2133,32 +2621,13 @@ class UnifiedPromptManager:
             has_doc_keywords = any(keyword in result_text.lower() for keyword in ["문서", "document", "content", "법률", "판례"])
             text_too_short = len(result_text) < 500
             
+            # 🔥 개선: 문서 섹션 강제 추가 로직 제거
+            # 문서 섹션은 _build_documents_section()에서만 생성하므로 여기서는 제거
             if has_doc_content and (text_too_short or not has_doc_keywords):
-                # 문서 내용이 추가되지 않은 경우 강제 추가
-                logger.warning(
-                    f"⚠️ [CONTEXT STRUCTURE] Document contents not properly included in structured context. "
-                    f"Force adding {len(document_contents)} documents. (text_len={len(result_text)}, has_keywords={has_doc_keywords})"
+                logger.info(
+                    f"ℹ️ [CONTEXT STRUCTURE] Document contents will be included in documents_section. "
+                    f"(text_len={len(result_text)}, has_keywords={has_doc_keywords})"
                 )
-                doc_section = "\n## 검색된 법률 문서\n"
-                doc_section += "다음은 질문에 대한 답변을 위해 검색된 관련 법률 문서입니다.\n\n"
-                
-                # 상위 5개 문서 추가 (관련도 순)
-                sorted_docs = sorted(
-                    document_contents,
-                    key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
-                    reverse=True
-                )
-                
-                for idx, doc in enumerate(sorted_docs[:5], 1):
-                    content = doc.get("content", "")[:2000] if len(doc.get("content", "")) > 2000 else doc.get("content", "")
-                    if content and len(content.strip()) > 10:
-                        doc_source = doc.get("source", "Unknown")
-                        doc_score = doc.get("score", 0.0)
-                        # 문서 형식화
-                        doc_section += f"\n### 문서 {idx}: {doc_source} (관련도: {doc_score:.2f})\n{content}\n---\n"
-                
-                # 문서 섹션을 앞쪽에 추가
-                result_text = doc_section + "\n" + result_text
 
             return result_text
 
@@ -2855,11 +3324,13 @@ class UnifiedPromptManager:
 """
 
     def _get_law_inquiry_template(self) -> str:
-        """법령 질의 템플릿"""
+        """법령 질의 템플릿 (개선: 상세화)"""
         return """
 ## 법령 질의 지침
 - 해당 법률명과 조문을 정확히 표기: [법령: 법률명 제OO조].
 - 조문 요지와 적용 범위를 함께 설명하세요.
+- 관련 판례가 있으면 함께 인용하세요.
+- 실무 적용 시 주의사항을 명시하세요.
 """
 
     def _get_legal_advice_template(self) -> str:
@@ -3120,30 +3591,99 @@ class UnifiedPromptManager:
                 doc.get("metadata", {}).get("sub_query")
             )
             
+            # TASK 3: 법률 정보 확인
+            doc_type = doc.get("type") or doc.get("source_type") or (doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None)
+            has_law_info = bool(
+                doc.get("law_name") or 
+                doc.get("statute_name") or
+                doc.get("article_no") or 
+                doc.get("article_number") or
+                doc_type in ["statute_article", "statute"] or
+                (isinstance(doc.get("metadata"), dict) and (
+                    doc.get("metadata", {}).get("law_name") or
+                    doc.get("metadata", {}).get("statute_name") or
+                    doc.get("metadata", {}).get("article_no") or
+                    doc.get("metadata", {}).get("type") in ["statute_article", "statute"]
+                ))
+            )
+            
             # content 정리
             content = doc.get("content", "").strip()
             
-            # 멀티 질의 결과는 content 길이 체크 완화
-            min_content_length = self.MIN_CONTENT_LENGTH_WITH_LAW_INFO if has_multi_query else self.MIN_CONTENT_LENGTH
+            # 멀티 질의 결과 또는 법률 정보가 있으면 content 길이 체크 완화
+            min_content_length = self.MIN_CONTENT_LENGTH_WITH_LAW_INFO if (has_multi_query or has_law_info) else self.MIN_CONTENT_LENGTH
             
             if not content or len(content) < min_content_length:
-                if has_multi_query:
-                    # 멀티 질의 결과는 source로 content 보완
-                    source = doc.get("source", "") or doc.get("title", "")
-                    if source:
-                        content = source
-                        doc["content"] = content
-                        logger.debug(f"✅ [OPTIMIZE] Multi-query doc: using source as content: {source[:50]}")
+                if has_multi_query or has_law_info:
+                    # 🔥 개선: 법률 정보가 있으면 법률 정보를 포함한 고유한 content 생성
+                    if has_law_info:
+                        law_name = doc.get("law_name") or doc.get("statute_name") or ""
+                        article_no = doc.get("article_no") or doc.get("article_number") or ""
+                        if law_name and article_no:
+                            # 법률 정보로 고유한 content 생성 (중복 방지)
+                            content = f"{law_name} 제{article_no}조"
+                            # 원본 content가 있으면 추가
+                            original_content = doc.get("content", "").strip()
+                            if original_content:
+                                content = f"{content}: {original_content}"
+                            doc["content"] = content
+                            logger.debug(f"✅ [OPTIMIZE] Created unique content from law info: {content[:50]}")
+                        else:
+                            # 법률 정보가 불완전하면 source + 원본 content 조합
+                            source = doc.get("source", "") or doc.get("title", "")
+                            original_content = doc.get("content", "").strip()
+                            if source and original_content:
+                                content = f"{source}: {original_content}"
+                            elif source:
+                                content = source
+                            elif original_content:
+                                content = original_content
+                            else:
+                                continue
+                            doc["content"] = content
+                            logger.debug(f"✅ [OPTIMIZE] Doc with law-info: using combined content: {content[:50]}")
                     else:
-                        continue
+                        # 멀티 질의 결과만 있는 경우
+                        source = doc.get("source", "") or doc.get("title", "")
+                        original_content = doc.get("content", "").strip()
+                        if source and original_content:
+                            content = f"{source}: {original_content}"
+                        elif source:
+                            content = source
+                        elif original_content:
+                            content = original_content
+                        else:
+                            continue
+                        doc["content"] = content
+                        logger.debug(f"✅ [OPTIMIZE] Doc with multi-query: using combined content: {content[:50]}")
                 else:
                     continue
             
-            # 중복 체크 (내용 기반)
-            content_hash = hash(content[:200])  # 처음 200자로 중복 체크
-            if content_hash in seen_contents:
-                continue
-            seen_contents.add(content_hash)
+            # 🔥 개선: 중복 체크 시 법률 정보도 함께 고려 (article_no가 다르면 다른 문서로 간주)
+            # 법률 정보가 있으면 law_name + article_no로 중복 체크
+            if has_law_info:
+                law_name = doc.get("law_name") or doc.get("statute_name") or ""
+                article_no = doc.get("article_no") or doc.get("article_number") or ""
+                if law_name and article_no:
+                    unique_key = f"{law_name}_{article_no}"
+                    if unique_key in seen_contents:
+                        logger.debug(f"⚠️ [OPTIMIZE] Duplicate document removed (law_info): {unique_key}")
+                        continue
+                    seen_contents.add(unique_key)
+                else:
+                    # 법률 정보가 불완전하면 content 해시 사용
+                    content_hash = hash(content[:200])
+                    if content_hash in seen_contents:
+                        logger.debug(f"⚠️ [OPTIMIZE] Duplicate document removed (content_hash): {content_hash}")
+                        continue
+                    seen_contents.add(content_hash)
+            else:
+                # 법률 정보가 없으면 content 해시로 중복 체크
+                content_hash = hash(content[:200])
+                if content_hash in seen_contents:
+                    logger.debug(f"⚠️ [OPTIMIZE] Duplicate document removed (content_hash): {content_hash}")
+                    continue
+                seen_contents.add(content_hash)
             
             optimized_docs.append(doc)
         
@@ -3241,65 +3781,178 @@ class UnifiedPromptManager:
                 return None
         return self._summary_agent
     
+    def _extract_article_numbers_from_query(self, query: str) -> List[str]:
+        """질문에서 조문 번호 추출 (예: "민법 제750조" -> ["750"])"""
+        import re
+        # "제XXX조" 패턴 추출
+        patterns = [
+            r'제\s*(\d+)\s*조',  # 제750조
+            r'(\d+)\s*조',  # 750조
+        ]
+        article_numbers = []
+        for pattern in patterns:
+            matches = re.findall(pattern, query)
+            article_numbers.extend(matches)
+        return list(set(article_numbers))  # 중복 제거
+    
+    def _check_query_document_mismatch(self, query: str, documents: List[Dict[str, Any]]) -> str:
+        """질문-문서 불일치 검사 - 개선된 매칭 로직"""
+        # 질문에서 조문 번호 추출
+        query_articles = self._extract_article_numbers_from_query(query)
+        if not query_articles:
+            return ""
+        
+        # 문서에서 조문 번호 추출 (개선)
+        doc_articles = set()
+        for doc in documents:
+            # article_no 필드 확인 (다양한 형식 지원)
+            article_no = doc.get("article_no", "")
+            if article_no:
+                article_no_str = str(article_no).strip()
+                # 🔥 개선: "046800" 형식 처리 (마지막 3자리 또는 전체에서 앞의 0 제거)
+                # "046800" = "468" 조문을 의미할 수 있음
+                if len(article_no_str) >= 3:
+                    # 마지막 3자리 시도
+                    last_three = article_no_str[-3:].lstrip('0')
+                    if last_three:
+                        doc_articles.add(last_three)
+                    # 전체에서 앞의 0 제거 시도
+                    all_clean = article_no_str.lstrip('0')
+                    if all_clean and len(all_clean) <= 4:  # 조문 번호는 보통 4자리 이하
+                        doc_articles.add(all_clean)
+                else:
+                    # 짧은 형식은 그대로 사용
+                    article_no_clean = article_no_str.lstrip('0')
+                    if article_no_clean:
+                        doc_articles.add(article_no_clean)
+            
+            # content에서도 추출
+            content = doc.get("content", "") or doc.get("text", "")
+            if content:
+                import re
+                # "제750조", "제 750 조" 등 다양한 형식 지원
+                matches = re.findall(r'제\s*(\d+)\s*조', content[:1000])
+                doc_articles.update([m.lstrip('0') for m in matches if m])
+        
+        # 불일치 확인
+        missing_articles = []
+        for q_article in query_articles:
+            q_article_clean = q_article.lstrip('0')
+            found = any(
+                q_article_clean == d_article.lstrip('0') 
+                for d_article in doc_articles
+            )
+            if not found:
+                missing_articles.append(q_article)
+        
+        # 경고 메시지 생성
+        if missing_articles:
+            articles_str = ", ".join([f"제{art}조" for art in missing_articles])
+            logger.info(f"⚠️ [QUERY-DOCUMENT MISMATCH] 질문 조문 {articles_str}이 문서에 없음")
+            return f"""
+⚠️ **중요 경고: 질문-문서 불일치**
+
+질문에서 언급된 '{articles_str}'의 직접적인 내용이 검색된 문서에 포함되어 있지 않습니다.
+
+**권장 사항**:
+- 제공된 관련 조문을 참고하여 답변하세요
+- 해당 조문의 직접적인 내용은 문서에 없으므로, 일반적인 법적 원칙을 바탕으로 설명하세요
+- 불확실한 부분은 명확히 표시하세요
+
+---
+
+"""
+        return ""
+    
     def _build_documents_section(self, sorted_docs: List[Dict[str, Any]], query: str) -> str:
-        """문서 섹션 생성 (Summary-First 방식, 에이전트 사용)"""
+        """문서 섹션 생성 - 문서 ID 기반 일관된 번호 부여"""
         if not sorted_docs:
             return "\n\n## 검색된 법률 문서\n\n검색된 문서가 없습니다.\n"
         
-        # 1. 문서 분류 (요약 필요 vs 전체 포함)
-        docs_for_summary = []
-        docs_for_full = []
+        # 🔥 개선: 문서 ID 기반 번호 매핑 생성
+        doc_id_to_number = {}
+        for idx, doc in enumerate(sorted_docs, 1):
+            doc_id = (
+                doc.get("id") or 
+                doc.get("chunk_id") or 
+                doc.get("document_id") or
+                f"doc_{idx}"  # 폴백
+            )
+            doc_id_to_number[doc_id] = idx
         
-        for doc in sorted_docs:
-            if self._should_use_summary(doc):
-                docs_for_summary.append(doc)
+        # 🔥 개선: 질문-문서 불일치 경고 추가
+        mismatch_warning = self._check_query_document_mismatch(query, sorted_docs)
+        
+        # 🔥 개선: 통합된 단일 문서 섹션 생성 (중복 제거)
+        documents_section = "\n\n## 검색된 참고 문서\n\n"
+        documents_section += f"다음 {len(sorted_docs)}개의 문서를 반드시 참고하여 답변하세요. 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
+        # 🔥 개선: documents_section의 중복 지시 제거 (instruction_section에 이미 포함)
+        documents_section += "**⚠️ 문서 번호 사용**: 답변에서 문서를 언급할 때는 `[문서 1]`, `[문서 2]` 형식을 사용하세요.\n\n"
+        
+        # 질문-문서 불일치 경고 추가
+        if mismatch_warning:
+            documents_section += mismatch_warning
+        
+        # 문서별로 통합된 정보 표시 (일관된 번호 사용)
+        for idx, doc in enumerate(sorted_docs, 1):
+            # 🔥 개선: 문서 ID 기반 일관된 번호 사용
+            doc_id = (
+                doc.get("id") or 
+                doc.get("chunk_id") or 
+                doc.get("document_id") or
+                f"doc_{idx}"
+            )
+            doc_number = doc_id_to_number.get(doc_id, idx)
+            doc_title, _ = self._get_document_title_and_max_length(doc, idx)
+            
+            # 관련도 점수 추출
+            relevance_score = float(
+                doc.get("relevance_score", 0.0) or
+                doc.get("score", 0.0) or
+                doc.get("final_weighted_score", 0.0) or
+                0.0
+            )
+            
+            # 문서 내용 추출
+            content = doc.get("content", "") or doc.get("text", "")
+            
+            # 요약 정보가 있으면 사용
+            summary_data = doc.get("summary_data")
+            has_summary = False
+            if summary_data and isinstance(summary_data, dict):
+                summary_text = summary_data.get("summary", "")
+                key_points = summary_data.get("key_points", [])
+                if summary_text or key_points:
+                    has_summary = True
+            
+            # 문서 제목 및 관련도 (일관된 번호 사용)
+            documents_section += f"**[문서 {doc_number}]** {doc_title} (관련도: {relevance_score:.2f})\n\n"
+            
+            # 요약이 있으면 요약 표시, 없으면 전체 내용 표시
+            if has_summary:
+                if summary_text:
+                    documents_section += f"**요약**: {summary_text}\n\n"
+                if key_points and isinstance(key_points, list):
+                    key_points_str = "\n".join([f"- {kp}" for kp in key_points[:3]])
+                    if key_points_str:
+                        documents_section += f"**핵심 쟁점**:\n{key_points_str}\n\n"
+            
+            # 전체 내용 표시 (요약이 있어도 핵심 내용 포함)
+            if content:
+                # 내용이 너무 길면 축약 (요약이 있으면 더 짧게)
+                max_length = 2000 if has_summary else 3000
+                if len(content) > max_length:
+                    # 질문과 관련된 부분 우선 추출 시도
+                    content_preview = self._smart_truncate_document(content, max_length, query)
+                    documents_section += f"**내용**:\n{content_preview}\n\n"
+                else:
+                    documents_section += f"**내용**:\n{content}\n\n"
             else:
-                docs_for_full.append(doc)
+                documents_section += "**내용**: (내용 없음)\n\n"
+            
+            documents_section += "---\n\n"
         
-        # 2. 요약 생성 (에이전트 사용)
-        summaries = []
-        summary_agent = self._get_summary_agent()
-        if summary_agent and docs_for_summary:
-            try:
-                logger.info(f"[UnifiedPromptManager] 요약 생성 시작: 문서 수={len(docs_for_summary)}, use_llm=True, llm_fast={self.llm_fast is not None}")
-                summaries = summary_agent.summarize_batch(
-                    docs_for_summary,
-                    query,
-                    max_summary_length=self.MAX_SUMMARY_LENGTH,
-                    use_llm=True  # LLM 기반 요약 사용 (gemini-2.5-flash-lite)
-                )
-                logger.info(f"[UnifiedPromptManager] 요약 생성 완료: 요약 수={len(summaries)}")
-            except Exception as e:
-                logger.warning(f"요약 생성 실패: {e}, 전체 문서 사용")
-                docs_for_full.extend(docs_for_summary)
-                docs_for_summary = []
-                summaries = []
-        
-        # 3. Summary 섹션 생성
-        summary_section = self._build_summary_section(summaries, docs_for_summary, sorted_docs, query)
-        
-        # 4. Detailed Extracts 섹션 생성 (상위 문서만)
-        detailed_section = self._build_detailed_section(
-            docs_for_summary[:self.MAX_DETAILED_EXTRACTS],
-            sorted_docs,
-            query
-        )
-        
-        # 5. 전체 문서 섹션 (요약 불필요한 문서)
-        full_docs_section = self._build_full_docs_section(docs_for_full, sorted_docs, query)
-        
-        # 6. 통합
-        documents_section = "\n\n## 검색된 법률 문서\n\n"
-        documents_section += "위 문서들을 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
-        
-        if summary_section:
-            documents_section += summary_section
-        
-        if detailed_section:
-            documents_section += detailed_section
-        
-        if full_docs_section:
-            documents_section += full_docs_section
+        # 🔥 개선: documents_section 끝의 중복 지시 제거 (instruction_section에 이미 포함)
         
         return documents_section
     
@@ -3392,6 +4045,226 @@ class UnifiedPromptManager:
         else:
             return 'general'
     
+    def _classify_document_type(self, doc: Dict[str, Any]) -> str:
+        """
+        문서 타입 분류 (법률/판례/기타)
+        🔥 개선: 메타데이터 손실 후에도 content 기반 추론 지원
+        
+        Returns:
+            "statute", "precedent", "other"
+        """
+        if not isinstance(doc, dict):
+            return "other"
+        
+        # 1단계: 명시적 타입 필드 확인
+        doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+        metadata = doc.get("metadata", {})
+        
+        if isinstance(metadata, dict):
+            metadata_type = metadata.get("type", "").lower() if metadata.get("type") else ""
+        else:
+            metadata_type = ""
+        
+        # 2단계: 메타데이터 필드 확인
+        # 법률 조문 판별 (메타데이터 필드)
+        has_statute_fields = (
+            doc.get("law_name") or doc.get("statute_name") or 
+            doc.get("article_no") or doc.get("article_number") or
+            doc.get("statute_id") or doc.get("statute_abbrv")
+        )
+        
+        # 판례 판별 (메타데이터 필드)
+        has_precedent_fields = (
+            doc.get("case_id") or doc.get("court") or doc.get("ccourt") or
+            doc.get("precedent_id") or doc.get("casenames") or
+            doc.get("case_name") or doc.get("case_number") or
+            doc.get("decision_date")
+        )
+        
+        # 3단계: content 기반 추론 (메타데이터 손실 시 폴백)
+        content = doc.get("content", "") or doc.get("text", "")
+        source = doc.get("source", "")
+        source_lower = source.lower() if source else ""
+        
+        # 🔥 개선: 판례 패턴을 우선 확인 (판례가 법률 조문 패턴도 포함할 수 있음)
+        # 판례 패턴 (content 기반) - 우선 확인
+        precedent_patterns = [
+            r'【원고',  # 【원고, 피상고인】
+            r'【피고',  # 【피고, 상고인】
+            r'【청구인',  # 【청구인, 재항고인】
+            r'【사건본인',  # 【사건본인】
+            r'대법원.*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}',  # 대법원 2023. 9. 27.
+            r'고등법원.*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}',
+            r'지방법원.*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}',
+            r'선고.*판결',  # 선고 2021다255655 판결
+            r'선고.*결정',  # 선고 2017브10 결정
+            r'원심판결',  # 【원심판결】
+            r'원심결정',  # 【원심결정】
+            r'소송대리인',  # 소송대리인 변호사
+            r'담당변호사',  # 담당변호사 이종희
+            r'사건번호',  # 사건번호
+            r'사건.*\d+',  # 사건 2015르3081
+            r'판결 참조',  # 판결 참조
+            r'판례',  # 판례
+        ]
+        
+        # 법률 조문 패턴 (content 기반) - 판례 패턴이 없을 때만 확인
+        statute_patterns = [
+            r'제\d+조\s*제\d+항',  # 제750조 제1항 (구체적인 조문 형식)
+            r'제\d+조\s*제\d+호',  # 제750조 제1호
+            r'법률.*제\d+조.*제\d+항',  # 법률 제750조 제1항
+            r'민법.*제\d+조.*제\d+항',  # 민법 제750조 제1항
+            r'형법.*제\d+조.*제\d+항',  # 형법 제750조 제1항
+            r'상법.*제\d+조.*제\d+항',  # 상법 제750조 제1항
+        ]
+        
+        has_statute_content = False
+        has_precedent_content = False
+        
+        if content:
+            # 🔥 개선: 판례 패턴을 먼저 확인 (판례가 법률 조문 패턴도 포함할 수 있음)
+            for pattern in precedent_patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    has_precedent_content = True
+                    break
+            
+            # 판례 패턴이 없을 때만 법률 조문 패턴 확인
+            if not has_precedent_content:
+                for pattern in statute_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        has_statute_content = True
+                        break
+        
+        # source 필드 기반 추론
+        has_statute_source = (
+            "statute" in source_lower or
+            "법령" in source or
+            "조문" in source
+        )
+        
+        has_precedent_source = (
+            "precedent" in source_lower or
+            "판례" in source or
+            "판결" in source or
+            "대법원" in source or
+            "법원" in source
+        )
+        
+        # 4단계: 최종 판별 (우선순위: 명시적 타입 > 메타데이터 필드 > content 기반 > source 기반)
+        is_statute = (
+            "statute" in doc_type or
+            "statute" in metadata_type or
+            has_statute_fields or
+            has_statute_content or
+            has_statute_source
+        )
+        
+        is_precedent = (
+            "precedent" in doc_type or
+            "precedent" in metadata_type or
+            has_precedent_fields or
+            has_precedent_content or
+            has_precedent_source
+        )
+        
+        # 로깅 (디버깅용)
+        if doc_type == "unknown" or not doc_type:
+            if is_statute or is_precedent:
+                logger.debug(
+                    f"🔍 [DOC TYPE INFERENCE] Content 기반 추론: "
+                    f"type={doc_type}, inferred={'statute' if is_statute else 'precedent'}, "
+                    f"has_fields={has_statute_fields or has_precedent_fields}, "
+                    f"has_content={has_statute_content or has_precedent_content}, "
+                    f"has_source={has_statute_source or has_precedent_source}"
+                )
+        
+        if is_statute:
+            return "statute"
+        elif is_precedent:
+            return "precedent"
+        else:
+            return "other"
+    
+    def _build_reference_list_section(
+        self,
+        sorted_docs: List[Dict[str, Any]],
+        query: str
+    ) -> str:
+        """참고 문서 목록 섹션 생성 (개선: 문서 수 명시, 관련성 점수 표시)"""
+        if not sorted_docs:
+            return ""
+        
+        section = "## 참고 문서 목록\n\n"
+        section += f"다음 {len(sorted_docs)}개의 문서를 반드시 참고하여 답변을 생성하세요.\n"
+        section += "각 문서는 관련성 점수와 핵심 내용이 표시되어 있습니다.\n\n"
+        
+        for idx, doc in enumerate(sorted_docs, 1):
+            doc_title, _ = self._get_document_title_and_max_length(doc, idx)
+            
+            # 관련도 점수 추출
+            relevance_score = float(
+                doc.get("relevance_score", 0.0) or
+                doc.get("score", 0.0) or
+                doc.get("final_weighted_score", 0.0) or
+                0.0
+            )
+            
+            # 핵심 내용 추출 (요약이 있으면 사용, 없으면 content 일부)
+            content = doc.get("content", "") or doc.get("text", "")
+            summary_data = doc.get("summary_data")
+            if summary_data and isinstance(summary_data, dict):
+                key_content = summary_data.get("summary", "") or summary_data.get("key_points", [])
+                if isinstance(key_content, list):
+                    key_content = " ".join(key_content[:2]) if key_content else ""
+            else:
+                key_content = content[:200] + "..." if len(content) > 200 else content
+            
+            section += f"### 문서 {idx}: {doc_title} (관련성 점수: {relevance_score:.2f})\n\n"
+            section += f"**핵심 내용:**\n{key_content}\n\n"
+            section += "---\n\n"
+        
+        return section
+    
+    def _build_reference_content_section(
+        self,
+        sorted_docs: List[Dict[str, Any]],
+        query: str
+    ) -> str:
+        """참고 문서 내용 섹션 생성 (전체 문서 내용 표시)"""
+        if not sorted_docs:
+            return ""
+        
+        section = "## 참고 문서 내용\n\n"
+        section += "다음은 각 문서의 전체 내용입니다.\n\n"
+        
+        for idx, doc in enumerate(sorted_docs, 1):
+            doc_title, _ = self._get_document_title_and_max_length(doc, idx)
+            
+            # 관련도 점수 추출
+            relevance_score = float(
+                doc.get("relevance_score", 0.0) or
+                doc.get("score", 0.0) or
+                doc.get("final_weighted_score", 0.0) or
+                0.0
+            )
+            
+            content = doc.get("content", "") or doc.get("text", "")
+            
+            section += f"### 문서 {idx}: {doc_title} (ID: {doc.get('id', doc.get('chunk_id', doc.get('document_id', 'N/A')))}) (관련도: {relevance_score:.2f})\n\n"
+            
+            if content:
+                # 내용이 너무 길면 축약
+                max_length = 3000
+                if len(content) > max_length:
+                    content = content[:max_length] + "\n\n...(내용 생략)..."
+                section += f"{content}\n\n"
+            else:
+                section += "(내용 없음)\n\n"
+            
+            section += "---\n\n"
+        
+        return section
+    
     def _build_summary_section(
         self, 
         summaries: List[Dict[str, Any]], 
@@ -3399,7 +4272,7 @@ class UnifiedPromptManager:
         all_docs: List[Dict[str, Any]],
         query: str
     ) -> str:
-        """Summary 섹션 생성"""
+        """Summary 섹션 생성 (개선: 질문 연관성, 핵심 쟁점 형식 통일)"""
         if not summaries or not original_docs:
             return ""
         
@@ -3423,27 +4296,28 @@ class UnifiedPromptManager:
                 0.0
             )
             
-            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f})\n"
+            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f})\n\n"
             
             # 요약 내용
             summary_text = summary.get('summary', '')
             if summary_text:
-                section += f"- 요약: {summary_text}\n"
+                section += f"**요약:**\n{summary_text}\n\n"
             
-            # 핵심 포인트
+            # 핵심 쟁점 (개선: 형식 통일)
             key_points = summary.get('key_points', [])
             if key_points:
-                section += "- 핵심 쟁점:\n"
+                section += "**핵심 쟁점:**\n"
                 for point in key_points[:3]:  # 최대 3개
                     if isinstance(point, str) and point.strip():
-                        section += f"  • {point[:150]}\n"
+                        section += f"  • {point[:200]}\n"
+                section += "\n"
             
-            # 연관성
+            # 질문 연관성 (개선: 형식 통일)
             relevance_notes = summary.get('relevance_notes', '')
             if relevance_notes:
-                section += f"- 질문 연관성: {relevance_notes}\n"
+                section += f"**질문 연관성:**\n{relevance_notes}\n\n"
             
-            section += "\n"
+            section += "---\n\n"
         
         return section
     
@@ -3452,11 +4326,15 @@ class UnifiedPromptManager:
         docs: List[Dict[str, Any]], 
         all_docs: List[Dict[str, Any]],
         query: str,
-        max_docs: int = 3
+        max_docs: int = 3,
+        summary_map: dict = None
     ) -> str:
-        """Detailed Extracts 섹션 생성"""
+        """Detailed Extracts 섹션 생성 (개선: 핵심 내용 서브섹션, 문서 정보 추가)"""
         if not docs:
             return ""
+        
+        if summary_map is None:
+            summary_map = {}
         
         section = "### [Detailed Extracts]\n\n"
         section += "다음은 질문과 직접 관련된 문서의 상세 내용입니다.\n\n"
@@ -3478,22 +4356,123 @@ class UnifiedPromptManager:
                 0.0
             )
             
-            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f}) 상세 내용:\n"
+            # 전체 문서 길이 계산
+            full_content = doc.get("content", "") or doc.get("text", "")
+            full_length = len(full_content) if full_content else 0
             
-            # 질문과 관련된 부분만 추출
-            detailed_content = self._extract_detailed_relevant_parts(
-                doc, query, self.MAX_DETAILED_EXTRACT_LENGTH
-            )
+            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f})\n\n"
             
-            if detailed_content:
-                section += f"{detailed_content}\n\n"
+            # 🔥 개선: 요약 결과가 있으면 우선 사용
+            summary = None
+            doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+            if doc_id and doc_id in summary_map:
+                summary = summary_map[doc_id]
             else:
-                # 폴백: 스마트 축약
-                content = doc.get("content", "").strip()
-                if content:
-                    max_length = min(self.MAX_DETAILED_EXTRACT_LENGTH, len(content))
-                    content = self._smart_truncate_document(content, max_length, query)
-                    section += f"{content}\n\n"
+                # content 기반 매핑 시도
+                if full_content:
+                    import hashlib
+                    content_hash = str(hashlib.md5(full_content[:200].encode('utf-8')).hexdigest())
+                    if content_hash in summary_map:
+                        summary = summary_map[content_hash]
+            
+            # 핵심 내용 (질문과 직접 관련된 부분) 서브섹션 추가
+            section += "**핵심 내용 (질문과 직접 관련된 부분):**\n\n"
+            
+            # 변수 초기화
+            extracted_length = 0
+            
+            if summary and isinstance(summary, dict):
+                # 요약 결과 사용
+                summary_text = summary.get('summary', '')
+                key_points = summary.get('key_points', [])
+                
+                if summary_text:
+                    section += f"{summary_text}\n\n"
+                    extracted_length = len(summary_text)
+                
+                if key_points:
+                    section += "**핵심 쟁점:**\n"
+                    for point in key_points[:3]:  # 최대 3개
+                        if isinstance(point, str) and point.strip():
+                            section += f"  • {point[:200]}\n"
+                    section += "\n"
+            else:
+                # 요약이 없으면 기존 로직 사용
+                detailed_content = self._extract_detailed_relevant_parts(
+                    doc, query, self.MAX_DETAILED_EXTRACT_LENGTH
+                )
+                
+                if detailed_content:
+                    section += f"{detailed_content}\n\n"
+                    extracted_length = len(detailed_content)
+                else:
+                    # 폴백: 스마트 축약
+                    if full_content:
+                        max_length = min(self.MAX_DETAILED_EXTRACT_LENGTH, len(full_content))
+                        content = self._smart_truncate_document(full_content, max_length, query)
+                        section += f"{content}\n\n"
+                        extracted_length = len(content)
+            
+            # 🔥 개선: 문서 정보 간소화 (핵심 정보만 포함)
+            # 문서 정보는 디버깅용이므로 프로덕션에서는 제거하거나 최소화
+            import os
+            SHOW_DOCUMENT_INFO = os.getenv("PROMPT_SHOW_DOCUMENT_INFO", "false").lower() == "true"
+            
+            if SHOW_DOCUMENT_INFO:
+                # 디버깅 모드: 상세 정보 표시
+                if not extracted_length and full_content:
+                    extracted_length = min(self.MAX_DETAILED_EXTRACT_LENGTH, len(full_content))
+                
+                section += "**문서 정보:**\n"
+                section += f"- 전체 문서 길이: {full_length:,}자\n"
+                section += f"- 추출된 핵심 내용: {extracted_length:,}자\n"
+                if full_length > 0:
+                    reduction_ratio = (1 - extracted_length / full_length) * 100 if extracted_length < full_length else 0
+                    section += f"- 축약 비율: {reduction_ratio:.1f}%\n"
+                section += "\n---\n\n"
+            else:
+                # 프로덕션 모드: 간소화 (구분선만)
+                section += "\n---\n\n"
+        
+        return section
+    
+    def _build_statute_explanation_section(
+        self,
+        sorted_docs: List[Dict[str, Any]],
+        query: str
+    ) -> str:
+        """조문 해설 섹션 생성 (법령 조문이 있는 경우)"""
+        if not sorted_docs:
+            return ""
+        
+        # 법령 조문 문서만 필터링
+        statute_docs = []
+        for doc in sorted_docs:
+            if self._classify_document_type(doc) == "statute":
+                statute_docs.append(doc)
+        
+        if not statute_docs:
+            return ""
+        
+        section = "## 조문 해설\n\n"
+        section += "다음은 검색된 법령 조문에 대한 해설입니다.\n\n"
+        
+        for idx, doc in enumerate(statute_docs, 1):
+            doc_title, _ = self._get_document_title_and_max_length(doc, idx)
+            content = doc.get("content", "") or doc.get("text", "")
+            
+            section += f"### {doc_title}\n\n"
+            
+            if content:
+                # 내용이 너무 길면 축약
+                max_length = 2000
+                if len(content) > max_length:
+                    content = content[:max_length] + "\n\n...(내용 생략)..."
+                section += f"{content}\n\n"
+            else:
+                section += "(내용 없음)\n\n"
+            
+            section += "---\n\n"
         
         return section
     
@@ -3534,6 +4513,98 @@ class UnifiedPromptManager:
             section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f})\n{content}\n\n"
         
         return section
+    
+    def _summarize_precedent(
+        self,
+        doc: Dict[str, Any],
+        query: str,
+        llm_fast: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
+        """판례 문서 요약 (LLM 사용)
+        
+        Args:
+            doc: 판례 문서 딕셔너리
+            query: 사용자 질문
+            llm_fast: LLM 인스턴스 (없으면 self.llm_fast 사용)
+        
+        Returns:
+            요약 결과 딕셔너리 (summary, key_points, relevance_notes) 또는 None
+        """
+        try:
+            doc_content = doc.get("content", "") or doc.get("text", "")
+            if not doc_content or len(doc_content.strip()) < 100:
+                logger.warning(f"⚠️ [PRECEDENT SUMMARY] 문서 내용이 너무 짧습니다: {len(doc_content)}자")
+                return None
+            
+            # LLM 인스턴스 확인
+            llm = llm_fast or self.llm_fast
+            if not llm:
+                logger.warning("⚠️ [PRECEDENT SUMMARY] LLM 인스턴스가 없습니다. 요약을 수행할 수 없습니다.")
+                return None
+            
+            # DocumentSummaryTask 사용
+            try:
+                from lawfirm_langgraph.core.workflow.tasks.document_summary_tasks import (
+                    DocumentSummaryTask,
+                    SummaryStrategy
+                )
+                
+                import os
+                PRECEDENT_SUMMARY_MAX_LENGTH = int(os.getenv("PRECEDENT_SUMMARY_MAX_LENGTH", "1000"))
+                
+                # 판례 특화 요약 Task 생성
+                summary_task = DocumentSummaryTask(
+                    llm_fast=llm,
+                    logger_instance=logger,
+                    strategy=SummaryStrategy.BATCH,  # 배치 전략 (단일 문서도 배치로 처리)
+                    max_summary_length=PRECEDENT_SUMMARY_MAX_LENGTH,
+                    max_prompt_length=8000
+                )
+                
+                # 판례 특화 프롬프트를 위한 문서 준비
+                precedent_doc = {
+                    "id": doc.get("id") or doc.get("chunk_id") or doc.get("document_id"),
+                    "text": doc_content,
+                    "content": doc_content,
+                    "type": "precedent",
+                    "case_id": doc.get("case_id"),
+                    "court": doc.get("court") or doc.get("ccourt"),
+                    "case_name": doc.get("case_name") or doc.get("casenames"),
+                    "decision_date": doc.get("decision_date")
+                }
+                
+                # Task 실행 (단일 문서 배치)
+                summaries, metadata = summary_task.execute(
+                    docs=[precedent_doc],
+                    query=query,
+                    use_llm=True
+                )
+                
+                if summaries and len(summaries) > 0:
+                    summary_result = summaries[0]
+                    if isinstance(summary_result, dict):
+                        logger.info(
+                            f"✅ [PRECEDENT SUMMARY] 판례 요약 성공: "
+                            f"원본={len(doc_content)}자 → 요약={len(summary_result.get('summary', ''))}자"
+                        )
+                        return summary_result
+                    else:
+                        logger.warning(f"⚠️ [PRECEDENT SUMMARY] 요약 결과 형식이 올바르지 않습니다: {type(summary_result)}")
+                        return None
+                else:
+                    logger.warning("⚠️ [PRECEDENT SUMMARY] 요약 결과가 비어있습니다.")
+                    return None
+                    
+            except ImportError:
+                logger.warning("⚠️ [PRECEDENT SUMMARY] DocumentSummaryTask를 사용할 수 없습니다.")
+                return None
+            except Exception as e:
+                logger.error(f"❌ [PRECEDENT SUMMARY] 요약 중 오류 발생: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ [PRECEDENT SUMMARY] 판례 요약 실패: {e}")
+            return None
     
     def _extract_detailed_relevant_parts(
         self,

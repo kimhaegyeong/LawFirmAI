@@ -43,8 +43,7 @@ except ImportError:
 try:
     from core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 except ImportError:
-    # 호환성을 위한 fallback
-    from .hybrid_search_engine_v2 import HybridSearchEngineV2
+    HybridSearchEngineV2 = None
 
 try:
     from core.generation.generators.improved_answer_generator import ImprovedAnswerGenerator
@@ -57,15 +56,13 @@ try:
     from core.conversation.integrated_session_manager import IntegratedSessionManager
     from core.conversation.multi_turn_handler import MultiTurnQuestionHandler
 except ImportError:
-    # 호환성을 위한 fallback
-    from .integrated_session_manager import IntegratedSessionManager
-    from .multi_turn_handler import MultiTurnQuestionHandler
+    IntegratedSessionManager = None
+    MultiTurnQuestionHandler = None
 
 try:
     from core.classification.classifiers.question_classifier import QuestionClassifier
 except ImportError:
-    # 호환성을 위한 fallback
-    from .question_classifier import QuestionClassifier
+    QuestionClassifier = None
 
 # Phase 2: 개인화 및 지능형 분석 모듈
 try:

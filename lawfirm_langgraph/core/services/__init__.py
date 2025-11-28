@@ -45,10 +45,7 @@ except ImportError as e:
 try:
     from core.search.handlers.search_service import SearchService
 except ImportError:
-    try:
-        from .search_service import SearchService
-    except ImportError:
-        SearchService = None
+    SearchService = None
 
 # AnalysisService removed - not implemented yet
 # try:
@@ -62,19 +59,13 @@ AnalysisService = None
 try:
     from core.search.engines.semantic_search_engine import SemanticSearchEngine
 except ImportError:
-    try:
-        from .semantic_search_engine import SemanticSearchEngine
-    except ImportError:
-        SemanticSearchEngine = None
+    SemanticSearchEngine = None
 
 try:
     from core.search.processors.result_merger import ResultMerger, ResultRanker
 except ImportError:
-    try:
-        from .result_merger import ResultMerger, ResultRanker
-    except ImportError:
-        ResultMerger = None
-        ResultRanker = None
+    ResultMerger = None
+    ResultRanker = None
 
 # Generation 관련 re-export
 try:

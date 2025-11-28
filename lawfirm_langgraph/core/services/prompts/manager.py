@@ -22,20 +22,14 @@ from typing import Any, Dict, List, Optional
 try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
-    try:
-        from core.services.question_classifier import QuestionType
-    except ImportError:
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        try:
-            from question_classifier import QuestionType
-        except ImportError:
-            from enum import Enum
-            class QuestionType(Enum):
-                GENERAL_QUESTION = "general_question"
-                LAW_INQUIRY = "law_inquiry"
-                PRECEDENT_SEARCH = "precedent_search"
-                DOCUMENT_ANALYSIS = "document_analysis"
-                LEGAL_ADVICE = "legal_advice"
+    # 호환성을 위한 fallback (더 이상 services에 없음)
+    from enum import Enum
+    class QuestionType(Enum):
+        GENERAL_QUESTION = "general_question"
+        LAW_INQUIRY = "law_inquiry"
+        PRECEDENT_SEARCH = "precedent_search"
+        DOCUMENT_ANALYSIS = "document_analysis"
+        LEGAL_ADVICE = "legal_advice"
 
 logger = get_logger(__name__)
 
