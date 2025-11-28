@@ -10,7 +10,11 @@ __description__ = "법률 AI 어시스턴트 - 판례, 법령, Q&A 데이터베�
 
 # 주요 모듈 import (선택적)
 # 모델 관련 import는 필요시에만 개별적으로 수행
-LegalModelManager = None
+try:
+    from .models.model_manager import LegalModelManager
+except ImportError:
+    LegalModelManager = None
+
 LegalModelFineTuner = None
 
 try:
@@ -30,10 +34,8 @@ except ImportError:
 
 # TASK 3.2 하이브리드 검색 시스템 모듈들
 try:
-    from .services.semantic_search_engine import SemanticSearchEngine
-    from .services.result_merger import ResultMerger, ResultRanker
+    from .search.processors.result_merger import ResultMerger, ResultRanker
 except ImportError:
-    SemanticSearchEngine = None
     ResultMerger = None
     ResultRanker = None
 
@@ -48,7 +50,6 @@ __all__ = [
     "ChatService", 
     "VectorStore",
     "Config",
-    "SemanticSearchEngine", 
     "ResultMerger",
     "ResultRanker",
     "LegalTermNormalizer"

@@ -55,15 +55,18 @@ class SQLRouter:
         }
 
     def get_schema_overview(self) -> str:
-        """Return a compact schema description for Text-to-SQL prompting."""
+        """Return a compact schema description for Text-to-SQL prompting (PostgreSQL)."""
         return (
-            "테이블/뷰 설명:\n"
-            "- laws(id, law_name) — 법률명 목록(assembly_laws 매핑)\n"
-            "- articles(id, law_name, article_number, content) — 조문 본문(assembly_* 매핑)\n"
-            "- cases(id, case_number, court, decision_date, summary) — 판례 메타(precendent_cases 매핑)\n"
-            "- case_citations(id, from_case_id, to_case_id) — 판례 인용 관계\n"
-            "- amendments(id, law_name, effective_date, description) — 개정 이력\n"
-            "제약: SELECT만 허용, LIMIT 필수. 조문/사건번호는 정확히 매칭하세요."
+            "PostgreSQL 테이블/뷰 설명:\n"
+            "- domains(id, name) — 법률 도메인\n"
+            "- sources(id, source_type, path, hash, created_at) — 소스 추적\n"
+            "- statutes(id, domain_id, name, abbrv, statute_type, proclamation_date, effective_date, category) — 법률 정보\n"
+            "- statute_articles(id, statute_id, article_no, clause_no, item_no, heading, text, version_effective_date) — 조문 본문\n"
+            "- text_chunks(id, source_type, source_id, chunk_index, text, meta) — 텍스트 청크\n"
+            "- embeddings(id, chunk_id, model, dim, vector) — 벡터 임베딩\n"
+            "- embedding_versions(id, version_name, chunking_strategy, model_name, is_active) — 임베딩 버전\n"
+            "- retrieval_cache(query_hash, topk_ids, created_at) — 검색 캐시\n"
+            "제약: SELECT만 허용, LIMIT 필수. 조문번호는 정확히 매칭하세요. JOIN을 사용하여 관련 테이블을 연결하세요."
         )
 
     def is_sql_suitable(self, query: str) -> bool:

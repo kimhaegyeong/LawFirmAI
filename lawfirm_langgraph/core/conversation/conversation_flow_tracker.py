@@ -20,11 +20,8 @@ from .conversation_manager import ConversationContext, ConversationTurn
 try:
     from core.classification.analyzers.emotion_intent_analyzer import EmotionIntentAnalyzer
 except ImportError:
-    # 호환성을 위한 fallback
-    try:
-        from core.services.emotion_intent_analyzer import EmotionIntentAnalyzer
-    except ImportError:
-        EmotionIntentAnalyzer = None
+    # 호환성을 위한 fallback (더 이상 services에 없음)
+    EmotionIntentAnalyzer = None
 
 logger = get_logger(__name__)
 
