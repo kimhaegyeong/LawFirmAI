@@ -38,20 +38,41 @@ LawFirmAI/
 │   ├── tests/               # 테스트 코드
 │   └── data/                # 데이터 파일
 ├── api/                     # FastAPI 애플리케이션
+│   ├── main.py             # FastAPI 메인 애플리케이션
+│   ├── routers/            # API 라우터
+│   │   ├── chat.py         # 채팅 엔드포인트
+│   │   ├── session.py     # 세션 관리
+│   │   ├── history.py      # 히스토리
+│   │   ├── feedback.py     # 피드백
+│   │   ├── health.py       # 헬스체크
+│   │   └── auth.py         # 인증 (OAuth2)
+│   ├── services/           # API 서비스
+│   ├── schemas/            # Pydantic 스키마
+│   ├── middleware/         # 미들웨어
+│   └── database/           # 데이터베이스 모델
 ├── frontend/                # React 프론트엔드
+│   ├── src/                # React 소스 코드
+│   ├── package.json         # npm 의존성
+│   └── vite.config.ts      # Vite 설정
 ├── scripts/                 # 유틸리티 스크립트
 │   ├── checks/              # 체크 스크립트
 │   ├── ingest/              # 데이터 수집
 │   ├── rag/                 # RAG 관련 스크립트
 │   ├── tests/               # 테스트 스크립트
 │   ├── tools/               # 도구 스크립트
-│   └── utils/               # 유틸리티 스크립트
+│   ├── utils/               # 유틸리티 스크립트
+│   ├── ml_training/         # ML 훈련 및 평가
+│   ├── data_collection/     # 데이터 수집
+│   ├── data_processing/     # 데이터 전처리
+│   └── embedding/           # 임베딩 생성
 ├── data/                    # 데이터 파일
 │   ├── raw/                 # 원본 데이터
 │   ├── processed/          # 전처리된 데이터
 │   ├── embeddings/          # 벡터 임베딩
-│   └── database/            # 데이터베이스 파일
+│   └── vector_store/        # FAISS 벡터 스토어
 ├── docs/                    # 프로젝트 문서
+├── deployment/               # 배포 스크립트
+├── monitoring/               # 모니터링 설정
 └── README.md                # 프로젝트 문서
 ```
 
@@ -179,13 +200,16 @@ lawfirm_langgraph/core/processing/
 ├── extractors/                      # 추출기
 │   ├── query_extractor.py          # 쿼리 추출기
 │   ├── document_extractor.py       # 문서 추출기
-│   └── reasoning_extractor.py      # 추론 추출기
+│   ├── reasoning_extractor.py      # 추론 추출기
+│   └── ... (기타 추출기)
 ├── processors/                     # 프로세서
 │   └── data_processor.py           # 데이터 프로세서
-└── parsers/                        # 파서
-    ├── query_parser.py             # 쿼리 파서
-    ├── answer_parser.py            # 답변 파서
-    └── response_parsers.py         # 응답 파서
+├── parsers/                        # 파서
+│   ├── query_parser.py             # 쿼리 파서
+│   ├── answer_parser.py            # 답변 파서
+│   └── response_parsers.py         # 응답 파서
+└── integration/                    # 통합 시스템
+    └── term_integration_system.py  # 용어 통합 시스템
 ```
 
 ### lawfirm_langgraph/core/conversation/ - 대화 관리
@@ -206,7 +230,13 @@ lawfirm_langgraph/core/conversation/
 lawfirm_langgraph/core/services/
 ├── gemini_client.py                 # Gemini 클라이언트
 ├── unified_prompt_manager.py         # 통합 프롬프트 관리
-└── ... (기타 서비스 파일)
+├── chat_service.py                   # 채팅 서비스
+├── context_manager.py                 # 컨텍스트 관리
+├── context_compressor.py              # 컨텍스트 압축
+├── legal_basis_validator.py           # 법적 근거 검증
+├── prompt_optimizer.py                # 프롬프트 최적화
+├── prompt_templates.py                # 프롬프트 템플릿
+└── prompts/                           # 프롬프트 파일
 ```
 
 ### lawfirm_langgraph/core/shared/ - 공유 유틸리티
@@ -218,7 +248,9 @@ lawfirm_langgraph/core/shared/
 ├── clients/                         # 클라이언트
 ├── monitoring/                      # 모니터링
 ├── utils/                           # 유틸리티
-└── wrappers/                        # 래퍼
+├── wrappers/                        # 래퍼
+├── feedback/                        # 피드백 시스템
+└── profiles/                        # 프로파일 관리
 ```
 
 **사용 예시**:
@@ -234,13 +266,17 @@ results = engine.search("계약 해지", k=10)
 
 ```
 lawfirm_langgraph/core/data/
-├── database.py                     # SQLite 데이터베이스
+├── database.py                     # SQLite 데이터베이스 (연결 풀링 지원)
 ├── vector_store.py                  # FAISS 벡터 스토어
 ├── data_processor.py                # 데이터 처리
 ├── conversation_store.py            # 대화 저장소
 ├── legal_term_normalizer.py         # 법률 용어 정규화
 ├── assembly_playwright_client.py    # Assembly 데이터 수집
-└── versioned_schema.py              # 버전 관리 스키마
+├── versioned_schema.py              # 버전 관리 스키마
+├── connection_pool.py               # 데이터베이스 연결 풀
+├── db_adapter.py                    # 데이터베이스 어댑터
+├── sql_adapter.py                    # SQL 어댑터
+└── routers/                         # 데이터 라우터
 ```
 
 ### lawfirm_langgraph/core/models/ - AI 모델
@@ -249,6 +285,7 @@ lawfirm_langgraph/core/data/
 ```
 lawfirm_langgraph/core/models/
 └── sentence_bert.py                 # Sentence BERT 임베딩 모델
+    (참고: 실제 모델 파일은 다른 위치에 있을 수 있음)
 ```
 
 ### lawfirm_langgraph/core/utils/ - 유틸리티
@@ -276,7 +313,11 @@ lawfirm_langgraph/config/
 
 ### 1. 쿼리 처리
 ```
-User Input
+User Input (API Request)
+    ↓
+api/routers/chat.py
+    ↓
+api/services/chat_service.py
     ↓
 lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
@@ -296,7 +337,7 @@ lawfirm_langgraph/core/generation/ (답변 생성 및 검증)
     ├── formatters/answer_structure_enhancer.py
     └── validators/quality_validators.py
     ↓
-User Output
+API Response (User Output)
 ```
 
 ### 2. 검색 프로세스
@@ -392,6 +433,24 @@ from lawfirm_langgraph.core.data.vector_store import VectorStore
 **역할**: 유틸리티 스크립트
 - `embedding_version_manager.py`: 임베딩 버전 관리
 - `embeddings.py`: 임베딩 유틸리티
+
+### scripts/ml_training/
+**역할**: ML 훈련 및 평가
+- `evaluation/`: 검색 성능 평가 스크립트
+- Ground Truth 생성 및 RAG 평가
+
+### scripts/data_collection/
+**역할**: 데이터 수집
+- AI허브 데이터 수집 스크립트
+
+### scripts/data_processing/
+**역할**: 데이터 전처리
+- 증분 전처리 파이프라인
+- Q&A 데이터셋 생성
+
+### scripts/embedding/
+**역할**: 임베딩 생성
+- 벡터 임베딩 생성 스크립트
 
 ## 🎯 모듈별 책임
 

@@ -10,13 +10,21 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
+│                    API 레이어 (FastAPI)                     │
+│  ├── api/routers/chat.py              (채팅 엔드포인트)    │
+│  ├── api/routers/session.py           (세션 관리)          │
+│  ├── api/routers/auth.py              (인증 - OAuth2)      │
+│  ├── api/services/chat_service.py     (채팅 서비스)        │
+│  └── api/middleware/                  (미들웨어)           │
+├─────────────────────────────────────────────────────────────┤
 │                    LangGraph 워크플로우                      │
 │  ├── lawfirm_langgraph/core/workflow/workflow_service.py   │
 │  ├── lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py│
 │  ├── lawfirm_langgraph/core/workflow/nodes/               │
 │  │   ├── classification_nodes.py      (질문 분류 노드)     │
 │  │   ├── search_nodes.py             (검색 노드)         │
-│  │   └── answer_nodes.py              (답변 생성 노드)     │
+│  │   ├── answer_nodes.py              (답변 생성 노드)     │
+│  │   └── document_nodes.py            (문서 분석 노드)     │
 │  └── lawfirm_langgraph/core/workflow/state/                │
 │      ├── state_definitions.py         (상태 정의)         │
 │      └── modular_states.py            (모듈화된 상태)      │
@@ -57,6 +65,7 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 ├─────────────────────────────────────────────────────────────┤
 │                    데이터 레이어                            │
 │  ├── lawfirm_langgraph/core/data/database.py               │
+│  │   └── connection_pool.py              (연결 풀링)        │
 │  ├── lawfirm_langgraph/core/data/vector_store.py          │
 │  └── lawfirm_langgraph/core/data/conversation_store.py    │
 ├─────────────────────────────────────────────────────────────┤
@@ -67,6 +76,7 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 ├─────────────────────────────────────────────────────────────┤
 │                    AI 모델 레이어                            │
 │  ├── lawfirm_langgraph/core/services/gemini_client.py     │
+│  ├── lawfirm_langgraph/core/services/unified_prompt_manager.py│
 │  └── lawfirm_langgraph/core/models/sentence_bert.py        │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -274,7 +284,11 @@ quality = ranker.evaluate_search_quality(query, ranked, query_type, extracted_ke
 ### 1. 쿼리 처리 흐름
 
 ```
-User Input
+User Input (API Request)
+    ↓
+api/routers/chat.py
+    ↓
+api/services/chat_service.py
     ↓
 lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
@@ -291,7 +305,7 @@ lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플�
         ├── core/generation/generators/context_builder.py
         └── core/generation/validators/quality_validators.py
     ↓
-User Output
+API Response (User Output)
 ```
 
 ### 2. 검색 프로세스

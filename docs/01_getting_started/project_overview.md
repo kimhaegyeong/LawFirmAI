@@ -83,10 +83,11 @@
 - **SemanticSearchEngineV2**: 최적화된 의미적 검색 엔진
 
 ### Backend
-- **FastAPI**: RESTful API 서버 (선택적)
-- **SQLite**: 관계형 데이터베이스 (정확한 매칭 검색)
-- **FAISS**: 벡터 데이터베이스 (의미적 검색)
-- **Pydantic**: 데이터 검증
+- **FastAPI**: RESTful API 서버
+- **SQLite**: 관계형 데이터베이스 (FTS5 기반 정확한 매칭 검색, 연결 풀링 지원)
+- **FAISS**: 벡터 데이터베이스 (의미적 검색, IndexIVFPQ 지원)
+- **Pydantic V2**: 데이터 검증
+- **OAuth2**: Google OAuth2 인증 지원
 - **psutil**: 메모리 모니터링 및 시스템 리소스 관리
 
 ### Frontend
