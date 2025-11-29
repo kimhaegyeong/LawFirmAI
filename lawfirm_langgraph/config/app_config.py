@@ -6,6 +6,7 @@ Configuration Management
 
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -144,29 +145,47 @@ class Config(BaseSettings):
         env_file_encoding = "utf-8"
         case_sensitive = False
         extra = "ignore"  # 추가 필드 무시
+        
+        # 환경변수 파일 로딩 상태 추적
+        _env_file_loaded = False
+        _env_file_lock = threading.Lock()
 
         @classmethod
         def _load_env_file(cls, env_file: str) -> None:
-            """환경변수 파일 로딩"""
-            env_path = Path(env_file)
-            if env_path.exists():
-                try:
-                    with open(env_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith('#') and '=' in line:
-                                key, value = line.split('=', 1)
-                                os.environ[key.strip()] = value.strip()
-                except Exception as e:
-                    print(f"환경변수 파일 로딩 실패: {e}")
-            else:
-                # .env 파일이 없으면 환경변수에서 직접 설정
-                if not os.getenv("LAW_OPEN_API_OC"):
-                    print("⚠️ LAW_OPEN_API_OC 환경변수가 설정되지 않았습니다.")
-                    print("다음 중 하나의 방법으로 설정하세요:")
-                    print("1. .env 파일 생성: LAW_OPEN_API_OC=your_email@example.com")
-                    print("2. 환경변수 직접 설정: set LAW_OPEN_API_OC=your_email@example.com")
-                    print("3. PowerShell에서: $env:LAW_OPEN_API_OC='your_email@example.com'")
+            """환경변수 파일 로딩 (한 번만 수행)"""
+            # 이미 로드되었으면 스킵
+            if cls._env_file_loaded:
+                return
+                
+            with cls._env_file_lock:
+                # Double-check locking
+                if cls._env_file_loaded:
+                    return
+                    
+                env_path = Path(env_file)
+                if env_path.exists():
+                    try:
+                        with open(env_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                line = line.strip()
+                                if line and not line.startswith('#') and '=' in line:
+                                    key, value = line.split('=', 1)
+                                    # 이미 설정된 환경변수는 덮어쓰지 않음
+                                    if key.strip() not in os.environ:
+                                        os.environ[key.strip()] = value.strip()
+                        cls._env_file_loaded = True
+                    except Exception as e:
+                        print(f"환경변수 파일 로딩 실패: {e}")
+                        cls._env_file_loaded = True  # 에러 발생해도 로드 완료로 표시
+                else:
+                    # .env 파일이 없으면 환경변수에서 직접 설정
+                    if not os.getenv("LAW_OPEN_API_OC"):
+                        print("⚠️ LAW_OPEN_API_OC 환경변수가 설정되지 않았습니다.")
+                        print("다음 중 하나의 방법으로 설정하세요:")
+                        print("1. .env 파일 생성: LAW_OPEN_API_OC=your_email@example.com")
+                        print("2. 환경변수 직접 설정: set LAW_OPEN_API_OC=your_email@example.com")
+                        print("3. PowerShell에서: $env:LAW_OPEN_API_OC='your_email@example.com'")
+                    cls._env_file_loaded = True  # 파일이 없어도 로드 완료로 표시
 
     def get(self, key: str, default: Any = None) -> Any:
         """설정 값 조회"""
@@ -308,5 +327,29 @@ class Config(BaseSettings):
             raise ValueError(
                 "SQLite is no longer supported. Please use PostgreSQL. "
                 "Set DATABASE_URL to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database) "
-                "or configure POSTGRES_* environment variables in .env file (lines 21-29)."
+                "or configure POSTGRES_* environment variables in .env file."
             )
+
+
+# 전역 설정 인스턴스 (지연 초기화)
+_config_instance: Optional[Config] = None
+_config_lock = threading.Lock()
+
+
+def get_config() -> Config:
+    """설정 인스턴스 가져오기 (지연 초기화 싱글톤)
+    
+    Returns:
+        Config: 설정 인스턴스 (싱글톤)
+    
+    Note:
+        첫 호출 시에만 초기화되며, 이후 호출은 캐시된 인스턴스를 반환합니다.
+        이는 설정 로드 시간을 크게 단축시킵니다.
+    """
+    global _config_instance
+    if _config_instance is None:
+        with _config_lock:
+            # Double-check locking pattern
+            if _config_instance is None:
+                _config_instance = Config()
+    return _config_instance
