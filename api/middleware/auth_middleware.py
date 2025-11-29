@@ -91,13 +91,16 @@ async def require_auth(request: Request) -> dict:
                 }
             )
         
-        # 질의 횟수 증가 (실제 질의 처리 전에 증가)
-        remaining = anonymous_quota_service.increment_quota(ip_address)
-        logger.debug(f"require_auth: Anonymous user quota incremented, ip={ip_address}, remaining={remaining}")
+        # 질의 횟수는 응답이 성공적으로 완료된 후에만 증가하도록 변경
+        # 여기서는 증가하지 않고, 응답 완료 후 증가하도록 플래그만 설정
+        # 쿼터 증가는 chat_stream 엔드포인트에서 성공적으로 완료된 후에 수행
+        remaining = anonymous_quota_service.get_remaining_quota(ip_address)
+        logger.debug(f"require_auth: Anonymous user quota check passed, ip={ip_address}, remaining={remaining}")
         return {
             "user_id": "anonymous",
             "authenticated": False,
-            "quota_remaining": remaining
+            "quota_remaining": remaining,
+            "_should_increment_quota": True  # 쿼터 증가 플래그
         }
     
     # /stream 엔드포인트가 아닌 경우 또는 익명 사용자 제한이 비활성화된 경우

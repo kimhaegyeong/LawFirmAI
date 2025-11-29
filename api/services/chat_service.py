@@ -84,6 +84,7 @@ class ChatService:
         from api.services.sources_extractor import SourcesExtractor
         from api.services.session_service import session_service
         from api.services.streaming.stream_handler import StreamHandler
+        from api.utils.langgraph_config_helper import create_langgraph_config
         
         self.stream_config = StreamConfig.from_env()
         self.event_processor = StreamEventProcessor(config=self.stream_config)
@@ -274,7 +275,11 @@ class ChatService:
                 yield json.dumps(error_event, ensure_ascii=False) + "\n"
                 return
             
-            config = {"configurable": {"thread_id": session_id}}
+            # LangGraph config 생성 (유틸리티 함수 사용)
+            config = create_langgraph_config(
+                session_id=session_id,
+                enable_checkpoint=enable_checkpoint
+            )
             
             # 디버그 모드 확인
             DEBUG_STREAM = self.stream_config.debug_stream
@@ -299,24 +304,44 @@ class ChatService:
                         event_type = event.get("event", "")
                         event_name = event.get("name", "")
                         
-                        # 관련 없는 이벤트는 즉시 건너뛰기 (성능 최적화 - 조기 종료)
+                        # 이벤트 타입 추적 (디버깅용)
+                        event_types_seen.add(event_type)
+                        if event_name:
+                            node_names_seen.add(event_name)
+                        
+                        # 관련 없는 이벤트는 로깅만 하고 건너뛰기 (성능 최적화 - 조기 종료)
                         if event_type not in RELEVANT_EVENT_TYPES:
+                            if DEBUG_STREAM and event_count <= 20:
+                                logger.debug(f"건너뛴 이벤트 #{event_count}: type={event_type}, name={event_name} (관련 이벤트 타입 아님)")
                             continue
                         
                         # 디버깅 모드에서만 이벤트 추적 (메모리 최적화: 제한적 추적)
                         if DEBUG_STREAM and event_count <= MAX_EVENT_HISTORY:
-                            event_types_seen.add(event_type)
-                            if event_name:
-                                node_names_seen.add(event_name)
                             if event_count <= 20:
                                 logger.debug(f"처리할 이벤트 #{event_count}: type={event_type}, name={event_name}")
                         
                         # StreamEventProcessor를 사용하여 이벤트 처리
-                        stream_event = self.event_processor.process_stream_event(event)
-                        if stream_event:
-                            yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                            if stream_event.get("type") == "stream":
-                                llm_stream_count += 1
+                        try:
+                            stream_event = self.event_processor.process_stream_event(event)
+                            if stream_event:
+                                yield json.dumps(stream_event, ensure_ascii=False) + "\n"
+                                if stream_event.get("type") == "stream":
+                                    llm_stream_count += 1
+                                    if DEBUG_STREAM and llm_stream_count <= 10:
+                                        logger.debug(f"✅ Stream 이벤트 생성: content_length={len(stream_event.get('content', ''))}")
+                            elif DEBUG_STREAM and event_type in ["on_llm_stream", "on_chat_model_stream"]:
+                                # on_llm_stream 이벤트가 처리되지 않은 경우 로깅
+                                logger.warning(
+                                    f"⚠️ on_llm_stream 이벤트가 stream_event로 변환되지 않음: "
+                                    f"event_type={event_type}, name={event_name}, "
+                                    f"data_keys={list(event.get('data', {}).keys()) if isinstance(event.get('data'), dict) else 'N/A'}"
+                                )
+                        except Exception as process_error:
+                            logger.error(
+                                f"이벤트 처리 중 오류: event_type={event_type}, name={event_name}, "
+                                f"error={process_error}",
+                                exc_info=True
+                            )
                 except asyncio.CancelledError:
                     logger.warning("⚠️ [stream_message] 워크플로우 스트리밍이 취소되었습니다 (CancelledError)")
                     # 취소된 경우 에러 이벤트 전송
@@ -548,60 +573,89 @@ class ChatService:
         return initial_query
     
     async def _get_stream_events(self, initial_state: Dict[str, Any], config: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
-        """스트리밍 이벤트 가져오기 (버전 호환성 처리)"""
+        """스트리밍 이벤트 가져오기 (최신 LangGraph API 호환, 하위 호환성 유지)"""
         DEBUG_STREAM = self.stream_config.debug_stream
         
         try:
+            # 최신 API 시도: version 파라미터 없이, 필터링 없이 모든 이벤트 수신
             if DEBUG_STREAM:
-                logger.info("스트리밍 시작: astream_events(version='v2') 사용")
+                logger.info("스트리밍 시작: astream_events() 사용 (최신 API, 필터링 없음)")
+            
+            event_count = 0
+            event_types_received = set()
+            
             try:
-                try:
-                    async for event in self.workflow_service.app.astream_events(
-                        initial_state, 
-                        config,
-                        version="v2",
-                        include_names=["generate_answer_stream", "generate_answer_enhanced", "generate_and_validate_answer"]
-                    ):
-                        yield event
-                except (TypeError, AttributeError):
-                    try:
-                        async for event in self.workflow_service.app.astream_events(
-                            initial_state, 
-                            config,
-                            version="v2",
-                            exclude_names=["classify_query_and_complexity", "classification_parallel", 
-                                          "expand_keywords", "validate_answer_quality", "prepare_search_query",
-                                          "execute_searches_parallel", "process_search_results_combined",
-                                          "prepare_documents_and_terms", "prepare_final_response"]
-                        ):
-                            yield event
-                    except (TypeError, AttributeError):
-                        async for event in self.workflow_service.app.astream_events(
-                            initial_state, 
-                            config,
-                            version="v2"
-                        ):
-                            yield event
-            except (TypeError, AttributeError):
-                async for event in self.workflow_service.app.astream_events(
-                    initial_state, 
-                    config,
-                    version="v2"
-                ):
-                    yield event
-        except (TypeError, AttributeError) as ve:
-            logger.debug(f"astream_events에서 version 파라미터 미지원: {ve}, 기본 버전 사용")
-            if DEBUG_STREAM:
-                logger.info("스트리밍 시작: astream_events() 사용 (기본 버전)")
-            try:
+                # 필터링 없이 모든 이벤트 수신 (문제 진단을 위해)
                 async for event in self.workflow_service.app.astream_events(
                     initial_state, 
                     config
                 ):
+                    event_count += 1
+                    event_type = event.get("event", "")
+                    event_name = event.get("name", "")
+                    event_types_received.add(event_type)
+                    
+                    # 상세 로깅 (처음 50개 이벤트만)
+                    if DEBUG_STREAM and event_count <= 50:
+                        logger.debug(
+                            f"[_get_stream_events] 이벤트 #{event_count}: "
+                            f"type={event_type}, name={event_name}, "
+                            f"data_keys={list(event.get('data', {}).keys()) if isinstance(event.get('data'), dict) else 'N/A'}"
+                        )
+                    
+                    # on_llm_stream 이벤트 상세 로깅
+                    if event_type == "on_llm_stream" and DEBUG_STREAM:
+                        event_data = event.get("data", {})
+                        chunk = event_data.get("chunk") if isinstance(event_data, dict) else None
+                        logger.info(
+                            f"[_get_stream_events] ✅ on_llm_stream 이벤트 수신: "
+                            f"name={event_name}, "
+                            f"chunk_type={type(chunk).__name__ if chunk else 'None'}, "
+                            f"has_chunk={chunk is not None}"
+                        )
+                    
                     yield event
-            except asyncio.CancelledError:
-                logger.warning("⚠️ [_get_stream_events] astream_events가 취소되었습니다 (CancelledError)")
-                raise  # 상위로 전파
+                
+                # 이벤트 수신 완료 후 통계 로깅
+                if DEBUG_STREAM:
+                    logger.info(
+                        f"[_get_stream_events] 이벤트 수신 완료: "
+                        f"총 {event_count}개, "
+                        f"이벤트 타입={sorted(event_types_received)}, "
+                        f"on_llm_stream 포함={'on_llm_stream' in event_types_received}"
+                    )
+                    
+            except (TypeError, AttributeError) as ve:
+                # 구버전 API 폴백: version="v2" 파라미터 사용
+                logger.warning(f"최신 API 실패, 구버전 API 시도: {ve}")
+                if DEBUG_STREAM:
+                    logger.info("스트리밍 시작: astream_events(version='v2') 사용 (구버전 API)")
+                try:
+                    async for event in self.workflow_service.app.astream_events(
+                        initial_state, 
+                        config,
+                        version="v2"
+                    ):
+                        event_type = event.get("event", "")
+                        if DEBUG_STREAM and event_type == "on_llm_stream":
+                            logger.info(f"[_get_stream_events] ✅ on_llm_stream 이벤트 수신 (구버전 API)")
+                        yield event
+                except (TypeError, AttributeError) as ve2:
+                    # version 파라미터도 미지원 시 기본 호출
+                    logger.warning(f"version 파라미터 미지원, 기본 호출: {ve2}")
+                    if DEBUG_STREAM:
+                        logger.info("스트리밍 시작: astream_events() 사용 (기본 버전)")
+                    async for event in self.workflow_service.app.astream_events(
+                        initial_state, 
+                        config
+                    ):
+                        yield event
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [_get_stream_events] astream_events가 취소되었습니다 (CancelledError)")
+            raise  # 상위로 전파
+        except Exception as e:
+            logger.error(f"⚠️ [_get_stream_events] astream_events 실행 중 오류: {e}", exc_info=True)
+            raise
     
     async def _extract_sources_from_state(self, session_id: str, timeout: float = 2.0) -> Dict[str, Any]:
         """State에서 sources 추출"""
@@ -641,7 +695,8 @@ class ChatService:
             return result
         
         try:
-            config = {"configurable": {"thread_id": session_id}}
+            # LangGraph config 생성 (유틸리티 함수 사용)
+            config = create_langgraph_config(session_id=session_id)
             final_state = await asyncio.wait_for(
                 self.workflow_service.app.aget_state(config),
                 timeout=2.0

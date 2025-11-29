@@ -382,10 +382,39 @@ class StreamEventProcessor:
     
     def _handle_streaming_events(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """스트리밍 이벤트 처리 (on_llm_stream, on_chat_model_stream, on_chain_stream)"""
+        event_type = event.get("event", "")
+        event_name = event.get("name", "")
+        
+        # 디버깅 로깅
+        if self.config.debug_stream:
+            logger.debug(
+                f"[_handle_streaming_events] 이벤트 처리 시작: "
+                f"type={event_type}, name={event_name}, "
+                f"answer_generation_started={self.answer_generation_started}, "
+                f"is_answer_node={self.is_answer_node(event)}"
+            )
+        
+        # answer_generation_started가 False인 경우에도 로깅
         if not self.answer_generation_started:
-            return None
+            if self.config.debug_stream:
+                logger.debug(
+                    f"[_handle_streaming_events] answer_generation_started=False로 건너뜀: "
+                    f"type={event_type}, name={event_name}"
+                )
+            # answer_generation_started가 False여도 답변 생성 노드인 경우 시작 플래그 설정
+            if self.is_answer_node(event):
+                self.answer_generation_started = True
+                self.last_node_name = event_name
+                logger.info(f"[_handle_streaming_events] ✅ answer_generation_started를 True로 설정: name={event_name}")
+            else:
+                return None
         
         if not self.is_answer_node(event):
+            if self.config.debug_stream:
+                logger.debug(
+                    f"[_handle_streaming_events] is_answer_node=False로 건너뜀: "
+                    f"type={event_type}, name={event_name}"
+                )
             return None
         
         event_data = event.get("data", {})
@@ -394,6 +423,18 @@ class StreamEventProcessor:
             chunk = self.extract_chunk_from_chain_stream(event_data)
         else:
             chunk = self.extract_chunk_from_llm_stream(event_data)
+        
+        if self.config.debug_stream and chunk:
+            logger.debug(
+                f"[_handle_streaming_events] ✅ 청크 추출 성공: "
+                f"chunk_length={len(chunk)}, chunk_preview={chunk[:50]}..."
+            )
+        elif self.config.debug_stream and not chunk:
+            logger.warning(
+                f"[_handle_streaming_events] ⚠️ 청크 추출 실패: "
+                f"type={event_type}, name={event_name}, "
+                f"data_keys={list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}"
+            )
         
         return self._process_streaming_chunk(chunk) if chunk else None
     

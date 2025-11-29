@@ -212,19 +212,15 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
                 chat_service = get_chat_service()
                 if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
                     sources_by_type = chat_service.sources_extractor._get_sources_by_type_with_reference_statutes(sources_detail)
-                    logger.debug(f"[_create_sources_event] Generated sources_by_type with reference statutes: {len(sources_by_type.get('statute_article', []))} statutes")
+                    logger.debug(f"[_create_sources_event] Generated sources_by_type with reference statutes: {len(sources_by_type.get('statutes_articles', []))} statutes")
             except Exception as e:
                 logger.warning(f"[_create_sources_event] Failed to generate sources_by_type: {e}", exc_info=True)
                 # 예외 발생 시 기본 sources_by_type 생성 (참조 법령 없이)
                 try:
                     chat_service = get_chat_service()
                     if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
-                        sources_by_type = chat_service.sources_extractor._get_sources_by_type(sources_detail) if sources_detail else {
-                            "statute_article": [],
-                            "case_paragraph": [],
-                            "decision_paragraph": [],
-                            "interpretation_paragraph": []
-                        }
+                        from api.utils.source_type_mapper import get_default_sources_by_type
+                        sources_by_type = chat_service.sources_extractor._get_sources_by_type(sources_detail) if sources_detail else get_default_sources_by_type()
                     else:
                         sources_by_type = None
                 except Exception as fallback_error:
@@ -239,7 +235,7 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
                     extracted_statutes = chat_service.sources_extractor._extract_statutes_from_reference_clauses(sources_detail)
                     
                     if extracted_statutes:
-                        existing_statutes = sources_by_type.get("statute_article", [])
+                        existing_statutes = sources_by_type.get("statutes_articles", [])
                         existing_keys = {
                             f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
                             for s in existing_statutes if isinstance(s, dict)
@@ -251,7 +247,7 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
                                 existing_statutes.append(statute)
                                 existing_keys.add(statute_key)
                         
-                        sources_by_type["statute_article"] = existing_statutes
+                        sources_by_type["statutes_articles"] = existing_statutes
                         logger.debug(f"[_create_sources_event] Added {len(extracted_statutes)} statutes from reference clauses to existing sources_by_type")
             except Exception as e:
                 logger.warning(f"[_create_sources_event] Failed to add reference statutes to existing sources_by_type: {e}", exc_info=True)
@@ -264,24 +260,44 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
                 from api.services.chat_service import get_chat_service
                 chat_service = get_chat_service()
                 if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
-                    cleaned_sources_by_type = {
-                        "statute_article": [],
-                        "case_paragraph": [],
-                        "decision_paragraph": [],
-                        "interpretation_paragraph": [],
-                        "regulation_paragraph": []
-                    }
+                    from api.utils.source_type_mapper import get_default_sources_by_type
+                    cleaned_sources_by_type = get_default_sources_by_type()
                     
                     for source_type, items in sources_by_type.items():
-                        if source_type in cleaned_sources_by_type and isinstance(items, list):
+                        # source_type이 실제 테이블명이거나 source_type 값일 수 있으므로 둘 다 처리
+                        table_name = source_type
+                        if source_type in ["statute_article", "case_paragraph", "decision_paragraph", 
+                                          "interpretation_paragraph", "regulation_paragraph"]:
+                            # source_type 값을 테이블명으로 변환
+                            from api.utils.source_type_mapper import source_type_to_table
+                            table_name = source_type_to_table(source_type) or source_type
+                        
+                        if table_name in cleaned_sources_by_type and isinstance(items, list):
                             for item in items:
                                 if isinstance(item, dict):
                                     try:
+                                        # 디버깅: precedent_contents의 경우 원본 구조 확인
+                                        if table_name == "precedent_contents":
+                                            logger.info(
+                                                f"[_create_sources_event] Processing precedent_contents item: "
+                                                f"keys={list(item.keys())[:15]}, "
+                                                f"casenames={item.get('casenames')}, "
+                                                f"case_name={item.get('case_name')}, "
+                                                f"metadata keys={list(item.get('metadata', {}).keys())[:10] if isinstance(item.get('metadata'), dict) else []}, "
+                                                f"metadata.casenames={item.get('metadata', {}).get('casenames') if isinstance(item.get('metadata'), dict) else None}"
+                                            )
                                         cleaned = chat_service.sources_extractor._clean_source_for_client(item)
                                         if cleaned and isinstance(cleaned, dict):
-                                            cleaned_sources_by_type[source_type].append(cleaned)
+                                            cleaned_sources_by_type[table_name].append(cleaned)
+                                            # 디버깅: 정리 후 결과 확인
+                                            if table_name == "precedent_contents":
+                                                logger.info(
+                                                    f"[_create_sources_event] After cleaning: "
+                                                    f"case_name={cleaned.get('case_name')}, "
+                                                    f"detail.case_name={cleaned.get('detail', {}).get('case_name') if isinstance(cleaned.get('detail'), dict) else None}"
+                                                )
                                     except Exception as item_error:
-                                        logger.debug(f"[_create_sources_event] Failed to clean item: {item_error}")
+                                        logger.warning(f"[_create_sources_event] Failed to clean item: {item_error}", exc_info=True)
                                         # 개별 항목 정리 실패해도 계속 진행
                                         continue
                 else:
@@ -294,23 +310,19 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
         
         # cleaned_sources_by_type이 None이면 빈 구조로 설정
         if cleaned_sources_by_type is None:
-            cleaned_sources_by_type = {
-                "statute_article": [],
-                "case_paragraph": [],
-                "decision_paragraph": [],
-                "interpretation_paragraph": [],
-                "regulation_paragraph": []
-            }
+            from api.utils.source_type_mapper import get_default_sources_by_type
+            cleaned_sources_by_type = get_default_sources_by_type()
         
         return {
             "type": "sources",
             "metadata": {
                 "message_id": message_id or metadata.get("message_id"),
                 "sources_by_type": cleaned_sources_by_type,  # 유일한 필요한 필드 (정리됨)
+                # sources_detail도 포함 (done 이벤트와 일관성 유지, 프론트엔드에서 즉시 사용 가능)
+                "sources_detail": sources_detail,  # 실제 값 사용 (빈 배열 아님)
                 # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
                 "sources": [],  # deprecated: sources_by_type에서 재구성 가능
                 "legal_references": [],  # deprecated: sources_by_type에서 재구성 가능
-                "sources_detail": [],  # deprecated: sources_by_type에서 재구성 가능
             },
             "timestamp": datetime.now().isoformat()
         }
@@ -416,6 +428,14 @@ async def _generate_stream_response(
                                         done_metadata = event_data.get("metadata", {})
                                         if done_metadata:
                                             final_metadata = done_metadata
+                                            logger.debug(
+                                                f"[_generate_stream_response] Done event metadata received: "
+                                                f"sources_detail={len(done_metadata.get('sources_detail', []))}, "
+                                                f"sources={len(done_metadata.get('sources', []))}, "
+                                                f"metadata_keys={list(done_metadata.keys())[:20]}"
+                                            )
+                                        else:
+                                            logger.warning("[_generate_stream_response] Done event received but metadata is empty")
                                         # done 이벤트가 이미 전송되었음을 표시
                                         done_event_sent = True
                                         stream_completed = True
@@ -514,17 +534,32 @@ async def _generate_stream_response(
             
             # sources, legal_references, sources_detail 중 하나라도 있으면 sources 이벤트 전송
             # related_questions가 없어도 실제 참고자료가 있으면 전송
+            # 중요: sources 이벤트는 done 이벤트 전에 전송되어야 함
             sources_event_sent = False
+            
+            # metadata 상세 로깅
+            logger.info(
+                f"[_generate_stream_response] Sources 이벤트 생성 시도: "
+                f"sources={len(metadata.get('sources', []))}, "
+                f"legal_references={len(metadata.get('legal_references', []))}, "
+                f"sources_detail={len(metadata.get('sources_detail', []))}, "
+                f"sources_by_type={bool(metadata.get('sources_by_type'))}, "
+                f"has_actual_sources={_has_actual_sources(metadata)}"
+            )
+            
             if _has_actual_sources(metadata):
                 try:
                     sources_event = _create_sources_event(metadata, saved_message_id)
-                    logger.debug(
-                        f"Sending sources_event: "
-                        f"sources={len(metadata.get('sources', []))}, "
-                        f"legal_references={len(metadata.get('legal_references', []))}, "
-                        f"sources_detail={len(metadata.get('sources_detail', []))}, "
-                        f"related_questions={len(metadata.get('related_questions', []))}"
+                    sources_by_type = sources_event.get("metadata", {}).get("sources_by_type", {})
+                    sources_detail = sources_event.get("metadata", {}).get("sources_detail", [])
+                    
+                    logger.info(
+                        f"[_generate_stream_response] ✅ Sources 이벤트 생성 성공: "
+                        f"sources_by_type_keys={list(sources_by_type.keys())}, "
+                        f"sources_detail_count={len(sources_detail)}, "
+                        f"total_sources={sum(len(items) for items in sources_by_type.values() if isinstance(items, list))}"
                     )
+                    
                     yield format_sse_event(sources_event)
                     sources_event_sent = True
                 except (GeneratorExit, asyncio.CancelledError):
@@ -535,6 +570,12 @@ async def _generate_stream_response(
                     logger.error(f"Failed to create or send sources event: {sources_error}", exc_info=True)
                     # sources 이벤트 생성 실패해도 스트림은 계속 진행
                     # done 이벤트는 아래에서 반드시 전송됨
+            else:
+                logger.warning(
+                    f"[_generate_stream_response] ⚠️ Sources 이벤트를 전송하지 않음: "
+                    f"metadata에 sources 데이터가 없음. "
+                    f"metadata_keys={list(metadata.keys())}"
+                )
             
             # 세션 제목 생성 (실패해도 스트림은 계속 진행)
             try:
@@ -545,6 +586,7 @@ async def _generate_stream_response(
         
         # 정상 종료 시 done 이벤트 전송 (stream_handler에서 보내지 않았을 수 있으므로)
         # ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지하기 위해 반드시 done 이벤트 전송
+        # 중요: done 이벤트는 마지막에 전송되어야 함 (sources 이벤트 이후)
         # 단, stream_final_answer가 이미 done 이벤트를 보냈다면 중복 전송하지 않음
         if not done_event_sent:
             try:
@@ -563,8 +605,9 @@ async def _generate_stream_response(
                 stream_completed = True
                 raise
             except Exception as done_error:
-                logger.warning(f"Error sending done event: {done_error}")
+                logger.error(f"[_generate_stream_response] Error sending done event: {done_error}", exc_info=True)
                 stream_completed = True
+                # done 이벤트 전송 실패는 심각한 문제이지만, 제너레이터는 종료됨
         else:
             logger.debug("[_generate_stream_response] Done event already sent by stream_final_answer")
             stream_completed = True

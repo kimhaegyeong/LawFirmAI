@@ -9,6 +9,12 @@ import json
 import re
 import ast
 
+from api.utils.source_type_mapper import (
+    convert_sources_by_type_to_table_based,
+    get_default_sources_by_type
+)
+from api.utils.langgraph_config_helper import create_langgraph_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -461,13 +467,7 @@ class SourcesExtractor:
         all_legal_refs = list(set(extracted_legal_refs + existing_legal_refs))
         
         # 타입별 그룹화 (새로운 기능) - 판례의 참조 법령 포함
-        sources_by_type = self._get_sources_by_type_with_reference_statutes(sources_detail) if sources_detail else {
-            "statute_article": [],
-            "case_paragraph": [],
-            "decision_paragraph": [],
-            "interpretation_paragraph": [],
-            "regulation_paragraph": []
-        }
+        sources_by_type = self._get_sources_by_type_with_reference_statutes(sources_detail) if sources_detail else get_default_sources_by_type()
         
         # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
         return {
@@ -486,7 +486,8 @@ class SourcesExtractor:
             return ExtractionResult.empty().to_dict()
         
         try:
-            config = {"configurable": {"thread_id": session_id}}
+            # LangGraph config 생성 (유틸리티 함수 사용)
+            config = create_langgraph_config(session_id=session_id)
             final_state = await self.workflow_service.app.aget_state(config)
             
             if not final_state or not final_state.values:
@@ -520,8 +521,8 @@ class SourcesExtractor:
             extracted_statutes = self._extract_statutes_from_reference_clauses(sources_detail)
             
             if extracted_statutes:
-                # 기존 statute_article과 병합 (중복 제거)
-                existing_statutes = sources_by_type.get("statute_article", [])
+                # 기존 statutes_articles와 병합 (중복 제거)
+                existing_statutes = sources_by_type.get("statutes_articles", [])
                 existing_keys = {
                     f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
                     for s in existing_statutes if isinstance(s, dict)
@@ -536,10 +537,10 @@ class SourcesExtractor:
                             existing_statutes.append(cleaned_statute)
                             existing_keys.add(statute_key)
                 
-                sources_by_type["statute_article"] = existing_statutes
+                sources_by_type["statutes_articles"] = existing_statutes
                 logger.info(f"Extracted {len(extracted_statutes)} statutes from reference clauses")
             
-            logger.info(f"Sources extracted from session {session_id}: {len(sources_by_type.get('statute_article', []))} statutes, {len(sources_by_type.get('case_paragraph', []))} cases, {len(sources_by_type.get('decision_paragraph', []))} decisions, {len(sources_by_type.get('interpretation_paragraph', []))} interpretations, {len(related_questions)} related_questions")
+            logger.info(f"Sources extracted from session {session_id}: {len(sources_by_type.get('statutes_articles', []))} statutes, {len(sources_by_type.get('precedent_contents', []))} cases, {len(sources_by_type.get('precedent_chunks', []))} precedent chunks, {len(related_questions)} related_questions")
             
             # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
             return {
@@ -672,64 +673,50 @@ class SourcesExtractor:
             return None
         
         try:
-            # 데이터베이스 연결 시도 (타임아웃 설정)
-            import sqlite3
-            import os
+            # PostgreSQL에서 조회
+            from api.database.connection import get_session
+            from sqlalchemy import text
             
-            # 데이터베이스 경로 찾기 (lawfirm_v2.db는 더 이상 사용하지 않음)
-            db_paths = [
-                os.getenv('DATABASE_PATH', ''),
-            ]
-            
-            for db_path in db_paths:
-                if db_path and os.path.exists(db_path):
-                    try:
-                        # 타임아웃 설정 (5초)
-                        conn = sqlite3.connect(db_path, timeout=5.0)
-                        conn.row_factory = sqlite3.Row
-                        try:
-                            cursor = conn.cursor()
-                            
-                            if law_id:
-                                # assembly_laws 테이블에서 조회
-                                cursor.execute("SELECT law_name FROM assembly_laws WHERE law_id = ? LIMIT 1", (law_id,))
-                                result = cursor.fetchone()
-                                if result:
-                                    statute_name = result[0] if isinstance(result, sqlite3.Row) else result[0]
-                                    logger.debug(f"[sources_extractor] Found statute name from DB (law_id): {statute_name}")
-                                    return statute_name
-                            
-                            if statute_id:
-                                # statutes 테이블에서 조회
-                                cursor.execute("SELECT name FROM statutes WHERE id = ? LIMIT 1", (statute_id,))
-                                result = cursor.fetchone()
-                                if result:
-                                    statute_name = result[0] if isinstance(result, sqlite3.Row) else result[0]
-                                    logger.debug(f"[sources_extractor] Found statute name from DB (statute_id): {statute_name}")
-                                    return statute_name
-                                
-                                # statute_articles를 통해 statutes 조회
-                                cursor.execute("""
-                                    SELECT s.name FROM statutes s
-                                    INNER JOIN statute_articles sa ON s.id = sa.statute_id
-                                    WHERE sa.id = ? LIMIT 1
-                                """, (statute_id,))
-                                result = cursor.fetchone()
-                                if result:
-                                    statute_name = result[0] if isinstance(result, sqlite3.Row) else result[0]
-                                    logger.debug(f"[sources_extractor] Found statute name from DB (via statute_articles): {statute_name}")
-                                    return statute_name
-                        finally:
-                            conn.close()
-                        break
-                    except sqlite3.OperationalError as e:
-                        # 데이터베이스 잠금 오류 등은 무시하고 계속 진행
-                        logger.debug(f"[sources_extractor] Database operational error (skipping): {e}")
-                        continue
-                    except Exception as db_error:
-                        # 기타 데이터베이스 오류는 로그만 남기고 계속 진행
-                        logger.debug(f"[sources_extractor] Database error (skipping): {db_error}")
-                        continue
+            db = get_session()
+            try:
+                if law_id:
+                    # assembly_laws 테이블은 PostgreSQL에 존재하지 않을 수 있음
+                    # statutes 테이블에서 law_id로 조회 시도
+                    result = db.execute(
+                        text("SELECT law_name_kr FROM statutes WHERE law_id = :law_id LIMIT 1"),
+                        {"law_id": law_id}
+                    ).fetchone()
+                    if result:
+                        statute_name = result[0]
+                        logger.debug(f"[sources_extractor] Found statute name from DB (law_id): {statute_name}")
+                        return statute_name
+                
+                if statute_id:
+                    # statutes 테이블에서 조회
+                    result = db.execute(
+                        text("SELECT law_name_kr FROM statutes WHERE id = :statute_id LIMIT 1"),
+                        {"statute_id": statute_id}
+                    ).fetchone()
+                    if result:
+                        statute_name = result[0]
+                        logger.debug(f"[sources_extractor] Found statute name from DB (statute_id): {statute_name}")
+                        return statute_name
+                    
+                    # statutes_articles를 통해 statutes 조회
+                    result = db.execute(
+                        text("""
+                            SELECT s.law_name_kr FROM statutes s
+                            INNER JOIN statutes_articles sa ON s.id = sa.statute_id
+                            WHERE sa.id = :statute_id LIMIT 1
+                        """),
+                        {"statute_id": statute_id}
+                    ).fetchone()
+                    if result:
+                        statute_name = result[0]
+                        logger.debug(f"[sources_extractor] Found statute name from DB (via statutes_articles): {statute_name}")
+                        return statute_name
+            finally:
+                db.close()
         except Exception as e:
             # 모든 예외를 잡아서 스트리밍이 중단되지 않도록 함
             logger.debug(f"[sources_extractor] Failed to get statute name from DB (non-blocking): {e}")
@@ -1256,25 +1243,72 @@ class SourcesExtractor:
         """state에서 sources_detail 추출 및 정규화"""
         sources_detail = []
         
+        logger.info(
+            f"[_extract_sources_detail] sources_detail 추출 시작: "
+            f"state_keys={list(state_values.keys())[:20]}..."
+        )
+        
+        # 1. top-level에서 sources_detail 확인
         if "sources_detail" in state_values:
             sources_detail_list = state_values.get("sources_detail", [])
+            logger.info(
+                f"[_extract_sources_detail] top-level sources_detail 발견: "
+                f"type={type(sources_detail_list).__name__}, "
+                f"length={len(sources_detail_list) if isinstance(sources_detail_list, list) else 'N/A'}"
+            )
             if isinstance(sources_detail_list, list):
                 sources_detail = sources_detail_list
+                logger.info(f"[_extract_sources_detail] ✅ top-level에서 {len(sources_detail)}개 sources_detail 추출")
         
+        # 2. metadata에서 sources_detail 확인
         if not sources_detail and "metadata" in state_values:
             metadata = state_values.get("metadata", {})
             if isinstance(metadata, dict) and "sources_detail" in metadata:
                 metadata_sources_detail = metadata.get("sources_detail", [])
+                logger.info(
+                    f"[_extract_sources_detail] metadata sources_detail 발견: "
+                    f"type={type(metadata_sources_detail).__name__}, "
+                    f"length={len(metadata_sources_detail) if isinstance(metadata_sources_detail, list) else 'N/A'}"
+                )
                 if isinstance(metadata_sources_detail, list):
                     sources_detail = metadata_sources_detail
+                    logger.info(f"[_extract_sources_detail] ✅ metadata에서 {len(sources_detail)}개 sources_detail 추출")
         
+        # 3. retrieved_docs에서 sources_detail 생성 (fallback)
         if not sources_detail and "retrieved_docs" in state_values:
-            sources_detail = self._generate_sources_detail_from_retrieved_docs(
-                state_values.get("retrieved_docs", [])
+            retrieved_docs = state_values.get("retrieved_docs", [])
+            logger.info(
+                f"[_extract_sources_detail] retrieved_docs에서 sources_detail 생성 시도: "
+                f"retrieved_docs_count={len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'}"
             )
+            sources_detail = self._generate_sources_detail_from_retrieved_docs(retrieved_docs)
+            if sources_detail:
+                logger.info(f"[_extract_sources_detail] ✅ retrieved_docs에서 {len(sources_detail)}개 sources_detail 생성")
+        
+        # 4. common에서도 확인 (추가)
+        if not sources_detail and "common" in state_values:
+            common = state_values.get("common", {})
+            if isinstance(common, dict):
+                if "sources_detail" in common:
+                    common_sources_detail = common.get("sources_detail", [])
+                    logger.info(
+                        f"[_extract_sources_detail] common sources_detail 발견: "
+                        f"type={type(common_sources_detail).__name__}, "
+                        f"length={len(common_sources_detail) if isinstance(common_sources_detail, list) else 'N/A'}"
+                    )
+                    if isinstance(common_sources_detail, list):
+                        sources_detail = common_sources_detail
+                        logger.info(f"[_extract_sources_detail] ✅ common에서 {len(sources_detail)}개 sources_detail 추출")
         
         if sources_detail:
-            return self._normalize_sources_detail(sources_detail)
+            normalized = self._normalize_sources_detail(sources_detail)
+            logger.info(f"[_extract_sources_detail] ✅ 정규화 완료: {len(normalized)}개 sources_detail 반환")
+            return normalized
+        else:
+            logger.warning(
+                f"[_extract_sources_detail] ⚠️ sources_detail을 찾을 수 없습니다. "
+                f"state_values 구조: {list(state_values.keys())[:30]}"
+            )
         
         return []
     
@@ -1283,8 +1317,18 @@ class SourcesExtractor:
         retrieved_docs: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """retrieved_docs에서 sources_detail 생성"""
-        logger.info(f"[_generate_sources_detail_from_retrieved_docs] Called with {len(retrieved_docs)} retrieved_docs")
+        logger.info(
+            f"[_generate_sources_detail_from_retrieved_docs] Called with "
+            f"{len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'} retrieved_docs, "
+            f"type={type(retrieved_docs).__name__}"
+        )
         if not isinstance(retrieved_docs, list) or not retrieved_docs:
+            logger.warning(
+                f"[_generate_sources_detail_from_retrieved_docs] ⚠️ retrieved_docs가 유효하지 않습니다: "
+                f"type={type(retrieved_docs).__name__}, "
+                f"is_list={isinstance(retrieved_docs, list)}, "
+                f"length={len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'}"
+            )
             return []
         
         try:
@@ -1306,38 +1350,52 @@ class SourcesExtractor:
             
             formatter = UnifiedSourceFormatter()
             
+            # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_documents_type
+            normalized_docs = normalize_documents_type(retrieved_docs)
+            
             sources_detail = []
-            for doc in retrieved_docs:
+            for doc in normalized_docs:
                 if not isinstance(doc, dict):
                     continue
                 
-                source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
-                if not source_type:
-                    metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                    if metadata.get("case_id") or metadata.get("court") or metadata.get("casenames"):
-                        source_type = "case_paragraph"
-                    elif metadata.get("decision_id"):
-                        source_type = "decision_paragraph"
-                    elif (metadata.get("interpretation_number") or 
-                          metadata.get("interpretation_serial_number") or
-                          metadata.get("expcId") or
-                          (metadata.get("org") and metadata.get("title") and metadata.get("response_date")) or
-                          (metadata.get("org") and metadata.get("title") and not metadata.get("decision_id"))):
-                        source_type = "interpretation_paragraph"
-                    elif metadata.get("org") and not metadata.get("title"):
-                        source_type = "decision_paragraph"
-                    elif metadata.get("statute_name") or metadata.get("law_name") or metadata.get("article_no"):
-                        source_type = "statute_article"
-                    else:
-                        source_type = "regulation_paragraph"
+                # 🔥 정규화 후 doc.type만 확인 (단일 소스)
+                source_type = doc.get("type", "unknown")
                 
+                # 디버깅: source_type 추출 과정 로깅
+                logger.info(
+                    f"[_generate_sources_detail_from_retrieved_docs] source_type 추출: "
+                    f"doc.type={doc.get('type')}, "
+                    f"extracted_source_type={source_type}"
+                )
+                
+                # merged_metadata 초기화
                 metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                # merged_metadata 초기화: metadata를 먼저 복사
-                merged_metadata = {**metadata} if isinstance(metadata, dict) else {}
+                merged_metadata = metadata.copy()
+                # source_type을 merged_metadata에 명시적으로 포함
+                merged_metadata["type"] = source_type
+                merged_metadata["source_type"] = source_type
                 
                 # 최상위 레벨 필드도 merged_metadata에 포함 (metadata보다 우선)
-                for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
-                           "court", "doc_id", "casenames", "case_name", "org", "title", "announce_date", "decision_date", "response_date"]:
+                # 원천 데이터 최대한 보존
+                for key in [
+                    # 기본 식별자 (원천 추적용)
+                    "chunk_id", "source_id", "id",
+                    # 검색 관련 정보
+                    "search_type", "original_search_type",
+                    # 점수 정보 (디버깅/분석용)
+                    "relevance_score", "cross_encoder_score", "original_score", 
+                    "keyword_match_score", "combined_relevance_score",
+                    # 타입별 메타데이터
+                    "statute_name", "law_name", "article_no", "article_number", 
+                    "clause_no", "item_no", "statute_id", "law_id",
+                    "court", "doc_id", "casenames", "case_name", "precedent_id",
+                    "org", "title", "announce_date", "decision_date", "response_date",
+                    # 추가 메타데이터
+                    "effective_date", "proclamation_number", "category", "domain",
+                    "section_type", "referenced_articles", "referenced_precedents",
+                    "abbrv", "statute_abbrv", "law_abbrv",
+                ]:
                     if key in doc:
                         merged_metadata[key] = doc[key]
                 
@@ -2229,20 +2287,20 @@ class SourcesExtractor:
             if not isinstance(source_item, dict):
                 return {}
             
-            # 제거할 필드 목록
+            # 제거할 필드 목록 (원천 식별자는 보존)
             fields_to_remove = {
-                # 점수 필드 (relevance_score만 유지)
-                "score", "similarity", "cross_encoder_score", "original_score", 
-                "keyword_match_score", "combined_relevance_score",
-                # 내부 메타데이터
-                "chunk_id", "embedding_version_id", "chunk_size_category", 
+                # 점수 필드 (relevance_score는 유지, 나머지는 metadata에 보존)
+                "score", "similarity",
+                # 내부 메타데이터 (원천 추적에 불필요)
+                "embedding_version_id", "chunk_size_category", 
                 "chunk_group_id", "chunking_strategy", "source_type_weight",
-                # 쿼리 정보
+                # 쿼리 정보 (사용자에게 불필요)
                 "query",
                 # 중복 필드
                 "text", "source", "source_type",
-                # 내부 식별자
-                "id", "chunk_id", "source_id"
+                # 내부 식별자 (id만 제거, chunk_id와 source_id는 보존)
+                "id"
+                # 원천 식별자 보존: chunk_id, source_id는 제거하지 않음
             }
             
             cleaned = {}
@@ -2492,7 +2550,24 @@ class SourcesExtractor:
                 elif source_type == "decision_paragraph" and "decision_number" in cleaned and cleaned["decision_number"]:
                     cleaned["name"] = cleaned["decision_number"]
             
-            # relevance_score만 유지
+            # 원천 식별자 보존 (원본 문서 추적용)
+            if "chunk_id" in source_item:
+                chunk_id = source_item["chunk_id"]
+                if chunk_id:
+                    cleaned["chunk_id"] = str(chunk_id) if not isinstance(chunk_id, str) else chunk_id
+            
+            if "source_id" in source_item:
+                source_id = source_item["source_id"]
+                if source_id:
+                    cleaned["source_id"] = str(source_id) if not isinstance(source_id, str) else source_id
+            
+            # original_url 보존
+            if "original_url" in source_item:
+                original_url = source_item["original_url"]
+                if original_url and isinstance(original_url, str) and original_url.strip():
+                    cleaned["original_url"] = original_url.strip()
+            
+            # 점수 정보 보존 (relevance_score 우선, 나머지는 metadata에)
             if "relevance_score" in source_item:
                 relevance_score = source_item["relevance_score"]
                 if relevance_score is not None:
@@ -2501,15 +2576,38 @@ class SourcesExtractor:
                     except (ValueError, TypeError):
                         pass
             
-            # metadata에서 필요한 필드만 추출 (하위 호환성)
+            # metadata에서 필요한 필드 추출 (원천 데이터 보존 강화)
             metadata = source_item.get("metadata", {})
             if isinstance(metadata, dict):
-                # metadata에서 불필요한 필드 제거
+                # metadata에서 불필요한 필드만 제거 (원천 데이터는 보존)
                 cleaned_metadata = {}
                 for key, value in metadata.items():
                     if key in fields_to_remove:
                         continue
-                    # 타입별 필요한 필드만 포함
+                    
+                    # 원천 식별자는 항상 보존
+                    if key in ["chunk_id", "source_id", "original_url"]:
+                        if value:
+                            cleaned_metadata[key] = value
+                        continue
+                    
+                    # 점수 정보는 metadata에 보존 (개발/디버깅용)
+                    if key in ["relevance_score", "cross_encoder_score", "original_score", 
+                               "keyword_match_score", "combined_relevance_score"]:
+                        if value is not None:
+                            try:
+                                cleaned_metadata[key] = float(value) if isinstance(value, (int, float, str)) else value
+                            except (ValueError, TypeError):
+                                pass
+                        continue
+                    
+                    # 검색 관련 정보 보존
+                    if key in ["search_type", "original_search_type"]:
+                        if value:
+                            cleaned_metadata[key] = value
+                        continue
+                    
+                    # 타입별 필요한 필드 포함
                     if source_type == "case_paragraph" and key in ["doc_id", "case_id", "announce_date", "decision_date", "court", "casenames", "case_name"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                             cleaned_metadata[key] = value
@@ -2525,14 +2623,27 @@ class SourcesExtractor:
                         case_name_val = metadata.get("case_name")
                         if case_name_val and (not isinstance(case_name_val, str) or (isinstance(case_name_val, str) and case_name_val.strip())):
                             cleaned_metadata["case_name"] = case_name_val
-                    elif source_type == "statute_article" and key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no"]:
+                
+                # 타입별 필드 추가 처리 (루프 밖에서)
+                for key, value in metadata.items():
+                    if key in fields_to_remove:
+                        continue
+                    if key in cleaned_metadata:  # 이미 처리된 필드는 스킵
+                        continue
+                    
+                    if source_type == "statute_article" and key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no", "statute_id", "law_id", "abbrv", "statute_abbrv", "law_abbrv", "effective_date", "proclamation_number"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                             cleaned_metadata[key] = value
-                    elif source_type == "decision_paragraph" and key in ["doc_id", "decision_id", "org", "decision_date", "result"]:
+                    elif source_type == "decision_paragraph" and key in ["doc_id", "decision_id", "org", "decision_date", "result", "announce_date"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                             cleaned_metadata[key] = value
-                    elif source_type == "interpretation_paragraph" and key in ["doc_id", "interpretation_id", "interpretation_number", "org", "title", "response_date"]:
+                    elif source_type == "interpretation_paragraph" and key in ["doc_id", "interpretation_id", "interpretation_number", "org", "title", "response_date", "announce_date"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                            cleaned_metadata[key] = value
+                    
+                    # 공통 메타데이터 필드 보존
+                    if key in ["category", "domain", "section_type", "referenced_articles", "referenced_precedents"]:
+                        if value:
                             cleaned_metadata[key] = value
                 
                 # metadata에서 타입별 필드 추출 (이미 최상위에 없을 경우)
@@ -3037,11 +3148,12 @@ class SourcesExtractor:
         self,
         sources_detail: List[Dict[str, Any]]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """sources_detail을 타입별로 그룹화"""
+        """sources_detail을 타입별로 그룹화 (실제 테이블명 기반)"""
         # 먼저 정규화
         normalized = self._normalize_sources_detail(sources_detail)
         
-        grouped = {
+        # source_type 값 기반으로 먼저 그룹화
+        grouped_by_source_type = {
             "statute_article": [],
             "case_paragraph": [],
             "decision_paragraph": [],
@@ -3054,36 +3166,32 @@ class SourcesExtractor:
                 continue
             
             source_type = detail.get("type", "")
-            if source_type in grouped:
+            if source_type in grouped_by_source_type:
                 # 클라이언트용으로 정리
                 cleaned = self._clean_source_for_client(detail)
                 if cleaned:
-                    grouped[source_type].append(cleaned)
+                    grouped_by_source_type[source_type].append(cleaned)
         
-        return grouped
+        # 실제 테이블명 기반으로 변환
+        return convert_sources_by_type_to_table_based(grouped_by_source_type)
     
     def _get_sources_by_type_with_reference_statutes(
         self,
         sources_detail: List[Dict[str, Any]]
     ) -> Dict[str, List[Any]]:
         """
-        sources_by_type을 생성하고 판례의 참조 법령을 자동으로 추가하는 헬퍼 함수
+        sources_by_type을 생성하고 판례의 참조 법령을 자동으로 추가하는 헬퍼 함수 (실제 테이블명 기반)
         """
         try:
-            sources_by_type = self._get_sources_by_type(sources_detail) if sources_detail else {
-                "statute_article": [],
-                "case_paragraph": [],
-                "decision_paragraph": [],
-                "interpretation_paragraph": [],
-                "regulation_paragraph": []
-            }
+            sources_by_type = self._get_sources_by_type(sources_detail) if sources_detail else get_default_sources_by_type()
             
             if sources_detail:
                 try:
                     extracted_statutes = self._extract_statutes_from_reference_clauses(sources_detail)
                     
                     if extracted_statutes:
-                        existing_statutes = sources_by_type.get("statute_article", [])
+                        # 실제 테이블명 기반으로 접근
+                        existing_statutes = sources_by_type.get("statutes_articles", [])
                         existing_keys = {
                             f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
                             for s in existing_statutes if isinstance(s, dict)
@@ -3098,7 +3206,7 @@ class SourcesExtractor:
                                     existing_statutes.append(cleaned_statute)
                                     existing_keys.add(statute_key)
                         
-                        sources_by_type["statute_article"] = existing_statutes
+                        sources_by_type["statutes_articles"] = existing_statutes
                 except Exception as extract_error:
                     logger.warning(f"Failed to extract reference statutes: {extract_error}", exc_info=True)
                     # 참조 법령 추출 실패해도 기본 sources_by_type은 반환
@@ -3106,14 +3214,8 @@ class SourcesExtractor:
             return sources_by_type
         except Exception as e:
             logger.error(f"Failed to get sources_by_type_with_reference_statutes: {e}", exc_info=True)
-            # 최종 예외 발생 시 기본 구조 반환
-            return {
-                "statute_article": [],
-                "case_paragraph": [],
-                "decision_paragraph": [],
-                "interpretation_paragraph": [],
-                "regulation_paragraph": []
-            }
+            # 최종 예외 발생 시 기본 구조 반환 (실제 테이블명 기반)
+            return get_default_sources_by_type()
     
     def _extract_statutes_from_reference_clauses(
         self, 
@@ -3209,12 +3311,11 @@ class SourcesExtractor:
         detail: Dict[str, Any], 
         source_type: str
     ) -> List[Dict[str, Any]]:
-        """데이터베이스에서 참조조문 가져오기"""
+        """PostgreSQL에서 참조조문 가져오기"""
         try:
-            import sqlite3
-            import os
+            from api.database.connection import get_session
+            from sqlalchemy import text
             import json
-            from pathlib import Path
             
             # doc_id 추출
             doc_id = (
@@ -3228,54 +3329,41 @@ class SourcesExtractor:
             if not doc_id:
                 return []
             
-            # 데이터베이스 경로 가져오기 (lawfirm_v2.db는 더 이상 사용하지 않음)
-            db_path = os.getenv("DATABASE_PATH", None)
-            if not db_path:
-                logger.debug("DATABASE_PATH not set, skipping reference statutes extraction")
-                return []
-            if not os.path.isabs(db_path):
-                # 상대 경로인 경우 프로젝트 루트 기준으로 변환
-                project_root = Path(__file__).parent.parent.parent
-                db_path = str(project_root / db_path)
-            
-            if not os.path.exists(db_path):
-                logger.debug(f"Database not found at {db_path}, skipping reference statutes extraction")
-                return []
-            
+            db = get_session()
             try:
-                with sqlite3.connect(db_path, timeout=5.0) as conn:
-                    conn.row_factory = sqlite3.Row
-                    if source_type == "case_paragraph":
-                        cursor = conn.execute(
-                            "SELECT reference_statutes FROM cases WHERE doc_id = ?",
-                            (doc_id,)
-                        )
-                    elif source_type == "decision_paragraph":
-                        cursor = conn.execute(
-                            "SELECT reference_statutes FROM decisions WHERE doc_id = ?",
-                            (doc_id,)
-                        )
-                    elif source_type == "interpretation_paragraph":
-                        cursor = conn.execute(
-                            "SELECT reference_statutes FROM interpretations WHERE doc_id = ?",
-                            (doc_id,)
-                        )
-                    else:
-                        return []
-                    
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        try:
-                            return json.loads(row[0])
-                        except (json.JSONDecodeError, TypeError) as json_error:
-                            logger.warning(f"Failed to parse reference_statutes JSON for {doc_id}: {json_error}")
-                            return []
+                # source_type에 따라 테이블 선택
+                if source_type == "case_paragraph":
+                    # precedent_contents 테이블에서 referenced_articles 조회
+                    result = db.execute(
+                        text("SELECT referenced_articles FROM precedent_contents WHERE id = :doc_id OR precedent_id = :doc_id LIMIT 1"),
+                        {"doc_id": doc_id}
+                    ).fetchone()
+                elif source_type == "decision_paragraph":
+                    # decisions 테이블은 PostgreSQL에 존재하지 않을 수 있음
+                    logger.debug(f"decisions table not available in PostgreSQL for doc_id={doc_id}")
+                    return []
+                elif source_type == "interpretation_paragraph":
+                    # interpretations 테이블은 PostgreSQL에 존재하지 않을 수 있음
+                    logger.debug(f"interpretations table not available in PostgreSQL for doc_id={doc_id}")
+                    return []
+                else:
+                    return []
                 
-                return []
-            except sqlite3.Error as db_error:
-                logger.warning(f"Database error getting reference statutes for {doc_id}: {db_error}")
-                return []
-            
+                if result and result[0]:
+                    try:
+                        # referenced_articles는 JSONB 또는 JSON 문자열일 수 있음
+                        ref_statutes = result[0]
+                        if isinstance(ref_statutes, str):
+                            return json.loads(ref_statutes)
+                        elif isinstance(ref_statutes, (dict, list)):
+                            return ref_statutes if isinstance(ref_statutes, list) else [ref_statutes]
+                        else:
+                            return []
+                    except (json.JSONDecodeError, TypeError) as json_error:
+                        logger.warning(f"Failed to parse reference_statutes JSON for {doc_id}: {json_error}")
+                        return []
+            finally:
+                db.close()
         except Exception as e:
             logger.warning(f"Failed to get reference statutes from DB for {source_type}: {e}", exc_info=True)
             return []
@@ -3287,101 +3375,97 @@ class SourcesExtractor:
         clause_no: Optional[str] = None,
         item_no: Optional[str] = None
     ) -> Optional[str]:
-        """데이터베이스에서 법령 본문 조회"""
+        """PostgreSQL에서 법령 본문 조회"""
         try:
-            import sqlite3
-            import os
-            from pathlib import Path
+            from api.database.connection import get_session
+            from sqlalchemy import text
             
             if not statute_name or not article_no:
                 return None
             
-            # 데이터베이스 경로 가져오기 (lawfirm_v2.db는 더 이상 사용하지 않음)
-            db_path = os.getenv("DATABASE_PATH", None)
-            if not db_path:
-                return None
-            if not os.path.isabs(db_path):
-                project_root = Path(__file__).parent.parent.parent
-                db_path = str(project_root / db_path)
-            
-            if not os.path.exists(db_path):
-                return None
-            
+            db = get_session()
             try:
-                with sqlite3.connect(db_path, timeout=5.0) as conn:
-                    conn.row_factory = sqlite3.Row
-                    
-                    # statutes 테이블에서 statute_id 조회
-                    cursor = conn.execute(
-                        "SELECT id FROM statutes WHERE name = ? LIMIT 1",
-                        (statute_name,)
-                    )
-                    statute_row = cursor.fetchone()
-                    if not statute_row:
-                        return None
-                    
-                    statute_id = statute_row['id'] if isinstance(statute_row, sqlite3.Row) else statute_row[0]
-                    
-                    # statute_articles 테이블에서 본문 조회
-                    # 우선순위: 정확한 항/호 매칭 > 항만 매칭 > 조문 전체
-                    content = None
-                    
-                    # 1. 항과 호가 모두 있는 경우: 정확한 항/호 매칭
-                    if clause_no and item_no:
-                        cursor = conn.execute(
-                            """
-                            SELECT text FROM statute_articles
-                            WHERE statute_id = ? AND article_no = ? AND clause_no = ? AND item_no = ?
+                # statutes 테이블에서 statute_id 조회
+                result = db.execute(
+                    text("SELECT id FROM statutes WHERE law_name_kr = :statute_name LIMIT 1"),
+                    {"statute_name": statute_name}
+                ).fetchone()
+                
+                if not result:
+                    return None
+                
+                statute_id = result[0]
+                content = None
+                
+                # 1. 항과 호가 모두 있는 경우: 정확한 항/호 매칭
+                # item_content 우선, 없으면 article_content 사용
+                if clause_no and item_no:
+                    result = db.execute(
+                        text("""
+                            SELECT COALESCE(item_content, clause_content, article_content) as content
+                            FROM statutes_articles
+                            WHERE statute_id = :statute_id 
+                              AND article_no = :article_no 
+                              AND clause_no = :clause_no 
+                              AND item_no = :item_no
                             LIMIT 1
-                            """,
-                            (statute_id, article_no, clause_no, item_no)
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            content = row['text'] if isinstance(row, sqlite3.Row) else row[0]
-                    
-                    # 2. 항만 있는 경우: 항 매칭
-                    if not content and clause_no:
-                        cursor = conn.execute(
-                            """
-                            SELECT text FROM statute_articles
-                            WHERE statute_id = ? AND article_no = ? AND clause_no = ? AND item_no IS NULL
+                        """),
+                        {
+                            "statute_id": statute_id,
+                            "article_no": article_no,
+                            "clause_no": clause_no,
+                            "item_no": item_no
+                        }
+                    ).fetchone()
+                    if result:
+                        content = result[0]
+                
+                # 2. 항만 있는 경우: 항 매칭
+                # clause_content 우선, 없으면 article_content 사용
+                if not content and clause_no:
+                    result = db.execute(
+                        text("""
+                            SELECT COALESCE(clause_content, article_content) as content
+                            FROM statutes_articles
+                            WHERE statute_id = :statute_id 
+                              AND article_no = :article_no 
+                              AND clause_no = :clause_no 
+                              AND item_no IS NULL
                             LIMIT 1
-                            """,
-                            (statute_id, article_no, clause_no)
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            content = row['text'] if isinstance(row, sqlite3.Row) else row[0]
-                    
-                    # 3. 조문 전체 조회 (항/호가 없거나 매칭 실패한 경우)
-                    if not content:
-                        # 조문 전체를 조회 (여러 항/호가 있으면 합침)
-                        cursor = conn.execute(
-                            """
-                            SELECT GROUP_CONCAT(text, '\n\n') as full_text
-                            FROM statute_articles
-                            WHERE statute_id = ? AND article_no = ?
-                            ORDER BY 
+                        """),
+                        {
+                            "statute_id": statute_id,
+                            "article_no": article_no,
+                            "clause_no": clause_no
+                        }
+                    ).fetchone()
+                    if result:
+                        content = result[0]
+                
+                # 3. 조문 전체 조회 (PostgreSQL의 STRING_AGG 사용)
+                if not content:
+                    result = db.execute(
+                        text("""
+                            SELECT STRING_AGG(article_content, E'\\n\\n' ORDER BY 
                                 CASE WHEN clause_no IS NULL THEN 1 ELSE 0 END,
                                 clause_no,
                                 CASE WHEN item_no IS NULL THEN 1 ELSE 0 END,
-                                item_no
-                            """,
-                            (statute_id, article_no)
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            content = row['full_text'] if isinstance(row, sqlite3.Row) else row[0]
-                    
-                    if content and content.strip():
-                        return content.strip()
-                    
-                    return None
-            except sqlite3.Error as db_error:
-                logger.debug(f"Database error getting statute content: {db_error}")
-                return None
-            
+                                item_no) as full_text
+                            FROM statutes_articles
+                            WHERE statute_id = :statute_id AND article_no = :article_no
+                        """),
+                        {
+                            "statute_id": statute_id,
+                            "article_no": article_no
+                        }
+                    ).fetchone()
+                    if result:
+                        content = result[0]
+                
+                if content and content.strip():
+                    return content.strip()
+            finally:
+                db.close()
         except Exception as e:
             logger.debug(f"Failed to get statute content from DB: {e}")
             return None

@@ -119,8 +119,8 @@ if lawfirm_langgraph_path.exists():
 
 # 환경 변수 로드 (중앙 집중식 로더 사용)
 try:
-    from utils.env_loader import load_all_env_files
-    load_all_env_files(project_root)
+    from utils.env_loader import ensure_env_loaded
+    ensure_env_loaded(project_root)
 except ImportError as e:
     print(f"⚠️  Failed to load environment variables: {e}")
     print("   Make sure utils/env_loader.py exists in the project root")
@@ -138,7 +138,7 @@ get_api_config()
 from api.middleware.logging import setup_logging
 
 # 라우터는 환경 변수 로드 후에 import
-from api.routers import chat, session, history, feedback, health, auth, documents
+from api.routers import chat, session, history, feedback, health, auth
 
 # FastAPI 앱 생성
 # 프로덕션 환경에서 API 문서 비활성화
@@ -452,7 +452,6 @@ app.include_router(history.router, prefix="/api/v1", tags=["history"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
-app.include_router(documents.router, tags=["documents"])
 
 
 @app.get("/")

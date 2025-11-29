@@ -156,12 +156,14 @@ class AnswerChunkInfo(BaseModel):
 class ChatResponse(BaseModel):
     """채팅 응답 스키마"""
     answer: str = Field(..., description="AI 답변")
-    sources_by_type: Optional[Dict[str, List[SourceInfo]]] = Field(default_factory=lambda: {
-        "statute_article": [],
-        "case_paragraph": [],
-        "decision_paragraph": [],
-        "interpretation_paragraph": []
-    }, description="참고 출처 타입별 그룹화 (유일한 필요한 필드)")
+    sources_by_type: Optional[Dict[str, List[SourceInfo]]] = Field(
+        default_factory=lambda: {
+            "statutes_articles": [],
+            "precedent_contents": [],
+            "precedent_chunks": []
+        },
+        description="참고 출처 타입별 그룹화 (실제 PostgreSQL 테이블명 기반)"
+    )
     confidence: float = Field(..., description="신뢰도 (0.0 ~ 1.0)")
     # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
     sources: List[str] = Field(default_factory=list, description="참고 출처 (deprecated: sources_by_type에서 재구성 가능)")

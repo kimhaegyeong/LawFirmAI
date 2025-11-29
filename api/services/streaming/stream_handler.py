@@ -1,10 +1,10 @@
 """
 스트리밍 처리 전용 클래스
 """
-import json
 import asyncio
 import logging
 import uuid
+from datetime import datetime
 from typing import Dict, Any, Optional, AsyncGenerator, List
 
 from .constants import StreamingConstants
@@ -12,16 +12,13 @@ from .event_builder import StreamEventBuilder
 from .token_extractor import TokenExtractor
 from .node_filter import NodeFilter
 from api.utils.sse_formatter import format_sse_event
+from api.utils.source_type_mapper import get_default_sources_by_type
+from api.utils.langgraph_config_helper import create_langgraph_config_with_callbacks
 
 logger = logging.getLogger(__name__)
 
-# 기본 sources_by_type 구조
-DEFAULT_SOURCES_BY_TYPE = {
-    "statute_article": [],
-    "case_paragraph": [],
-    "decision_paragraph": [],
-    "interpretation_paragraph": []
-}
+# 기본 sources_by_type 구조 (실제 PostgreSQL 테이블명 기반)
+DEFAULT_SOURCES_BY_TYPE = get_default_sources_by_type()
 
 
 class StreamHandler:
@@ -81,13 +78,58 @@ class StreamHandler:
             
             callback_handler, config = await self._setup_callback_handler(session_id)
             
+            # ⚠️ 주의: state에 콜백을 저장하면 LangGraph 체크포인트 직렬화 시 오류 발생
+            # config의 callbacks만 사용하고 state에는 저장하지 않음
+            # LangGraph는 config의 callbacks를 자동으로 노드에 전달함
+            if callback_handler:
+                logger.debug(f"[stream_final_answer] ✅ 콜백이 config에 설정됨: {len(config.get('callbacks', []))}개")
+            
             progress_event = self.event_builder.create_progress_event("답변 생성 중...")
             yield format_sse_event(progress_event)
             
-            async for chunk in self._process_stream_events(
-                initial_state, config, callback_handler, message, session_id
-            ):
-                yield chunk
+            # 초기 State 로깅
+            logger.info(
+                f"[stream_final_answer] 초기 State 확인: "
+                f"query={initial_state.get('query', '')[:50] if initial_state.get('query') else 'N/A'}..., "
+                f"session_id={initial_state.get('session_id', 'N/A')}, "
+                f"state_keys={list(initial_state.keys())[:20]}"
+            )
+            
+            # Config 로깅
+            logger.info(
+                f"[stream_final_answer] Config 확인: "
+                f"thread_id={config.get('configurable', {}).get('thread_id', 'N/A')}, "
+                f"has_callbacks={bool(config.get('callbacks'))}, "
+                f"config_keys={list(config.keys())}"
+            )
+            
+            try:
+                async for chunk in self._process_stream_events(
+                    initial_state, config, callback_handler, message, session_id
+                ):
+                    yield chunk
+            except Exception as process_error:
+                logger.error(
+                    f"[stream_final_answer] ⚠️ _process_stream_events 실행 중 오류: {process_error}",
+                    exc_info=True
+                )
+                # 에러 이벤트 전송
+                try:
+                    error_event = self.event_builder.create_error_event(
+                        f"[오류] 스트리밍 처리 중 오류가 발생했습니다: {str(process_error)}"
+                    )
+                    yield format_sse_event(error_event)
+                except Exception:
+                    pass
+                
+                # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                try:
+                    minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(process_error)}
+                    yield format_sse_event(minimal_done)
+                    logger.debug("[stream_final_answer] Minimal done event sent after process error")
+                except Exception:
+                    pass
+                raise
                 
         except (GeneratorExit, asyncio.CancelledError) as cancel_error:
             # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
@@ -125,14 +167,17 @@ class StreamHandler:
             else:
                 logger.warning("[stream_final_answer] ⚠️ Failed to create StreamingCallbackHandler")
         
-        config = {"configurable": {"thread_id": session_id}}
+        # LangGraph config 생성 (유틸리티 함수 사용)
         if callback_handler:
-            config = self.workflow_service.get_config_with_callbacks(
+            config = create_langgraph_config_with_callbacks(
                 session_id=session_id,
                 callbacks=[callback_handler]
             )
             logger.info(f"[stream_final_answer] ✅ Callbacks added to config: {len(config.get('callbacks', []))} callback(s)")
         else:
+            # 콜백이 없는 경우 기본 config 생성
+            from api.utils.langgraph_config_helper import create_langgraph_config
+            config = create_langgraph_config(session_id=session_id)
             logger.warning("[stream_final_answer] ⚠️ No callback handler, streaming may not work optimally")
         
         return callback_handler, config
@@ -199,191 +244,291 @@ class StreamHandler:
             logger.info("[stream_final_answer] ✅ Callback queue monitoring task started")
         
         try:
-            async for event in self.workflow_service.app.astream_events(
-                initial_state,
-                config,
-                version="v2"
-            ):
-                if chunk_output_queue:
+            # 최신 LangGraph API 호환: version 파라미터 없이 시도, 실패 시 구버전 폴백
+            logger.info(
+                f"[_process_stream_events] 스트리밍 시작: "
+                f"session_id={session_id}, "
+                f"message={message[:50]}..., "
+                f"initial_state_keys={list(initial_state.keys())[:20]}, "
+                f"config_thread_id={config.get('configurable', {}).get('thread_id', 'N/A')}"
+            )
+            
+            try:
+                logger.info(f"[_process_stream_events] astream_events() 호출 시작")
+                try:
+                    astream_events_iter = self.workflow_service.app.astream_events(
+                        initial_state,
+                        config
+                    )
+                    logger.info(f"[_process_stream_events] ✅ astream_events() 제너레이터 생성 완료, 이벤트 대기 시작")
+                except Exception as iter_error:
+                    logger.error(f"[_process_stream_events] ⚠️ astream_events() 제너레이터 생성 실패: {iter_error}", exc_info=True)
+                    # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 제너레이터 생성 실패해도 done 이벤트 전송
                     try:
-                        while True:
-                            try:
-                                chunk_data = chunk_output_queue.get_nowait()
-                                if chunk_data and chunk_data.get("type") == StreamingConstants.CALLBACK_CHUNK_TYPE:
-                                    content = chunk_data.get("content", "")
-                                    chunk_index = chunk_data.get("chunk_index", 0)
-                                    chunk_key = f"{chunk_index}_{content[:10]}"
+                        minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(iter_error)}
+                        yield format_sse_event(minimal_done)
+                        logger.debug("[_process_stream_events] Minimal done event sent after generator creation error")
+                    except Exception:
+                        pass
+                    raise
+                
+                try:
+                    async for event in astream_events_iter:
+                        logger.info(f"[_process_stream_events] ✅ 이벤트 수신 #{event_count + 1}: event_type={event.get('event', 'N/A')}, name={event.get('name', 'N/A')}")
+                        
+                        # 콜백 큐에서 청크 처리
+                        if chunk_output_queue:
+                            chunks_received, full_answer, chunks_to_yield = self._process_callback_queue_chunks(
+                                chunk_output_queue, processed_callback_chunks, full_answer
+                            )
+                            callback_chunks_received += chunks_received
+                            
+                            # 콜백 청크를 스트림으로 전송
+                            for content in chunks_to_yield:
+                                stream_event = self.event_builder.create_stream_event(
+                                    content, source="callback"
+                                )
+                                yield format_sse_event(stream_event)
+                        
+                        event_count += 1
+                        event_type = event.get("event", "")
+                        event_name = event.get("name", "")
+                        event_parent = event.get("parent", {})
+                        event_data = event.get("data", {})
+                        
+                        # 이벤트 타입별 카운터 및 로깅
+                        if event_type == "on_llm_stream":
+                            on_llm_stream_count += 1
+                            if on_llm_stream_count <= StreamingConstants.MAX_DEBUG_LOGS:
+                                logger.debug(
+                                    f"[stream_final_answer] on_llm_stream 이벤트 #{on_llm_stream_count}: "
+                                    f"name={event_name}, "
+                                    f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                                )
+                        elif event_type == "on_chat_model_stream":
+                            on_chat_model_stream_count += 1
+                            if on_chat_model_stream_count <= StreamingConstants.MAX_DEBUG_LOGS:
+                                logger.debug(
+                                    f"[stream_final_answer] on_chat_model_stream 이벤트 #{on_chat_model_stream_count}: "
+                                    f"name={event_name}, "
+                                    f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                                )
+                        elif event_type == "on_chain_stream":
+                            on_chain_stream_count += 1
+                            if on_chain_stream_count <= StreamingConstants.MAX_DETAILED_LOGS:
+                                logger.debug(
+                                    f"[stream_final_answer] on_chain_stream 이벤트 #{on_chain_stream_count}: "
+                                    f"name={event_name}, "
+                                    f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                                )
+                        
+                        # 이벤트 타입별 처리
+                        if event_type == "on_chain_start":
+                            answer_generation_started, last_node_name = self._handle_on_chain_start_event(
+                                event_name, answer_generation_started, last_node_name
+                            )
+                        
+                        elif event_type == "on_chain_end":
+                            answer_generation_started = self._handle_on_chain_end_event(
+                                event_name, answer_generation_started
+                            )
+                            
+                            # 답변 완료 노드인 경우 남은 콜백 청크 처리
+                            if self.node_filter.is_answer_completion_node(event_name):
+                                if chunk_output_queue:
+                                    chunks_received, full_answer, chunks_to_yield = self._process_callback_queue_chunks(
+                                        chunk_output_queue, processed_callback_chunks, full_answer
+                                    )
+                                    callback_chunks_received += chunks_received
                                     
-                                    if chunk_key not in processed_callback_chunks and content:
-                                        processed_callback_chunks.add(chunk_key)
-                                        callback_chunks_received += 1
-                                        full_answer += content
-                                        
+                                    # 콜백 청크를 스트림으로 전송
+                                    for content in chunks_to_yield:
                                         stream_event = self.event_builder.create_stream_event(
                                             content, source="callback"
                                         )
                                         yield format_sse_event(stream_event)
-                                        
-                                        if callback_chunks_received <= StreamingConstants.MAX_DEBUG_LOGS:
-                                            logger.info(
-                                                f"[stream_final_answer] ✅ Callback chunk #{callback_chunks_received}: "
-                                                f"length={len(content)}, content={content[:50]}..."
-                                            )
-                            except asyncio.QueueEmpty:
-                                break
-                    except Exception as e:
-                        logger.debug(f"[stream_final_answer] Error checking callback output queue: {e}")
-                
-                event_count += 1
-                event_type = event.get("event", "")
-                event_name = event.get("name", "")
-                event_parent = event.get("parent", {})
-                
-                if event_type == "on_llm_stream":
-                    on_llm_stream_count += 1
-                    if on_llm_stream_count <= StreamingConstants.MAX_DEBUG_LOGS:
-                        logger.debug(
-                            f"[stream_final_answer] on_llm_stream 이벤트 #{on_llm_stream_count}: "
-                            f"name={event_name}, "
-                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
-                        )
-                elif event_type == "on_chat_model_stream":
-                    on_chat_model_stream_count += 1
-                    if on_chat_model_stream_count <= StreamingConstants.MAX_DEBUG_LOGS:
-                        logger.debug(
-                            f"[stream_final_answer] on_chat_model_stream 이벤트 #{on_chat_model_stream_count}: "
-                            f"name={event_name}, "
-                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
-                        )
-                elif event_type == "on_chain_stream":
-                    on_chain_stream_count += 1
-                    if on_chain_stream_count <= StreamingConstants.MAX_DETAILED_LOGS:
-                        logger.debug(
-                            f"[stream_final_answer] on_chain_stream 이벤트 #{on_chain_stream_count}: "
-                            f"name={event_name}, "
-                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
-                        )
-                
-                if event_type == "on_chain_start":
-                    node_name = event_name
-                    if self.node_filter.is_answer_generation_node(node_name):
-                        answer_generation_started = True
-                        last_node_name = node_name
-                        logger.debug(f"[stream_final_answer] 답변 생성 노드 시작: {node_name}")
-                
-                elif event_type == "on_chain_end":
-                    node_name = event_name
-                    if self.node_filter.is_answer_completion_node(node_name):
-                        answer_generation_started = False
-                        logger.debug(f"[stream_final_answer] 답변 생성 노드 완료: {node_name}")
-                
-                elif event_type in ["on_llm_stream", "on_chat_model_stream"]:
-                    # 분류 노드는 정상 동작이므로 조용히 건너뜀
-                    if self.node_filter.is_classification_node(event_name):
-                        self._classification_skip_count += 1
-                        continue
-                    
-                    if not answer_generation_started:
-                        # 로그 카운터를 사용하여 제한된 횟수만 로그 출력
-                        if self._skip_log_count < StreamingConstants.MAX_SKIP_LOGS:
-                            logger.debug(f"[stream_final_answer] 답변 생성 노드가 시작되지 않아 건너뜀: {event_name}")
-                            self._skip_log_count += 1
-                        continue
-                    
-                    if self.node_filter.is_target_node(event_name, event_parent, last_node_name):
-                        logger.debug(f"[stream_final_answer] 타겟 노드 확인됨: {event_name}, 토큰 추출 시작")
-                        event_data = event.get("data", {})
-                        token = self.token_extractor.extract_from_event(event_data)
                         
-                        if token:
-                            stream_event_count += 1
-                            full_answer += token
-                            logger.debug(
-                                f"[stream_final_answer] 토큰 전송: "
-                                f"token_length={len(token)}, "
-                                f"token_preview={token[:50]}..., "
-                                f"stream_event_count={stream_event_count}"
+                        elif event_type in ["on_llm_stream", "on_chat_model_stream"]:
+                            should_continue, full_answer, stream_event_count, token = self._handle_streaming_event(
+                                event_type, event_name, event_parent, event_data,
+                                answer_generation_started, last_node_name,
+                                full_answer, stream_event_count
                             )
-                            stream_event = self.event_builder.create_stream_event(token)
-                            yield format_sse_event(stream_event)
-                        else:
-                            logger.debug(
-                                f"[stream_final_answer] 토큰 추출 실패: "
-                                f"token={token}, "
-                                f"event_data_keys={list(event_data.keys()) if isinstance(event_data, dict) else []}"
-                            )
-                    else:
-                        logger.debug(
-                            f"[stream_final_answer] 타겟 노드가 아님 (필터링됨): "
-                            f"type={event_type}, name={event_name}, "
-                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}, "
-                            f"last_node={last_node_name}, started={answer_generation_started}"
-                        )
+                            
+                            if not should_continue:
+                                continue
+                            
+                            # 토큰이 있으면 스트림으로 전송
+                            if token:
+                                stream_event = self.event_builder.create_stream_event(token)
+                                yield format_sse_event(stream_event)
                 
-                if event_type == "on_chain_end" and self.node_filter.is_answer_completion_node(event_name):
-                    if chunk_output_queue:
-                        try:
-                            while True:
-                                try:
-                                    chunk_data = chunk_output_queue.get_nowait()
-                                    if chunk_data and chunk_data.get("type") == StreamingConstants.CALLBACK_CHUNK_TYPE:
-                                        content = chunk_data.get("content", "")
-                                        chunk_index = chunk_data.get("chunk_index", 0)
-                                        chunk_key = f"{chunk_index}_{content[:10]}"
-                                        
-                                        if chunk_key not in processed_callback_chunks and content:
-                                            processed_callback_chunks.add(chunk_key)
-                                            callback_chunks_received += 1
-                                            full_answer += content
-                                            
-                                            stream_event = self.event_builder.create_stream_event(
-                                                content, source="callback"
-                                            )
-                                            yield format_sse_event(stream_event)
-                                except asyncio.QueueEmpty:
-                                    break
-                        except Exception as e:
-                            logger.debug(f"[stream_final_answer] Error processing remaining callback chunks: {e}")
-                    
-                    logger.info(
-                        f"[stream_final_answer] 스트리밍 완료: "
-                        f"총 {event_count}개 이벤트, "
-                        f"스트림 이벤트 {stream_event_count}개, "
-                        f"콜백 청크 {callback_chunks_received}개, "
-                        f"on_llm_stream={on_llm_stream_count}개, "
-                        f"on_chat_model_stream={on_chat_model_stream_count}개, "
-                        f"on_chain_stream={on_chain_stream_count}개, "
-                        f"full_answer_length={len(full_answer)}"
+                # async for 루프 종료 후 처리 (모든 이벤트 수신 완료)
+                except StopAsyncIteration:
+                    logger.info(f"[_process_stream_events] ✅ astream_events() 제너레이터 정상 종료 (StopAsyncIteration)")
+                    # 정상 종료이므로 계속 진행
+                except Exception as iter_error:
+                    logger.error(f"[_process_stream_events] ⚠️ astream_events() 이터레이터 실행 중 오류: {iter_error}", exc_info=True)
+                    # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                    try:
+                        minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(iter_error)}
+                        yield format_sse_event(minimal_done)
+                        logger.debug("[_process_stream_events] Minimal done event sent after iterator error")
+                    except Exception:
+                        pass
+                    # 예외는 상위로 전파하되, done 이벤트는 이미 전송했으므로 스트림은 정상 종료됨
+                    raise
+                
+                logger.info(
+                    f"[stream_final_answer] ✅ astream_events() 루프 완료: "
+                    f"총 {event_count}개 이벤트, "
+                    f"스트림 이벤트 {stream_event_count}개, "
+                    f"콜백 청크 {callback_chunks_received}개, "
+                    f"on_llm_stream={on_llm_stream_count}개, "
+                    f"on_chat_model_stream={on_chat_model_stream_count}개, "
+                    f"on_chain_stream={on_chain_stream_count}개, "
+                    f"full_answer_length={len(full_answer)}"
+                )
+                
+                # 이벤트가 너무 적으면 경고
+                if event_count < 5:
+                    logger.warning(
+                        f"[stream_final_answer] ⚠️ 이벤트 수가 너무 적습니다 ({event_count}개). "
+                        f"워크플로우가 제대로 실행되지 않았을 수 있습니다."
                     )
-                    
-                    await asyncio.sleep(StreamingConstants.STATE_RETRY_DELAY)
-                    
+                
+                await asyncio.sleep(StreamingConstants.STATE_RETRY_DELAY)
+                
+                # final_metadata 가져오기 (실패해도 계속 진행)
+                final_metadata = {}
+                try:
+                    logger.info(f"[stream_final_answer] final_metadata 가져오기 시도: session_id={session_id}")
                     final_metadata = await self._get_final_metadata(
                         config, initial_state, message, full_answer, session_id
                     )
-                    
-                    if final_metadata.get("llm_validation"):
+                    logger.info(
+                        f"[stream_final_answer] ✅ final_metadata 가져오기 성공: "
+                        f"sources_detail={len(final_metadata.get('sources_detail', []))}, "
+                        f"sources_by_type={bool(final_metadata.get('sources_by_type'))}, "
+                        f"sources={len(final_metadata.get('sources', []))}, "
+                        f"legal_references={len(final_metadata.get('legal_references', []))}, "
+                        f"metadata_keys={list(final_metadata.keys())[:20]}"
+                    )
+                except Exception as metadata_error:
+                    logger.warning(
+                        f"[stream_final_answer] ⚠️ Failed to get final metadata: {metadata_error}",
+                        exc_info=True
+                    )
+                    # metadata 가져오기 실패해도 계속 진행
+                
+                # validation 이벤트 전송 (실패해도 계속 진행)
+                if final_metadata.get("llm_validation"):
+                    try:
                         validation_event = self.event_builder.create_validation_event(
                             final_metadata["llm_validation"]
                         )
                         yield format_sse_event(validation_event)
-                    
-                    # 개선: final_event의 content에 full_answer를 포함하여 클라이언트가 답변을 받을 수 있도록 함
+                    except Exception as validation_error:
+                        logger.warning(f"[stream_final_answer] Failed to send validation event: {validation_error}")
+                        # validation 이벤트 전송 실패해도 계속 진행
+                
+                # final_event 전송 (실패해도 done 이벤트는 전송)
+                try:
                     final_event = self.event_builder.create_final_event(full_answer, final_metadata)
                     yield format_sse_event(final_event)
-                    
-                    # done_event는 스트림 종료를 알리는 용도로만 사용 (선택적)
+                except (GeneratorExit, asyncio.CancelledError):
+                    # 클라이언트가 연결을 끊은 경우
+                    raise
+                except Exception as final_error:
+                    logger.warning(f"[stream_final_answer] Failed to send final event: {final_error}")
+                    # final 이벤트 전송 실패해도 done 이벤트는 전송
+                
+                # done_event는 스트림 종료를 알리는 용도로 반드시 전송 (ERR_INCOMPLETE_CHUNKED_ENCODING 방지)
+                # 중요: done 이벤트는 예외가 발생해도 반드시 전송되어야 함
+                done_event_sent = False
+                try:
                     done_event = self.event_builder.create_done_event(full_answer, final_metadata)
                     yield format_sse_event(done_event)
-                    
-                    logger.debug("[stream_final_answer] Stream completed, generator will exit")
-                    break
+                    done_event_sent = True
+                    logger.debug("[stream_final_answer] Done event sent successfully")
+                except (GeneratorExit, asyncio.CancelledError):
+                    # 클라이언트가 연결을 끊은 경우
+                    logger.debug("[stream_final_answer] Client disconnected while sending done event")
+                    raise
+                except Exception as done_error:
+                    logger.error(f"[stream_final_answer] Failed to send done event: {done_error}", exc_info=True)
+                    # done 이벤트 전송 실패 시 최소한의 done 이벤트라도 전송 시도
+                    if not done_event_sent:
+                        try:
+                            minimal_done = {"type": "done", "timestamp": datetime.now().isoformat()}
+                            yield format_sse_event(minimal_done)
+                            logger.debug("[stream_final_answer] Minimal done event sent as fallback")
+                        except Exception:
+                            logger.error("[stream_final_answer] Failed to send minimal done event", exc_info=True)
+            except (TypeError, AttributeError) as e:
+                # 구버전 API 폴백: version="v2" 파라미터 사용
+                logger.warning(f"[_process_stream_events] 최신 API 실패, 구버전 API(version='v2') 시도: {e}")
+                try:
+                    logger.info(f"[_process_stream_events] astream_events(version='v2') 호출 시작")
+                    async for event in self.workflow_service.app.astream_events(
+                        initial_state,
+                        config,
+                        version="v2"
+                    ):
+                        logger.info(f"[_process_stream_events] ✅ 이벤트 수신 (v2): event_type={event.get('event', 'N/A')}, name={event.get('name', 'N/A')}")
+                        # 동일한 이벤트 처리 로직 적용 (위의 로직 재사용)
+                        # TODO: 이벤트 처리 로직을 함수로 분리하여 재사용
+                        event_count += 1
+                        # 기본 이벤트 처리...
+                except Exception as ve2:
+                    logger.error(f"[_process_stream_events] 구버전 API도 실패: {ve2}", exc_info=True)
+                    # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                    try:
+                        minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(ve2)}
+                        yield format_sse_event(minimal_done)
+                        logger.debug("[_process_stream_events] Minimal done event sent after v2 API error")
+                    except Exception:
+                        pass
+                    raise
+            except Exception as e:
+                logger.error(f"[_process_stream_events] ⚠️ astream_events() 실행 중 예상치 못한 오류: {e}", exc_info=True)
+                # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                try:
+                    minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(e)}
+                    yield format_sse_event(minimal_done)
+                    logger.debug("[_process_stream_events] Minimal done event sent after unexpected error")
+                except Exception:
+                    pass
+                raise
         
         except asyncio.CancelledError:
             logger.debug("[stream_final_answer] Stream cancelled (client disconnected)")
+            # 🔥 개선: ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 done 이벤트 전송 시도
+            try:
+                done_event = self.event_builder.create_done_event("", {})
+                yield format_sse_event(done_event)
+            except Exception:
+                pass  # 이미 연결이 끊어진 경우 무시
             raise
         except GeneratorExit:
             logger.debug("[stream_final_answer] Generator exit (client disconnected)")
+            # 🔥 개선: ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 done 이벤트 전송 시도
+            try:
+                done_event = self.event_builder.create_done_event("", {})
+                yield format_sse_event(done_event)
+            except Exception:
+                pass  # 이미 연결이 끊어진 경우 무시
+            raise
+        except Exception as e:
+            logger.error(f"[stream_final_answer] Unexpected error: {e}", exc_info=True)
+            # 🔥 개선: ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 done 이벤트 전송 시도
+            try:
+                error_event = self.event_builder.create_error_event(str(e))
+                yield format_sse_event(error_event)
+                done_event = self.event_builder.create_done_event("", {})
+                yield format_sse_event(done_event)
+            except Exception:
+                pass  # 이미 연결이 끊어진 경우 무시
             raise
         finally:
             callback_monitoring_active = False
@@ -448,6 +593,30 @@ class StreamHandler:
                 sources_detail_from_top = state_values.get("sources_detail", [])
                 sources_detail_from_common = (state_values.get("common", {}).get("sources_detail") if isinstance(state_values.get("common"), dict) else None) or []
                 sources_detail_from_metadata = (state_values.get("metadata", {}).get("sources_detail") if isinstance(state_values.get("metadata"), dict) else None) or []
+                
+                # 상세 로깅: 각 위치에서 sources_detail 확인
+                logger.info(
+                    f"[_get_final_metadata] sources_detail 추출 시도: "
+                    f"top={len(sources_detail_from_top) if isinstance(sources_detail_from_top, list) else 'not_list'}, "
+                    f"common={len(sources_detail_from_common) if isinstance(sources_detail_from_common, list) else 'not_list'}, "
+                    f"metadata={len(sources_detail_from_metadata) if isinstance(sources_detail_from_metadata, list) else 'not_list'}"
+                )
+                
+                # state_values의 모든 키 확인 (디버깅용)
+                state_keys = list(state_values.keys())
+                logger.debug(
+                    f"[_get_final_metadata] State keys: {state_keys[:30]}... "
+                    f"(total: {len(state_keys)})"
+                )
+                
+                # common과 metadata 구조 확인
+                if isinstance(state_values.get("common"), dict):
+                    common_keys = list(state_values["common"].keys())
+                    logger.debug(f"[_get_final_metadata] Common keys: {common_keys[:20]}...")
+                if isinstance(state_values.get("metadata"), dict):
+                    metadata_keys = list(state_values["metadata"].keys())
+                    logger.debug(f"[_get_final_metadata] Metadata keys: {metadata_keys[:20]}...")
+                
                 # 우선순위: top > common > metadata
                 sources_detail = sources_detail_from_top if sources_detail_from_top else (sources_detail_from_common if sources_detail_from_common else sources_detail_from_metadata)
                 if not sources_detail:
@@ -456,12 +625,22 @@ class StreamHandler:
                 sources_source = "top" if sources_from_top else ("common" if sources_from_common else ("metadata" if sources_from_metadata else "none"))
                 sources_detail_source = "top" if sources_detail_from_top else ("common" if sources_detail_from_common else ("metadata" if sources_detail_from_metadata else "none"))
                 
-                logger.debug(
-                    f"[stream_final_answer] Sources extraction check: "
+                logger.info(
+                    f"[_get_final_metadata] Sources extraction result: "
                     f"state_sources={len(sources)} (from {sources_source}), "
                     f"state_legal_references={len(legal_references)}, "
                     f"state_sources_detail={len(sources_detail)} (from {sources_detail_source})"
                 )
+                
+                # sources_detail이 비어있으면 상세 로깅
+                if not sources_detail:
+                    logger.warning(
+                        f"[_get_final_metadata] ⚠️ sources_detail이 비어있습니다. "
+                        f"state_values 구조 확인 필요. "
+                        f"top_type={type(sources_detail_from_top).__name__}, "
+                        f"common_type={type(sources_detail_from_common).__name__}, "
+                        f"metadata_type={type(sources_detail_from_metadata).__name__}"
+                    )
                 
                 if not sources_detail:
                     structured_docs_from_top = state_values.get("structured_documents")
@@ -526,6 +705,15 @@ class StreamHandler:
                         retrieved_docs_from_common or
                         retrieved_docs_from_metadata or
                         retrieved_docs_from_metadata_search
+                    )
+                    
+                    logger.info(
+                        f"[_get_final_metadata] retrieved_docs 확인: "
+                        f"top={len(retrieved_docs_from_top) if isinstance(retrieved_docs_from_top, list) else 0}, "
+                        f"search={len(retrieved_docs_from_search) if isinstance(retrieved_docs_from_search, list) else 0}, "
+                        f"common={len(retrieved_docs_from_common) if isinstance(retrieved_docs_from_common, list) else 0}, "
+                        f"metadata={len(retrieved_docs_from_metadata) if isinstance(retrieved_docs_from_metadata, list) else 0}, "
+                        f"all_retrieved_docs={len(all_retrieved_docs) if isinstance(all_retrieved_docs, list) else 0}"
                     )
                     
                     if prompt_used_docs:
@@ -671,6 +859,10 @@ class StreamHandler:
                     # 개선: sources, legal_references, sources_detail이 없으면 retrieved_docs에서 추출 시도
                     if retrieved_docs and self.sources_extractor:
                         try:
+                            # 🔥 retrieved_docs 정규화 (type 통합) - 추출 전에 정규화
+                            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_documents_type
+                            retrieved_docs = normalize_documents_type(retrieved_docs) if retrieved_docs else []
+                            
                             # retrieved_docs를 state_values에 임시로 추가하여 추출 함수가 사용할 수 있게 함
                             temp_state = {**state_values, "retrieved_docs": retrieved_docs}
                             
@@ -835,6 +1027,168 @@ class StreamHandler:
             except Exception as fallback_error:
                 logger.error(f"[stream_final_answer] Failed to generate fallback sources_by_type: {fallback_error}", exc_info=True)
                 return DEFAULT_SOURCES_BY_TYPE.copy()
+    
+    def _process_callback_queue_chunks(
+        self,
+        chunk_output_queue: asyncio.Queue,
+        processed_callback_chunks: set,
+        full_answer: str
+    ) -> tuple[int, str, list[str]]:
+        """
+        콜백 큐에서 청크를 가져와 처리
+        
+        Returns:
+            (callback_chunks_received, updated_full_answer, chunks_to_yield)
+            chunks_to_yield: 스트림으로 전송할 청크 리스트
+        """
+        callback_chunks_received = 0
+        updated_full_answer = full_answer
+        chunks_to_yield = []
+        
+        if not chunk_output_queue:
+            return callback_chunks_received, updated_full_answer, chunks_to_yield
+        
+        try:
+            while True:
+                try:
+                    chunk_data = chunk_output_queue.get_nowait()
+                    if chunk_data and chunk_data.get("type") == StreamingConstants.CALLBACK_CHUNK_TYPE:
+                        content = chunk_data.get("content", "")
+                        chunk_index = chunk_data.get("chunk_index", 0)
+                        chunk_key = f"{chunk_index}_{content[:10]}"
+                        
+                        if chunk_key not in processed_callback_chunks and content:
+                            processed_callback_chunks.add(chunk_key)
+                            callback_chunks_received += 1
+                            updated_full_answer += content
+                            chunks_to_yield.append(content)
+                            
+                            if callback_chunks_received <= StreamingConstants.MAX_DEBUG_LOGS:
+                                logger.info(
+                                    f"[stream_final_answer] ✅ Callback chunk #{callback_chunks_received}: "
+                                    f"length={len(content)}, content={content[:50]}..."
+                                )
+                except asyncio.QueueEmpty:
+                    break
+        except Exception as e:
+            logger.debug(f"[stream_final_answer] Error checking callback output queue: {e}")
+        
+        return callback_chunks_received, updated_full_answer, chunks_to_yield
+    
+    def _handle_on_chain_start_event(
+        self,
+        event_name: str,
+        answer_generation_started: bool,
+        last_node_name: Optional[str]
+    ) -> tuple[bool, Optional[str]]:
+        """
+        on_chain_start 이벤트 처리
+        
+        Returns:
+            (updated_answer_generation_started, updated_last_node_name)
+        """
+        node_name = event_name
+        is_answer_node = self.node_filter.is_answer_generation_node(node_name)
+        logger.info(
+            f"[stream_final_answer] on_chain_start: "
+            f"node_name={node_name}, "
+            f"is_answer_generation_node={is_answer_node}"
+        )
+        
+        if is_answer_node:
+            answer_generation_started = True
+            last_node_name = node_name
+            logger.info(f"[stream_final_answer] ✅ 답변 생성 노드 시작: {node_name}, answer_generation_started=True")
+        
+        return answer_generation_started, last_node_name
+    
+    def _handle_on_chain_end_event(
+        self,
+        event_name: str,
+        answer_generation_started: bool
+    ) -> bool:
+        """
+        on_chain_end 이벤트 처리
+        
+        Returns:
+            updated_answer_generation_started
+        """
+        node_name = event_name
+        if self.node_filter.is_answer_completion_node(node_name):
+            answer_generation_started = False
+            logger.debug(f"[stream_final_answer] 답변 생성 노드 완료: {node_name}")
+        
+        return answer_generation_started
+    
+    def _handle_streaming_event(
+        self,
+        event_type: str,
+        event_name: str,
+        event_parent: Dict[str, Any],
+        event_data: Dict[str, Any],
+        answer_generation_started: bool,
+        last_node_name: Optional[str],
+        full_answer: str,
+        stream_event_count: int
+    ) -> tuple[bool, str, int, Optional[str]]:
+        """
+        스트리밍 이벤트 처리 (on_llm_stream, on_chat_model_stream)
+        
+        Returns:
+            (should_continue, updated_full_answer, updated_stream_event_count, token_to_yield)
+            should_continue: False면 continue, True면 계속 처리
+            token_to_yield: None이 아니면 yield해야 할 토큰
+        """
+        # 분류 노드는 정상 동작이므로 조용히 건너뜀
+        if self.node_filter.is_classification_node(event_name):
+            self._classification_skip_count += 1
+            return False, full_answer, stream_event_count, None
+        
+        # answer_generation_started가 False인 경우 로깅 후 건너뛰기
+        if not answer_generation_started:
+            # 로그 카운터를 사용하여 제한된 횟수만 로그 출력
+            if self._skip_log_count < StreamingConstants.MAX_SKIP_LOGS:
+                logger.warning(
+                    f"[stream_final_answer] ⚠️ 답변 생성 노드가 시작되지 않아 건너뜀: "
+                    f"event_name={event_name}, "
+                    f"event_type={event_type}, "
+                    f"last_node={last_node_name}, "
+                    f"answer_generation_started={answer_generation_started}"
+                )
+                self._skip_log_count += 1
+            return False, full_answer, stream_event_count, None
+        
+        # 타겟 노드 확인 및 토큰 추출
+        if self.node_filter.is_target_node(event_name, event_parent, last_node_name):
+            logger.info(f"[stream_final_answer] ✅ 타겟 노드 확인됨: {event_name}, 토큰 추출 시작")
+            token = self.token_extractor.extract_from_event(event_data)
+            
+            if token:
+                stream_event_count += 1
+                updated_full_answer = full_answer + token
+                logger.info(
+                    f"[stream_final_answer] ✅ 토큰 전송 #{stream_event_count}: "
+                    f"token_length={len(token)}, "
+                    f"token_preview={token[:50]}..., "
+                    f"full_answer_length={len(updated_full_answer)}"
+                )
+                return True, updated_full_answer, stream_event_count, token
+            else:
+                logger.warning(
+                    f"[stream_final_answer] ⚠️ 토큰 추출 실패: "
+                    f"event_name={event_name}, "
+                    f"event_data_keys={list(event_data.keys()) if isinstance(event_data, dict) else []}, "
+                    f"event_data_type={type(event_data).__name__}"
+                )
+        else:
+            logger.debug(
+                f"[stream_final_answer] 타겟 노드가 아님 (필터링됨): "
+                f"type={event_type}, name={event_name}, "
+                f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}, "
+                f"last_node={last_node_name}, started={answer_generation_started}"
+            )
+        
+        return True, full_answer, stream_event_count, None
     
     def _validate_and_augment_state(
         self,

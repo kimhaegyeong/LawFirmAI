@@ -78,12 +78,11 @@ async def get_history(
                 elif isinstance(timestamp, str):
                     try:
                         # ISO 형식 문자열을 datetime으로 변환
-                        # SQLite는 다양한 형식을 사용할 수 있으므로 여러 형식 시도
                         timestamp_str = timestamp.replace("Z", "+00:00")
                         try:
                             timestamp = datetime.fromisoformat(timestamp_str)
                         except ValueError:
-                            # 다른 형식 시도 (SQLite 기본 형식)
+                            # 다른 형식 시도
                             try:
                                 timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
                             except ValueError:

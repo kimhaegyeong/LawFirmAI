@@ -267,6 +267,7 @@ async def create_session(
     """새 세션 생성"""
     try:
         user_id, client_ip = get_user_info(request, current_user)
+        logger.info(f"[create_session] Request received: title={session.title}, user_id={user_id}, ip={client_ip}")
         
         session_id = session_service.create_session(
             title=session.title,
@@ -274,9 +275,14 @@ async def create_session(
             ip_address=client_ip
         )
         
-        created_session = session_service.get_session(session_id)
+        logger.info(f"[create_session] Session created: session_id={session_id}")
+        
+        created_session = session_service.get_session(session_id, check_expiry=False)
         if not created_session:
+            logger.error(f"[create_session] Session created but not found immediately: session_id={session_id}")
             raise HTTPException(status_code=404, detail="Session not found")
+        
+        logger.info(f"[create_session] Session retrieved successfully: session_id={session_id}")
         
         # datetime 객체를 문자열로 변환
         if isinstance(created_session.get("created_at"), datetime):
@@ -309,10 +315,24 @@ async def get_session(
 ):
     """세션 상세 조회"""
     try:
-        logger.debug(f"get_session called with session_id: {session_id}")
-        session = session_service.get_session(session_id)
+        logger.info(f"[get_session] Request received: session_id={session_id}, user_id={current_user.get('user_id') if current_user else None}")
+        session = session_service.get_session(session_id, check_expiry=False)  # 만료 확인 비활성화하여 디버깅
         if not session:
-            logger.warning(f"Session not found: {session_id}")
+            logger.warning(f"[get_session] Session not found in database: {session_id}")
+            # 데이터베이스에 직접 확인
+            from api.database.connection import get_session as get_db_session
+            from api.database.models import Session as SessionModel
+            db = get_db_session()
+            try:
+                direct_check = db.query(SessionModel).filter(SessionModel.session_id == session_id).first()
+                if direct_check:
+                    logger.error(f"[get_session] Session exists in DB but get_session() returned None! session_id={session_id}, title={direct_check.title}")
+                else:
+                    logger.info(f"[get_session] Session does not exist in database: {session_id}")
+            except Exception as db_error:
+                logger.error(f"[get_session] Error checking database directly: {db_error}", exc_info=True)
+            finally:
+                db.close()
             raise HTTPException(status_code=404, detail="Session not found")
         
         # 소유자 확인

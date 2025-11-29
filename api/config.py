@@ -45,11 +45,13 @@ class APIConfig(BaseSettings):
     database_url: Optional[str] = None
     
     # PostgreSQL 설정 (DATABASE_URL이 없을 때 사용)
+    # 프로젝트 루트 .env 파일의 설정을 우선 사용 (21-29줄)
+    # 없으면 api/.env 파일의 설정 사용
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "lawfirm"
-    postgres_user: str = "lawfirm_user"
-    postgres_password: str = "lawfirm_password"
+    postgres_db: str = "lawfirmai_local"
+    postgres_user: str = "lawfirmai"
+    postgres_password: str = "local_password"
     
     def __init__(self, **kwargs):
         # ENVIRONMENT 환경 변수에서 자동 설정
@@ -59,10 +61,20 @@ class APIConfig(BaseSettings):
         super().__init__(**kwargs)
         
         # database_url이 설정되지 않았으면 환경변수 조합으로 생성
+        # 프로젝트 루트 .env 파일의 설정을 우선 사용 (21-29줄)
+        # 없으면 api/.env 파일의 설정 사용
         if not self.database_url:
             from urllib.parse import quote_plus
             encoded_password = quote_plus(self.postgres_password)
             self.database_url = f"postgresql://{self.postgres_user}:{encoded_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        
+        # SQLite URL 검증
+        if self.database_url and self.database_url.startswith("sqlite://"):
+            raise ValueError(
+                "SQLite is no longer supported. Please use PostgreSQL. "
+                "Set DATABASE_URL to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database) "
+                "or configure POSTGRES_* environment variables in .env file (lines 21-29)."
+            )
         
         # 환경에 따른 자동 설정
         if self.environment.is_debug_enabled():

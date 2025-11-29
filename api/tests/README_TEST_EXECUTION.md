@@ -93,10 +93,7 @@ pytest api/tests -v -s --capture=no --override-ini="addopts=-v --strict-markers 
 
 ### 설정 파일 충돌
 
-프로젝트 루트와 `api/tests`에 각각 `pytest.ini`가 있는 경우:
-
-- `api/tests`에서 실행하면 `api/tests/pytest.ini`가 우선 적용됩니다
-- 명시적으로 지정하려면: `pytest -c pytest.ini`
+**참고**: 프로젝트 루트의 `pytest.ini`는 삭제되었습니다. `api/tests/pytest.ini`만 사용됩니다.
 
 ## 권장 실행 방법
 

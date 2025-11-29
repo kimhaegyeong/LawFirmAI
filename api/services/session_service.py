@@ -3,13 +3,18 @@
 """
 import os
 import uuid
-import sqlite3
+import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 import logging
+from sqlalchemy import inspect, text, func, and_, or_
+from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.orm import Session
 
 from api.config import api_config
+from api.database.connection import get_session, init_database, get_database_type
+from api.database.models import Session as SessionModel, Message as MessageModel
 
 logger = logging.getLogger(__name__)
 
@@ -27,138 +32,70 @@ class SessionService:
     
     def __init__(self):
         """초기화"""
-        self.db_path = Path(api_config.database_url.replace("sqlite:///", ""))
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
     
     def _init_database(self):
         """데이터베이스 초기화"""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            # SQLAlchemy를 사용하여 테이블 생성
+            init_database()
             
-            # 세션 테이블 생성
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    title TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    message_count INTEGER DEFAULT 0,
-                    user_id TEXT,
-                    ip_address TEXT
-                )
-            """)
+            # 컬럼 마이그레이션 (PostgreSQL만 지원)
+            self._migrate_columns_postgresql()
             
-            # 기존 테이블에 컬럼 추가 (마이그레이션)
-            cursor.execute("PRAGMA table_info(sessions)")
-            existing_columns = [row[1] for row in cursor.fetchall()]
-            
-            if "user_id" not in existing_columns:
-                try:
-                    cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
-                    logger.info("Added user_id column to sessions table")
-                except sqlite3.OperationalError as e:
-                    logger.warning(f"Failed to add user_id column: {e}")
-            
-            if "ip_address" not in existing_columns:
-                try:
-                    cursor.execute("ALTER TABLE sessions ADD COLUMN ip_address TEXT")
-                    logger.info("Added ip_address column to sessions table")
-                except sqlite3.OperationalError as e:
-                    logger.warning(f"Failed to add ip_address column: {e}")
-            
-            if "metadata" in existing_columns:
-                try:
-                    sqlite_version = sqlite3.sqlite_version_info
-                    if sqlite_version >= (3, 35, 0):
-                        cursor.execute("ALTER TABLE sessions DROP COLUMN metadata")
-                        logger.info("Removed metadata column from sessions table")
-                    else:
-                        logger.info("SQLite version < 3.35.0, metadata column will be ignored (not removed)")
-                except sqlite3.OperationalError as e:
-                    logger.warning(f"Failed to remove metadata column: {e}")
-            
-            # 메시지 테이블 생성
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    message_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    metadata TEXT,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                )
-            """)
-            
-            # 인덱스 생성
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_messages_session_id 
-                ON messages(session_id)
-            """)
-            
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_sessions_updated_at 
-                ON sessions(updated_at)
-            """)
-            
-            conn.commit()
-            conn.close()
             logger.info("Database initialized successfully")
-            self._set_database_permissions()
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
     
-    def _set_database_permissions(self):
-        """데이터베이스 파일 권한 설정"""
+    def _migrate_columns_postgresql(self):
+        """PostgreSQL 컬럼 마이그레이션"""
+        db = get_session()
         try:
-            if self.db_path.exists():
-                if os.name == 'posix':
-                    os.chmod(self.db_path, 0o600)
-                    logger.info(f"Database file permissions set to 600: {self.db_path}")
-                elif os.name == 'nt':
-                    import stat
-                    os.chmod(self.db_path, stat.S_IREAD | stat.S_IWRITE)
-                    logger.info(f"Database file permissions set (Windows): {self.db_path}")
-        except Exception as e:
-            logger.warning(f"Failed to set database permissions: {e}")
-    
-    def _ensure_columns_exist(self, conn: sqlite3.Connection):
-        """필요한 컬럼이 존재하는지 확인하고 없으면 추가"""
-        try:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(sessions)")
-            existing_columns = [row[1] for row in cursor.fetchall()]
+            inspector = inspect(db.bind)
+            existing_columns = [col['name'] for col in inspector.get_columns('sessions')]
             
+            # user_id 컬럼 추가
             if "user_id" not in existing_columns:
                 try:
-                    cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
+                    db.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(255)"))
+                    db.commit()
                     logger.info("Added user_id column to sessions table")
-                except sqlite3.OperationalError as e:
+                except OperationalError as e:
+                    db.rollback()
                     logger.warning(f"Failed to add user_id column: {e}")
             
+            # ip_address 컬럼 추가
             if "ip_address" not in existing_columns:
                 try:
-                    cursor.execute("ALTER TABLE sessions ADD COLUMN ip_address TEXT")
+                    db.execute(text("ALTER TABLE sessions ADD COLUMN ip_address VARCHAR(45)"))
+                    db.commit()
                     logger.info("Added ip_address column to sessions table")
-                except sqlite3.OperationalError as e:
+                except OperationalError as e:
+                    db.rollback()
                     logger.warning(f"Failed to add ip_address column: {e}")
             
+            # metadata 컬럼 제거 (있는 경우)
+            if "metadata" in existing_columns:
+                try:
+                    db.execute(text("ALTER TABLE sessions DROP COLUMN metadata"))
+                    db.commit()
+                    logger.info("Removed metadata column from sessions table")
+                except OperationalError as e:
+                    db.rollback()
+                    logger.warning(f"Failed to remove metadata column: {e}")
+            
+            # category 컬럼 제거 (있는 경우)
             if "category" in existing_columns:
                 try:
-                    sqlite_version = sqlite3.sqlite_version_info
-                    if sqlite_version >= (3, 35, 0):
-                        cursor.execute("ALTER TABLE sessions DROP COLUMN category")
-                        logger.info("Removed category column from sessions table")
-                    else:
-                        logger.info("SQLite version < 3.35.0, category column will be ignored (not removed)")
-                except sqlite3.OperationalError as e:
+                    db.execute(text("ALTER TABLE sessions DROP COLUMN category"))
+                    db.commit()
+                    logger.info("Removed category column from sessions table")
+                except OperationalError as e:
+                    db.rollback()
                     logger.warning(f"Failed to remove category column: {e}")
-            
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Failed to ensure columns exist: {e}")
+        finally:
+            db.close()
+    
     
     def create_session(
         self,
@@ -169,69 +106,84 @@ class SessionService:
         """세션 생성"""
         session_id = str(uuid.uuid4())
         
+        logger.debug(f"[create_session] Creating session: session_id={session_id}, title={title}, user_id={user_id}")
+        
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            self._ensure_columns_exist(conn)
-            cursor = conn.cursor()
-            
             now_kst = get_kst_now()
-            now_kst_str = now_kst.isoformat()
-            cursor.execute("""
-                INSERT INTO sessions (session_id, title, created_at, updated_at, user_id, ip_address)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (session_id, title, now_kst_str, now_kst_str, user_id, ip_address))
+            session = SessionModel(
+                session_id=session_id,
+                title=title,
+                created_at=now_kst,
+                updated_at=now_kst,
+                message_count=0,
+                user_id=user_id,
+                ip_address=ip_address
+            )
+            db.add(session)
+            db.commit()
+            logger.info(f"[create_session] Session created successfully: session_id={session_id}, title={title}")
             
-            conn.commit()
-            conn.close()
-            logger.info(f"Session created: {session_id}")
+            # 생성 확인
+            verify_session = db.query(SessionModel).filter(SessionModel.session_id == session_id).first()
+            if not verify_session:
+                logger.error(f"[create_session] Session created but not found in database: session_id={session_id}")
+            else:
+                logger.debug(f"[create_session] Session verified in database: session_id={session_id}")
+            
             return session_id
         except Exception as e:
-            logger.error(f"Failed to create session: {e}")
+            db.rollback()
+            logger.error(f"[create_session] Failed to create session: {e}", exc_info=True)
             raise
+        finally:
+            db.close()
     
     def get_session(self, session_id: str, check_expiry: bool = True) -> Optional[Dict[str, Any]]:
         """세션 조회"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            session = db.query(SessionModel).filter(SessionModel.session_id == session_id).first()
             
-            cursor.execute("""
-                SELECT * FROM sessions WHERE session_id = ?
-            """, (session_id,))
+            if not session:
+                logger.debug(f"[get_session] Session not found in database: {session_id}")
+                return None
             
-            row = cursor.fetchone()
+            session_dict = session.to_dict()
             
-            if row:
-                session_dict = dict(row)
-                # datetime 객체를 ISO 형식 문자열로 변환
-                if isinstance(session_dict.get("created_at"), datetime):
-                    session_dict["created_at"] = session_dict["created_at"].isoformat()
-                if isinstance(session_dict.get("updated_at"), datetime):
-                    session_dict["updated_at"] = session_dict["updated_at"].isoformat()
-                
-                # 세션 만료 시간 확인
-                if check_expiry:
-                    updated_at = session_dict.get("updated_at")
-                    if updated_at:
+            # 세션 만료 시간 확인
+            if check_expiry:
+                updated_at = session_dict.get("updated_at")
+                if updated_at:
+                    try:
                         if isinstance(updated_at, str):
                             updated_at = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
                         if isinstance(updated_at, datetime):
+                            # timezone-naive인 경우 KST로 변환
+                            if updated_at.tzinfo is None:
+                                # 데이터베이스에서 가져온 시간은 UTC로 가정하고 KST로 변환
+                                updated_at = updated_at.replace(tzinfo=timezone.utc).astimezone(KST)
+                            elif updated_at.tzinfo != KST:
+                                # 다른 timezone인 경우 KST로 변환
+                                updated_at = updated_at.astimezone(KST)
+                            
                             expiry_hours = api_config.session_ttl_hours
                             expiry_time = updated_at + timedelta(hours=expiry_hours)
-                            if get_kst_now() > expiry_time:
-                                logger.warning(f"Session expired: {session_id}")
-                                conn.close()
+                            now_kst = get_kst_now()
+                            if now_kst > expiry_time:
+                                logger.warning(f"[get_session] Session expired: {session_id}, expiry_time={expiry_time}, now={now_kst}")
                                 return None
-                
-                conn.close()
-                return session_dict
+                    except Exception as expiry_error:
+                        logger.error(f"[get_session] Error checking expiry for session {session_id}: {expiry_error}", exc_info=True)
+                        # 만료 확인 오류 시에도 세션 반환 (안전한 기본값)
             
-            conn.close()
-            return None
+            logger.debug(f"[get_session] Session found: {session_id}, title={session_dict.get('title')}")
+            return session_dict
         except Exception as e:
-            logger.error(f"Failed to get session: {e}")
+            logger.error(f"[get_session] Failed to get session {session_id}: {e}", exc_info=True)
             return None
+        finally:
+            db.close()
     
     def update_session(
         self,
@@ -240,123 +192,78 @@ class SessionService:
         user_id: Optional[str] = None
     ) -> bool:
         """세션 업데이트"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            session = db.query(SessionModel).filter(SessionModel.session_id == session_id).first()
             
-            updates = []
-            params = []
-            
-            if title is not None:
-                updates.append("title = ?")
-                params.append(title)
-            
-            if user_id is not None:
-                updates.append("user_id = ?")
-                params.append(user_id)
-            
-            if not updates:
-                conn.close()
+            if not session:
                 return False
             
-            updates.append("updated_at = ?")
-            params.append(get_kst_now().isoformat())
-            params.append(session_id)
+            if title is not None:
+                session.title = title
+            if user_id is not None:
+                session.user_id = user_id
             
-            query = "UPDATE sessions SET " + ", ".join(updates) + " WHERE session_id = ?"
-            cursor.execute(query, params)
-            
-            conn.commit()
-            conn.close()
+            session.updated_at = get_kst_now()
+            db.commit()
             logger.info(f"Session updated: {session_id}, title={title is not None}, user_id={user_id is not None}")
             return True
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to update session: {e}")
             return False
+        finally:
+            db.close()
     
     def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """세션 삭제"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            session = db.query(SessionModel).filter(SessionModel.session_id == session_id).first()
+            
+            if not session:
+                return False
             
             # 세션 소유자 확인
-            if user_id:
-                cursor.execute("PRAGMA table_info(sessions)")
-                existing_columns = [row[1] for row in cursor.fetchall()]
-                if "user_id" in existing_columns:
-                    cursor.execute("""
-                        SELECT user_id FROM sessions WHERE session_id = ?
-                    """, (session_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        session_user_id = row["user_id"]
-                        if session_user_id and session_user_id != user_id:
-                            conn.close()
-                            logger.warning(f"Session ownership mismatch: {session_id}, user: {user_id}")
-                            return False
+            if user_id and session.user_id and session.user_id != user_id:
+                logger.warning(f"Session ownership mismatch: {session_id}, user: {user_id}")
+                return False
             
-            # 메시지도 함께 삭제
-            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-            
-            conn.commit()
-            conn.close()
+            # 메시지도 함께 삭제 (cascade로 자동 삭제됨)
+            db.delete(session)
+            db.commit()
             logger.info(f"Session deleted: {session_id}")
             return True
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to delete session: {e}")
             return False
+        finally:
+            db.close()
     
     def delete_user_sessions(self, user_id: str) -> int:
         """사용자의 모든 세션 및 메시지 일괄 삭제"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            sessions = db.query(SessionModel).filter(SessionModel.user_id == user_id).all()
             
-            # 컬럼 존재 여부 확인
-            cursor.execute("PRAGMA table_info(sessions)")
-            existing_columns = [row[1] for row in cursor.fetchall()]
-            has_user_id = "user_id" in existing_columns
-            
-            if has_user_id:
-                # 사용자의 모든 세션 ID 조회
-                cursor.execute("""
-                    SELECT session_id FROM sessions WHERE user_id = ?
-                """, (user_id,))
-                session_rows = cursor.fetchall()
-                session_ids = [row[0] for row in session_rows]
-                
-                if not session_ids:
-                    conn.close()
-                    logger.info(f"No sessions found for user: {user_id}")
-                    return 0
-                
-                # 모든 메시지 삭제
-                placeholders = ','.join(['?'] * len(session_ids))
-                cursor.execute(f"""
-                    DELETE FROM messages WHERE session_id IN ({placeholders})
-                """, session_ids)
-                
-                # 모든 세션 삭제
-                cursor.execute("""
-                    DELETE FROM sessions WHERE user_id = ?
-                """, (user_id,))
-            else:
-                conn.close()
-                logger.warning("user_id column does not exist, cannot delete user sessions")
+            if not sessions:
+                logger.info(f"No sessions found for user: {user_id}")
                 return 0
             
-            deleted_count = len(session_ids)
+            deleted_count = len(sessions)
+            for session in sessions:
+                db.delete(session)
             
-            conn.commit()
-            conn.close()
+            db.commit()
             logger.info(f"Deleted {deleted_count} sessions for user: {user_id}")
             return deleted_count
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to delete user sessions: {e}")
             return 0
+        finally:
+            db.close()
     
     def list_sessions(
         self,
@@ -371,119 +278,69 @@ class SessionService:
         ip_address: Optional[str] = None
     ) -> tuple[List[Dict[str, Any]], int]:
         """세션 목록 조회"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            # 컬럼 존재 여부 확인
-            cursor.execute("PRAGMA table_info(sessions)")
-            existing_columns = [row[1] for row in cursor.fetchall()]
-            has_user_id = "user_id" in existing_columns
-            has_ip_address = "ip_address" in existing_columns
+            query = db.query(SessionModel)
             
             # WHERE 절 구성
-            where_clauses = []
-            params = []
+            conditions = []
             
             # 사용자별 필터링
             if user_id:
-                # 익명 세션 ID는 anonymous_ prefix를 사용하므로 별도 처리
                 if user_id.startswith("anonymous_"):
-                    if has_user_id:
-                        where_clauses.append("user_id = ?")
-                        params.append(user_id)
+                    conditions.append(SessionModel.user_id == user_id)
                 else:
-                    if has_user_id:
-                        where_clauses.append("user_id = ?")
-                        params.append(user_id)
+                    conditions.append(SessionModel.user_id == user_id)
             elif ip_address:
-                if has_ip_address:
-                    if has_user_id:
-                        where_clauses.append("ip_address = ? AND (user_id IS NULL OR user_id = '')")
-                    else:
-                        where_clauses.append("ip_address = ?")
-                    params.append(ip_address)
+                conditions.append(SessionModel.ip_address == ip_address)
+                conditions.append(or_(SessionModel.user_id.is_(None), SessionModel.user_id == ""))
             
+            # 검색 필터
             if search:
-                where_clauses.append("(title LIKE ? OR session_id LIKE ?)")
-                params.append(f"%{search}%")
-                params.append(f"%{search}%")
+                conditions.append(
+                    or_(
+                        SessionModel.title.like(f"%{search}%"),
+                        SessionModel.session_id.like(f"%{search}%")
+                    )
+                )
             
-            # 날짜 필터 추가 (KST 기준)
-            # SQLite strftime() 함수를 사용하여 날짜 비교 (더 안정적)
+            # 날짜 필터 (PostgreSQL)
             if date_from:
                 try:
-                    # 날짜 형식 검증
                     datetime.strptime(date_from, "%Y-%m-%d")
-                    # strftime을 사용하여 날짜 부분만 추출하여 비교
-                    where_clauses.append("strftime('%Y-%m-%d', updated_at) >= ?")
-                    params.append(date_from)
+                    conditions.append(func.date(SessionModel.updated_at) >= date_from)
                 except ValueError:
-                    logger.warning(f"Invalid date_from format: {date_from}, using strftime() function")
-                    where_clauses.append("strftime('%Y-%m-%d', updated_at) >= ?")
-                    params.append(date_from)
+                    logger.warning(f"Invalid date_from format: {date_from}")
             
             if date_to:
                 try:
-                    # 날짜 형식 검증
                     datetime.strptime(date_to, "%Y-%m-%d")
-                    # strftime을 사용하여 날짜 부분만 추출하여 비교
-                    where_clauses.append("strftime('%Y-%m-%d', updated_at) <= ?")
-                    params.append(date_to)
+                    conditions.append(func.date(SessionModel.updated_at) <= date_to)
                 except ValueError:
-                    logger.warning(f"Invalid date_to format: {date_to}, using strftime() function")
-                    where_clauses.append("strftime('%Y-%m-%d', updated_at) <= ?")
-                    params.append(date_to)
+                    logger.warning(f"Invalid date_to format: {date_to}")
             
-            where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+            if conditions:
+                query = query.filter(and_(*conditions))
+            
+            # 전체 개수 조회
+            total = query.count()
             
             # 정렬 필드 검증 (SQL Injection 방지)
             valid_sort_fields = ["created_at", "updated_at", "title", "message_count"]
             sort_field = sort_by if sort_by in valid_sort_fields else "updated_at"
-            sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
+            sort_attr = getattr(SessionModel, sort_field)
+            sort_dir = sort_attr.desc() if sort_order.lower() == "desc" else sort_attr.asc()
             
-            # 디버깅을 위한 로깅
-            logger.debug(f"list_sessions query: WHERE {where_sql}, params: {params}, user_id: {user_id}, date_from: {date_from}, date_to: {date_to}")
-            
-            # 전체 개수 조회 (파라미터화된 쿼리 사용)
-            count_query = "SELECT COUNT(*) FROM sessions WHERE " + where_sql
-            cursor.execute(count_query, params)
-            total = cursor.fetchone()[0]
-            
-            logger.debug(f"list_sessions total count: {total}")
-            
-            # 페이지네이션
+            # 정렬 및 페이지네이션
             offset = (page - 1) * page_size
-            # 파라미터화된 쿼리 사용 (정렬 필드는 화이트리스트로 검증됨)
-            # 정렬 필드는 화이트리스트로 검증되었으므로 안전하게 사용 가능
-            query = "SELECT * FROM sessions WHERE " + where_sql + " ORDER BY " + sort_field + " " + sort_dir + " LIMIT ? OFFSET ?"
-            query_params = params + [page_size, offset]
+            sessions = query.order_by(sort_dir).offset(offset).limit(page_size).all()
             
-            logger.debug(f"list_sessions full query: {query}, params: {query_params}")
-            
-            cursor.execute(query, query_params)
-            rows = cursor.fetchall()
-            
-            logger.debug(f"list_sessions returned {len(rows)} rows")
-            
-            conn.close()
-            
-            sessions = []
-            for row in rows:
-                session_dict = dict(row)
-                # datetime 객체를 ISO 형식 문자열로 변환
-                if isinstance(session_dict.get("created_at"), datetime):
-                    session_dict["created_at"] = session_dict["created_at"].isoformat()
-                if isinstance(session_dict.get("updated_at"), datetime):
-                    session_dict["updated_at"] = session_dict["updated_at"].isoformat()
-                
-                sessions.append(session_dict)
-            
-            return sessions, total
+            return [session.to_dict() for session in sessions], total
         except Exception as e:
             logger.error(f"Failed to list sessions: {e}")
             return [], 0
+        finally:
+            db.close()
     
     def add_message(
         self,
@@ -497,33 +354,33 @@ class SessionService:
         if message_id is None:
             message_id = str(uuid.uuid4())
         
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            import json
-            metadata_str = json.dumps(metadata) if metadata else None
-            
             now_kst = get_kst_now()
-            now_kst_str = now_kst.isoformat()
-            cursor.execute("""
-                INSERT INTO messages (message_id, session_id, role, content, timestamp, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (message_id, session_id, role, content, now_kst_str, metadata_str))
+            message = MessageModel(
+                message_id=message_id,
+                session_id=session_id,
+                role=role,
+                content=content,
+                timestamp=now_kst,
+                metadata=metadata
+            )
+            db.add(message)
             
             # 메시지 개수 업데이트
-            cursor.execute("""
-                UPDATE sessions 
-                SET message_count = message_count + 1, updated_at = ?
-                WHERE session_id = ?
-            """, (now_kst_str, session_id))
+            session = db.query(SessionModel).filter(SessionModel.session_id == session_id).first()
+            if session:
+                session.message_count = session.message_count + 1
+                session.updated_at = now_kst
             
-            conn.commit()
-            conn.close()
+            db.commit()
             return message_id
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to add message: {e}")
             raise
+        finally:
+            db.close()
     
     def get_messages(
         self,
@@ -540,74 +397,45 @@ class SessionService:
                     return []
                 
                 session_user_id = session.get("user_id")
-                # session_user_id가 None이거나 user_id와 다르면 빈 결과 반환
                 if session_user_id is None or session_user_id != user_id:
-                    # 소유권이 없으면 빈 결과 반환
                     logger.debug(f"Session ownership mismatch: session_user_id={session_user_id}, user_id={user_id}")
                     return []
             
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            query = "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC"
-            params = [session_id]
-            
-            if limit:
-                query += " LIMIT ?"
-                params.append(limit)
-            
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            
-            conn.close()
-            
-            messages = []
-            for row in rows:
-                msg = dict(row)
+            db = get_session()
+            try:
+                query = db.query(MessageModel).filter(MessageModel.session_id == session_id).order_by(MessageModel.timestamp.asc())
                 
-                # timestamp 처리: SQLite에서 문자열로 반환될 수 있으므로 그대로 유지
-                # (API 레이어에서 datetime으로 변환)
-                if msg.get("timestamp"):
-                    # datetime 객체인 경우 ISO 형식 문자열로 변환
-                    if isinstance(msg["timestamp"], datetime):
-                        msg["timestamp"] = msg["timestamp"].isoformat()
-                    # 이미 문자열이면 그대로 유지
-                    elif isinstance(msg["timestamp"], str):
-                        pass  # 그대로 유지
-                    else:
-                        # 다른 타입이면 문자열로 변환
-                        msg["timestamp"] = str(msg["timestamp"])
+                if limit:
+                    query = query.limit(limit)
                 
-                # metadata 파싱
-                if msg.get("metadata"):
-                    import json
-                    try:
-                        if isinstance(msg["metadata"], str):
-                            msg["metadata"] = json.loads(msg["metadata"])
-                        # 이미 dict이면 그대로 유지
-                    except Exception as e:
-                        logger.warning(f"Failed to parse metadata: {e}")
-                        msg["metadata"] = {}
-                else:
-                    msg["metadata"] = {}
+                messages = query.all()
                 
-                # 필수 필드 확인
-                if not msg.get("message_id"):
-                    logger.warning(f"Message missing message_id: {msg}")
-                    continue
-                if not msg.get("session_id"):
-                    logger.warning(f"Message missing session_id: {msg}")
-                    continue
-                if not msg.get("role"):
-                    logger.warning(f"Message missing role: {msg}")
-                    continue
-                if not msg.get("content"):
-                    msg["content"] = ""  # 빈 내용은 허용
+                result = []
+                for msg in messages:
+                    msg_dict = msg.to_dict()
+                    
+                    # metadata가 이미 dict이면 그대로 사용
+                    if msg_dict.get("metadata") is None:
+                        msg_dict["metadata"] = {}
+                    
+                    # 필수 필드 확인
+                    if not msg_dict.get("message_id"):
+                        logger.warning(f"Message missing message_id: {msg_dict}")
+                        continue
+                    if not msg_dict.get("session_id"):
+                        logger.warning(f"Message missing session_id: {msg_dict}")
+                        continue
+                    if not msg_dict.get("role"):
+                        logger.warning(f"Message missing role: {msg_dict}")
+                        continue
+                    if not msg_dict.get("content"):
+                        msg_dict["content"] = ""
+                    
+                    result.append(msg_dict)
                 
-                messages.append(msg)
-            
-            return messages
+                return result
+            finally:
+                db.close()
         except Exception as e:
             logger.error(f"Failed to get messages: {e}", exc_info=True)
             return []
@@ -745,25 +573,26 @@ class SessionService:
         metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
         """전체 답변을 메시지에 저장 (잘린 부분 포함)"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            message = db.query(MessageModel).filter(
+                MessageModel.message_id == message_id,
+                MessageModel.session_id == session_id
+            ).first()
             
-            import json
-            metadata_str = json.dumps(metadata) if metadata else None
+            if not message:
+                return False
             
-            cursor.execute("""
-                UPDATE messages 
-                SET content = ?, metadata = ?
-                WHERE message_id = ? AND session_id = ?
-            """, (full_answer, metadata_str, message_id, session_id))
-            
-            conn.commit()
-            conn.close()
+            message.content = full_answer
+            message.message_metadata = metadata
+            db.commit()
             return True
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to save full answer: {e}")
             return False
+        finally:
+            db.close()
     
     def get_answer_chunk(
         self,
@@ -772,27 +601,19 @@ class SessionService:
         chunk_index: int
     ) -> Optional[Dict[str, Any]]:
         """특정 청크의 답변 가져오기"""
+        db = get_session()
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            message = db.query(MessageModel).filter(
+                MessageModel.message_id == message_id,
+                MessageModel.session_id == session_id,
+                MessageModel.role == 'assistant'
+            ).first()
             
-            cursor.execute("""
-                SELECT content, metadata
-                FROM messages
-                WHERE message_id = ? AND session_id = ? AND role = 'assistant'
-            """, (message_id, session_id))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if not row:
+            if not message:
                 return None
             
-            full_answer = row[0]
-            metadata_str = row[1]
-            
-            import json
-            metadata = json.loads(metadata_str) if metadata_str else {}
+            full_answer = message.content
+            metadata = message.message_metadata or {}
             
             from api.services.answer_splitter import AnswerSplitter
             chunk_size = metadata.get("chunk_size", 2000)
@@ -812,8 +633,9 @@ class SessionService:
         except Exception as e:
             logger.error(f"Failed to get answer chunk: {e}")
             return None
+        finally:
+            db.close()
 
 
 # 전역 서비스 인스턴스
 session_service = SessionService()
-
