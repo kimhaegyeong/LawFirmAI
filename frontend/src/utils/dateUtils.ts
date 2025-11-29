@@ -25,7 +25,7 @@ function parseDate(date: string | Date): Date {
       return new Date(0); // 유효하지 않은 날짜로 처리
     }
     
-    // ISO 형식 또는 SQLite 형식 파싱
+    // ISO 형식 또는 PostgreSQL 형식 파싱
     const normalized = date.replace(' ', 'T').replace(/Z$/, '');
     const parsed = new Date(normalized);
     

@@ -23,7 +23,7 @@ interface ChatContainerProps {
   onQuestionClick: (question: string) => void;
   onSendMessage: (message: string, attachments?: FileAttachment[]) => void;
   onDocumentClick: (message: ChatMessage, documentIndex: number) => void;
-  onOpenReferencesSidebar: (message: ChatMessage, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void;
+  onOpenReferencesSidebar: (message: ChatMessage, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation', referenceId?: string) => void;
   onRetryMessage: (messageId: string) => void;
   onLoginClick: () => void;
   onRetryQuestion: (question: string, messageId: string) => void;

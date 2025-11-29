@@ -83,6 +83,22 @@ export function useSession() {
 
     try {
       const session = await getSession(sessionId);
+      
+      // 404 오류인 경우 null이 반환됨
+      if (!session) {
+        console.warn(`[useSession] Session not found: ${sessionId}. Creating a new session.`);
+        try {
+          const newSessionData = await createSession({});
+          setCurrentSession(newSessionData);
+          return newSessionData;
+        } catch (createErr) {
+          const error = createErr instanceof Error ? createErr : new Error('새 세션을 생성할 수 없습니다.');
+          console.error('[useSession] Failed to create new session after 404:', createErr);
+          setError(error);
+          throw error;
+        }
+      }
+      
       setCurrentSession(session);
       return session;
     } catch (err) {
@@ -92,7 +108,7 @@ export function useSession() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [createSession]);
 
   /**
    * 세션 업데이트

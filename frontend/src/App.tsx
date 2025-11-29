@@ -154,14 +154,14 @@ function App() {
       
       if (sessionIdParam) {
         // URL 파라미터에서 세션 ID가 있으면 해당 세션 로드
-        loadSession(sessionIdParam)
-          .then(() => {
+        const loadSessionFromUrl = async () => {
+          try {
+            await loadSession(sessionIdParam);
             // URL에서 세션 ID 파라미터 제거
             urlParams.delete('session_id');
             const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
             window.history.replaceState({}, document.title, newUrl);
-          })
-          .catch((error) => {
+          } catch (error) {
             // 429 에러 처리 - 쿼터 정보 업데이트 (익명 사용자만)
             if (error && typeof error === 'object' && 'status' in error) {
               const apiError = error as AxiosError<{ quotaInfo?: { remaining: number; limit: number } }> & { status?: number; quotaInfo?: { remaining: number; limit: number } };
@@ -182,17 +182,29 @@ function App() {
             }
             
             // 404 오류는 세션이 존재하지 않는 정상적인 상황일 수 있음
-            const isNotFound = error?.status === 404 || error?.message?.includes('Session not found');
+            const apiError = error as Error & { status?: number; message?: string };
+            const isNotFound = apiError?.status === 404 || apiError?.message?.includes('Session not found');
             if (isNotFound) {
-              logger.warn(`Session not found in URL parameter: ${sessionIdParam}. The session may have been deleted or does not exist.`);
+              logger.warn(`Session not found in URL parameter: ${sessionIdParam}. The session may have been deleted or does not exist. Creating a new session.`);
               // URL에서 세션 ID 파라미터 제거 (존재하지 않는 세션 ID는 URL에 남겨두지 않음)
               urlParams.delete('session_id');
               const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
               window.history.replaceState({}, document.title, newUrl);
+              
+              // 새 세션 생성 (사용자 경험 개선)
+              try {
+                await newSession({}, true); // skipLoadSessions=true로 세션 목록 로드 건너뛰기
+                logger.info('Created new session after failed session load');
+              } catch (createError) {
+                logger.error('Failed to create new session after failed session load:', createError);
+              }
             } else {
               logger.error('Failed to load session from URL parameter:', error);
             }
-          });
+          }
+        };
+        
+        loadSessionFromUrl();
       }
     }
   }, [loadSession, isAuthenticated, login, showToast]);
@@ -231,6 +243,29 @@ function App() {
     loadSessionMessages();
   }, [currentSession, updateMessages, clearMessages]);
 
+  // 로그인 상태 변경 시 세션 초기화
+  const prevIsAuthenticatedRef = useRef<boolean>(false);
+  useEffect(() => {
+    // 로그인 전 -> 로그인 후로 변경된 경우
+    if (!prevIsAuthenticatedRef.current && isAuthenticated) {
+      logger.info('User logged in. Checking current session...');
+      
+      // 현재 세션이 있으면 초기화하고 새 세션 생성
+      if (currentSession) {
+        logger.info('Clearing anonymous session and creating new session for logged-in user');
+        clearSession();
+        clearMessages();
+        
+        // 새 세션 생성 (skipLoadSessions=true로 세션 목록 로드 건너뛰기)
+        newSession({}, true).catch(err => {
+          logger.error('Failed to create new session after login:', err);
+        });
+      }
+    }
+    
+    // 이전 인증 상태 업데이트
+    prevIsAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated, currentSession, clearSession, clearMessages, newSession]);
 
   const handleSendMessage = async (message: string, attachments?: FileAttachment[]) => {
     // 파일이 있으면 Base64로 변환
@@ -462,7 +497,7 @@ function App() {
           onQuestionClick={handleRelatedQuestionClick}
           onSendMessage={handleSendMessage}
           onDocumentClick={handleDocumentClick}
-          onOpenReferencesSidebar={(message, selectedType, referenceId) => {
+          onOpenReferencesSidebar={(message: ChatMessage, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation', referenceId?: string) => {
             openReferencesSidebar(message, selectedType, referenceId);
           }}
           onRetryMessage={(messageId) => {

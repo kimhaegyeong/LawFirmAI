@@ -45,12 +45,25 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
   // JSONL 형식 파싱 시도
   try {
     const parsed = JSON.parse(trimmed);
+    
+    // detail 필드만 있는 경우 (에러 응답)
+    if (parsed.detail && typeof parsed.detail === 'string' && !parsed.type) {
+      return {
+        type: 'error',
+        content: parsed.detail,
+        metadata: {
+          error: true,
+          error_type: 'api_error',
+        }
+      };
+    }
+    
     if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start', 'done', 'error'].includes(parsed.type)) {
       // error 이벤트 처리
       if (parsed.type === 'error') {
         return {
           type: 'error',
-          content: parsed.content || parsed.message || '오류가 발생했습니다.',
+          content: parsed.detail || parsed.content || parsed.message || '오류가 발생했습니다.',
           metadata: {
             error: true,
             cancelled: parsed.metadata?.cancelled || false,
