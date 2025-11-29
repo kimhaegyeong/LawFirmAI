@@ -87,14 +87,21 @@ try:
 except NameError:
     safe_log_error = _safe_log_fallback_error
 
+# 체크포인트 경고 중복 방지 플래그
+_checkpoint_warning_logged = False
+
 try:
     from langgraph.checkpoint.postgres import PostgresSaver
     LANGGRAPH_POSTGRES_AVAILABLE = True
 except ImportError:
     LANGGRAPH_POSTGRES_AVAILABLE = False
-    # 안전한 로깅 사용 (멀티스레딩 안전)
-    _temp_logger = logging.getLogger(__name__)
-    safe_log_warning(_temp_logger, "LangGraph PostgreSQL checkpoint not available. Please install langgraph-checkpoint-postgres")
+    # 안전한 로깅 사용 (멀티스레딩 안전, 한 번만 출력)
+    # 선택적 기능이므로 INFO 레벨로 변경 (경고가 아닌 정보)
+    # 모듈 레벨에서는 global 선언 불필요
+    if not _checkpoint_warning_logged:
+        _temp_logger = logging.getLogger(__name__)
+        safe_log_info(_temp_logger, "LangGraph PostgreSQL checkpoint not available (optional, checkpoint is disabled by default). Install langgraph-checkpoint-postgres to enable.")
+        _checkpoint_warning_logged = True
 
 # DatabaseAdapter import
 try:
@@ -198,7 +205,8 @@ class CheckpointManager:
     def _init_postgres_saver(self):
         """PostgresSaver 초기화"""
         if not LANGGRAPH_POSTGRES_AVAILABLE:
-            safe_log_warning(self.logger, "LangGraph PostgreSQL checkpoint not available, falling back to MemorySaver")
+            # 경고는 모듈 레벨에서 이미 출력되었으므로 DEBUG 레벨로 변경
+            safe_log_debug(self.logger, "LangGraph PostgreSQL checkpoint not available, falling back to MemorySaver")
             self._init_memory_saver()
             return
         

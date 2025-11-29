@@ -19,7 +19,7 @@ class WorkflowConstants:
     # Timeout 설정 (Google Gemini 가이드라인 기준)
     TIMEOUT = 30  # RAG QA용 기본 timeout (20~30초 권장)
     TIMEOUT_RAG_QA = 30  # RAG QA: 20~30초
-    TIMEOUT_LONG_TEXT = 60  # 긴 글/코드 생성: 30~60초
+    TIMEOUT_LONG_TEXT = 120  # 긴 글/코드 생성: 60~120초 (504 오류 방지를 위해 증가)
 
     # 검색 설정 (성능 최적화: 결과 수 제한)
     SEMANTIC_SEARCH_K = 12  # 15 -> 12 (성능 최적화)

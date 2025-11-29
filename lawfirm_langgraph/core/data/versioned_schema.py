@@ -35,37 +35,40 @@ def connect(db_path: Path, database_url: Optional[str] = None):
     데이터베이스 연결 컨텍스트 매니저
     
     Args:
-        db_path: 데이터베이스 파일 경로 (SQLite용)
-        database_url: 데이터베이스 URL (우선 사용, PostgreSQL 지원)
+        db_path: 데이터베이스 파일 경로 (하위 호환성용, 사용 중단 예정)
+        database_url: 데이터베이스 URL (필수, PostgreSQL만 지원)
+    
+    Note:
+        SQLite 직접 연결은 더 이상 지원하지 않습니다. database_url을 필수로 제공해야 합니다.
     """
-    # database_url 우선 사용
-    if database_url:
-        if DatabaseAdapter:
-            adapter = DatabaseAdapter(database_url)
-            with adapter.get_connection_context() as conn:
-                # SQLite인 경우 row_factory 설정
-                if adapter.db_type == 'sqlite' and hasattr(conn, 'conn'):
-                    conn.conn.row_factory = sqlite3.Row
-                yield conn
-        else:
-            # DatabaseAdapter가 없으면 직접 연결
-            if database_url.startswith('sqlite:///'):
-                conn = sqlite3.connect(database_url.replace('sqlite:///', ''))
-                conn.row_factory = sqlite3.Row
-                try:
-                    yield conn
-                finally:
-                    conn.close()
-            else:
-                raise ValueError(f"Unsupported database URL: {database_url}")
-    else:
-        # 하위 호환성: 기존 방식
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-        finally:
-            conn.close()
+    # database_url 필수
+    if not database_url:
+        raise ValueError(
+            "database_url is required. "
+            "SQLite direct connections are not allowed per project rules. "
+            "Please provide a PostgreSQL database URL."
+        )
+    
+    # DatabaseAdapter 필수
+    if not DatabaseAdapter:
+        raise RuntimeError(
+            "DatabaseAdapter is required. "
+            "Please ensure db_adapter module is available. "
+            "Direct SQLite connections are not allowed per project rules."
+        )
+    
+    # SQLite URL 검증 (더 이상 지원하지 않음)
+    if database_url.startswith('sqlite://'):
+        raise ValueError(
+            "SQLite is no longer supported. "
+            "Please use PostgreSQL. "
+            "Set database_url to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database)"
+        )
+    
+    # DatabaseAdapter 사용
+    adapter = DatabaseAdapter(database_url)
+    with adapter.get_connection_context() as conn:
+        yield conn
 
 
 def ensure_versioned_schema(db_path: Path, database_url: Optional[str] = None) -> None:
@@ -73,17 +76,29 @@ def ensure_versioned_schema(db_path: Path, database_url: Optional[str] = None) -
     버전 관리 스키마 생성
     
     Args:
-        db_path: 데이터베이스 파일 경로 (SQLite용)
-        database_url: 데이터베이스 URL (우선 사용, PostgreSQL 지원)
-    """
-    # SQLite인 경우에만 디렉토리 생성
-    if not database_url or database_url.startswith('sqlite:///'):
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path: 데이터베이스 파일 경로 (하위 호환성용, 사용 중단 예정)
+        database_url: 데이터베이스 URL (필수, PostgreSQL만 지원)
     
-    # database_url 우선 사용
+    Note:
+        SQLite 직접 연결은 더 이상 지원하지 않습니다. database_url을 필수로 제공해야 합니다.
+    """
+    # database_url 필수
+    if not database_url:
+        raise ValueError(
+            "database_url is required. "
+            "SQLite direct connections are not allowed per project rules. "
+            "Please provide a PostgreSQL database URL."
+        )
+    
+    # SQLite URL 검증 (더 이상 지원하지 않음)
+    if database_url.startswith('sqlite://'):
+        raise ValueError(
+            "SQLite is no longer supported. "
+            "Please use PostgreSQL. "
+            "Set database_url to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database)"
+        )
+    
     actual_db_url = database_url
-    if not actual_db_url and db_path:
-        actual_db_url = f"sqlite:///{db_path}"
     
     with connect(db_path, actual_db_url) as conn:
         # 커서 가져오기

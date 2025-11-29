@@ -18,6 +18,14 @@ try:
 except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
 
+try:
+    from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager
+except ImportError:
+    try:
+        from core.shared.utils.model_cache_manager import get_model_cache_manager
+    except ImportError:
+        get_model_cache_manager = None
+
 logger = get_logger(__name__)
 
 
@@ -41,21 +49,40 @@ class LegalKeywordExpander:
         self.logger = logger or logging.getLogger(__name__)
         self.term_integrator = term_integrator
         
-        # 임베딩 모델 초기화
+        # 임베딩 모델 초기화 (캐시 매니저 사용)
         self.embedding_model = None
         self.embedding_model_name = embedding_model_name or "woong0322/ko-legal-sbert-finetuned"
         
         if SENTENCE_TRANSFORMERS_AVAILABLE:
-            try:
-                self.embedding_model = SentenceTransformer(self.embedding_model_name)
-                self.logger.trace(f"✅ [HF MODEL] Loaded embedding model: {self.embedding_model_name}")
-            except Exception as e:
-                self.logger.warning(f"⚠️ [HF MODEL] Failed to load {self.embedding_model_name}: {e}")
+            # ModelCacheManager 사용 (항상 시도)
+            if get_model_cache_manager:
                 try:
-                    self.embedding_model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-                    self.logger.debug("✅ [HF MODEL] Using fallback embedding model")
-                except Exception as e2:
-                    self.logger.error(f"❌ [HF MODEL] Failed to load fallback model: {e2}")
+                    model_cache = get_model_cache_manager()
+                    self.embedding_model = model_cache.get_model(
+                        self.embedding_model_name,
+                        fallback_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                    )
+                    if self.embedding_model:
+                        self.logger.trace(f"✅ [HF MODEL] Loaded embedding model (cached): {self.embedding_model_name}")
+                    else:
+                        self.logger.warning(f"⚠️ [HF MODEL] Failed to load {self.embedding_model_name}")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [HF MODEL] Failed to load via cache manager: {e}")
+                    # 캐시 매니저 실패 시 직접 로드하지 않음 (중복 로딩 방지)
+                    self.embedding_model = None
+            else:
+                # get_model_cache_manager가 없으면 직접 로드 (최후의 수단)
+                try:
+                    self.embedding_model = SentenceTransformer(self.embedding_model_name)
+                    self.logger.trace(f"✅ [HF MODEL] Loaded embedding model (direct): {self.embedding_model_name}")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [HF MODEL] Failed to load {self.embedding_model_name}: {e}")
+                    try:
+                        self.embedding_model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+                        self.logger.debug("✅ [HF MODEL] Using fallback embedding model")
+                    except Exception as e2:
+                        self.logger.error(f"❌ [HF MODEL] Failed to load fallback model: {e2}")
+                        self.embedding_model = None
         
         # 법률 도메인 동의어 사전
         self.legal_synonyms_dict = {

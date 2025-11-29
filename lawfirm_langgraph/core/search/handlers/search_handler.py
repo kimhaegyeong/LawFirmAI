@@ -43,6 +43,23 @@ except ImportError:
     except ImportError:
         MergedResult = None
 
+# Score normalization utilities
+try:
+    from lawfirm_langgraph.core.search.utils.score_utils import normalize_score
+except ImportError:
+    try:
+        from core.search.utils.score_utils import normalize_score
+    except ImportError:
+        def normalize_score(score: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
+            """Fallback normalization function"""
+            if score < min_val:
+                return float(min_val)
+            elif score > max_val:
+                excess = score - max_val
+                normalized = max_val + (excess / (1.0 + excess * 10))
+                return float(max(0.0, min(1.0, normalized)))
+            return float(score)
+
 
 class SearchHandler:
     """
@@ -676,6 +693,50 @@ class SearchHandler:
 
                 doc["combined_score"] = combined_score
 
+            # 2.5. 점수 정규화 체크포인트 (모든 점수 필드 정규화)
+            for doc in unique_results:
+                # 모든 점수 필드 정규화
+                if "relevance_score" in doc:
+                    original_score = doc["relevance_score"]
+                    doc["relevance_score"] = normalize_score(float(original_score))
+                    if original_score > 1.0:
+                        self.logger.warning(
+                            f"⚠️ [SCORE NORMALIZATION] relevance_score 초과 감지: "
+                            f"original={original_score:.3f}, normalized={doc['relevance_score']:.3f}"
+                        )
+                if "similarity" in doc:
+                    original_score = doc["similarity"]
+                    doc["similarity"] = normalize_score(float(original_score))
+                    if original_score > 1.0:
+                        self.logger.warning(
+                            f"⚠️ [SCORE NORMALIZATION] similarity 초과 감지: "
+                            f"original={original_score:.3f}, normalized={doc['similarity']:.3f}"
+                        )
+                if "score" in doc:
+                    original_score = doc["score"]
+                    doc["score"] = normalize_score(float(original_score))
+                    if original_score > 1.0:
+                        self.logger.warning(
+                            f"⚠️ [SCORE NORMALIZATION] score 초과 감지: "
+                            f"original={original_score:.3f}, normalized={doc['score']:.3f}"
+                        )
+                if "final_weighted_score" in doc:
+                    original_score = doc["final_weighted_score"]
+                    doc["final_weighted_score"] = normalize_score(float(original_score))
+                    if original_score > 1.0:
+                        self.logger.warning(
+                            f"⚠️ [SCORE NORMALIZATION] final_weighted_score 초과 감지: "
+                            f"original={original_score:.3f}, normalized={doc['final_weighted_score']:.3f}"
+                        )
+                if "combined_score" in doc:
+                    original_score = doc["combined_score"]
+                    doc["combined_score"] = normalize_score(float(original_score))
+                    if original_score > 1.0:
+                        self.logger.warning(
+                            f"⚠️ [SCORE NORMALIZATION] combined_score 초과 감지: "
+                            f"original={original_score:.3f}, normalized={doc['combined_score']:.3f}"
+                        )
+
             # 3. Reranker를 사용한 재정렬
             if self.result_ranker and len(unique_results) > 0:
                 try:
@@ -1164,6 +1225,8 @@ class SearchHandler:
                         original_docs_by_content[content_hash] = doc
             
             # ranked 문서의 메타데이터를 원본 문서에서 복원
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+            
             for doc in ranked:
                 if not isinstance(doc, dict):
                     continue
@@ -1215,15 +1278,12 @@ class SearchHandler:
                             if original_metadata.get(key) and not doc["metadata"].get(key):
                                 doc["metadata"][key] = original_metadata.get(key)
                 
+                # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+                normalize_document_type(doc)
+                
                 # metadata에서 최상위 필드로 복원 (백업)
                 metadata = doc.get("metadata", {})
                 if isinstance(metadata, dict):
-                    # 🔥 source_type을 type으로 변환
-                    metadata_type = metadata.get("type") or metadata.get("source_type")
-                    if metadata_type and not doc.get("type"):
-                        doc["type"] = metadata_type
-                        doc["metadata"]["type"] = metadata_type
-                    
                     for key in ["statute_name", "law_name", "article_no", 
                                "article_number", "case_id", "court", "ccourt", "doc_id", 
                                "casenames", "precedent_id", "id", "chunk_id", "document_id", "source_id"]:

@@ -105,59 +105,71 @@ class KeywordSearchEngine:
     def search_laws(self, query: str, law_name: str = None, article_number: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
         """법령 검색"""
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
+            # 연결 풀 사용 (필수)
+            try:
+                from core.data.connection_pool import get_connection_pool
+                connection_pool = get_connection_pool(str(self.db_path))
+            except ImportError:
+                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+                connection_pool = get_connection_pool(str(self.db_path))
+            
+            if not connection_pool:
+                raise RuntimeError("Connection pool is required. Direct SQLite connections are not allowed.")
+            
+            conn = connection_pool.get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-                # 실제 테이블 구조에 맞는 쿼리
-                sql_query = """
-                SELECT
-                    id,
-                    law_name,
-                    article_number,
-                    content,
-                    law_type,
-                    effective_date
-                FROM assembly_laws
-                WHERE 1=1
-                """
-                params = []
+            # 실제 테이블 구조에 맞는 쿼리
+            sql_query = """
+            SELECT
+                id,
+                law_name,
+                article_number,
+                content,
+                law_type,
+                effective_date
+            FROM assembly_laws
+            WHERE 1=1
+            """
+            params = []
 
-                # 검색 조건 추가
-                if query:
-                    sql_query += " AND (law_name LIKE ? OR content LIKE ?)"
-                    search_term = f"%{query}%"
-                    params.extend([search_term, search_term])
+            # 검색 조건 추가
+            if query:
+                sql_query += " AND (law_name LIKE ? OR content LIKE ?)"
+                search_term = f"%{query}%"
+                params.extend([search_term, search_term])
 
-                if law_name:
-                    sql_query += " AND law_name LIKE ?"
-                    params.append(f"%{law_name}%")
+            if law_name:
+                sql_query += " AND law_name LIKE ?"
+                params.append(f"%{law_name}%")
 
-                if article_number:
-                    sql_query += " AND article_number LIKE ?"
-                    params.append(f"%{article_number}%")
+            if article_number:
+                sql_query += " AND article_number LIKE ?"
+                params.append(f"%{article_number}%")
 
-                sql_query += " ORDER BY law_name, article_number LIMIT ?"
-                params.append(top_k)
+            sql_query += " ORDER BY law_name, article_number LIMIT ?"
+            params.append(top_k)
 
-                cursor.execute(sql_query, params)
-                rows = cursor.fetchall()
+            cursor.execute(sql_query, params)
+            rows = cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    result = {
-                        'law_id': row['id'],
-                        'law_name': row['law_name'],
-                        'article_number': row['article_number'],
-                        'content': row['content'],
-                        'law_type': row['law_type'],
-                        'effective_date': row['effective_date'],
-                        'search_type': 'exact_law'
-                    }
-                    results.append(result)
+            results = []
+            for row in rows:
+                result = {
+                    'law_id': row['id'],
+                    'law_name': row['law_name'],
+                    'article_number': row['article_number'],
+                    'content': row['content'],
+                    'law_type': row['law_type'],
+                    'effective_date': row['effective_date'],
+                    'search_type': 'exact_law'
+                }
+                results.append(result)
 
-                self.logger.info(f"Found {len(results)} law results for query: {query}")
-                return results
+            self.logger.info(f"Found {len(results)} law results for query: {query}")
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
+            return results
 
         except Exception as e:
             self.logger.error(f"Error searching laws: {e}")
@@ -166,63 +178,75 @@ class KeywordSearchEngine:
     def search_precedents(self, query: str, case_number: str = None, court_name: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
         """판례 검색"""
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
+            # 연결 풀 사용 (필수)
+            try:
+                from core.data.connection_pool import get_connection_pool
+                connection_pool = get_connection_pool(str(self.db_path))
+            except ImportError:
+                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+                connection_pool = get_connection_pool(str(self.db_path))
+            
+            if not connection_pool:
+                raise RuntimeError("Connection pool is required. Direct SQLite connections are not allowed.")
+            
+            conn = connection_pool.get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-                # 실제 테이블 구조에 맞는 쿼리
-                sql_query = """
-                SELECT
-                    case_id,
-                    case_name,
-                    case_number,
-                    court,
-                    decision_date,
-                    category,
-                    field,
-                    full_text
-                FROM precedent_cases
-                WHERE 1=1
-                """
-                params = []
+            # 실제 테이블 구조에 맞는 쿼리
+            sql_query = """
+            SELECT
+                case_id,
+                case_name,
+                case_number,
+                court,
+                decision_date,
+                category,
+                field,
+                full_text
+            FROM precedent_cases
+            WHERE 1=1
+            """
+            params = []
 
-                # 검색 조건 추가
-                if query:
-                    sql_query += " AND (case_name LIKE ? OR full_text LIKE ?)"
-                    search_term = f"%{query}%"
-                    params.extend([search_term, search_term])
+            # 검색 조건 추가
+            if query:
+                sql_query += " AND (case_name LIKE ? OR full_text LIKE ?)"
+                search_term = f"%{query}%"
+                params.extend([search_term, search_term])
 
-                if case_number:
-                    sql_query += " AND case_number LIKE ?"
-                    params.append(f"%{case_number}%")
+            if case_number:
+                sql_query += " AND case_number LIKE ?"
+                params.append(f"%{case_number}%")
 
-                if court_name:
-                    sql_query += " AND court LIKE ?"
-                    params.append(f"%{court_name}%")
+            if court_name:
+                sql_query += " AND court LIKE ?"
+                params.append(f"%{court_name}%")
 
-                sql_query += " ORDER BY decision_date DESC LIMIT ?"
-                params.append(top_k)
+            sql_query += " ORDER BY decision_date DESC LIMIT ?"
+            params.append(top_k)
 
-                cursor.execute(sql_query, params)
-                rows = cursor.fetchall()
+            cursor.execute(sql_query, params)
+            rows = cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    result = {
-                        'case_id': row['case_id'],
-                        'case_name': row['case_name'],
-                        'case_number': row['case_number'],
-                        'court': row['court'],
-                        'decision_date': row['decision_date'],
-                        'category': row['category'],
-                        'field': row['field'],
-                        'full_text': row['full_text'],
-                        'search_type': 'exact_precedent'
-                    }
-                    results.append(result)
+            results = []
+            for row in rows:
+                result = {
+                    'case_id': row['case_id'],
+                    'case_name': row['case_name'],
+                    'case_number': row['case_number'],
+                    'court': row['court'],
+                    'decision_date': row['decision_date'],
+                    'category': row['category'],
+                    'field': row['field'],
+                    'full_text': row['full_text'],
+                    'search_type': 'exact_precedent'
+                }
+                results.append(result)
 
-                self.logger.info(f"Found {len(results)} precedent results for query: {query}")
-                return results
+            self.logger.info(f"Found {len(results)} precedent results for query: {query}")
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
+            return results
 
         except Exception as e:
             self.logger.error(f"Error searching precedents: {e}")
@@ -237,64 +261,76 @@ class KeywordSearchEngine:
     def search_assembly_laws(self, query: str, law_name: str = None, article_number: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
         """국회 법률 검색"""
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
+            # 연결 풀 사용 (필수)
+            try:
+                from core.data.connection_pool import get_connection_pool
+                connection_pool = get_connection_pool(str(self.db_path))
+            except ImportError:
+                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+                connection_pool = get_connection_pool(str(self.db_path))
+            
+            if not connection_pool:
+                raise RuntimeError("Connection pool is required. Direct SQLite connections are not allowed.")
+            
+            conn = connection_pool.get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-                # 실제 테이블 구조에 맞는 쿼리
-                sql_query = """
-                SELECT
-                    id,
-                    law_id,
-                    law_name,
-                    law_type,
-                    category,
-                    promulgation_date,
-                    enforcement_date,
-                    full_text,
-                    summary
-                FROM assembly_laws
-                WHERE 1=1
-                """
-                params = []
+            # 실제 테이블 구조에 맞는 쿼리
+            sql_query = """
+            SELECT
+                id,
+                law_id,
+                law_name,
+                law_type,
+                category,
+                promulgation_date,
+                enforcement_date,
+                full_text,
+                summary
+            FROM assembly_laws
+            WHERE 1=1
+            """
+            params = []
 
-                # 검색 조건 추가
-                if query:
-                    sql_query += " AND (law_name LIKE ? OR full_text LIKE ? OR summary LIKE ?)"
-                    search_term = f"%{query}%"
-                    params.extend([search_term, search_term, search_term])
+            # 검색 조건 추가
+            if query:
+                sql_query += " AND (law_name LIKE ? OR full_text LIKE ? OR summary LIKE ?)"
+                search_term = f"%{query}%"
+                params.extend([search_term, search_term, search_term])
 
-                if law_name:
-                    sql_query += " AND law_name LIKE ?"
-                    params.append(f"%{law_name}%")
+            if law_name:
+                sql_query += " AND law_name LIKE ?"
+                params.append(f"%{law_name}%")
 
-                if article_number:
-                    sql_query += " AND law_id LIKE ?"
-                    params.append(f"%{article_number}%")
+            if article_number:
+                sql_query += " AND law_id LIKE ?"
+                params.append(f"%{article_number}%")
 
-                sql_query += " ORDER BY promulgation_date DESC LIMIT ?"
-                params.append(top_k)
+            sql_query += " ORDER BY promulgation_date DESC LIMIT ?"
+            params.append(top_k)
 
-                cursor.execute(sql_query, params)
-                rows = cursor.fetchall()
+            cursor.execute(sql_query, params)
+            rows = cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    result = {
-                        'law_id': row['id'],
-                        'law_name': row['law_name'],
-                        'law_type': row['law_type'],
-                        'category': row['category'],
-                        'promulgation_date': row['promulgation_date'],
-                        'enforcement_date': row['enforcement_date'],
-                        'full_text': row['full_text'],
-                        'summary': row['summary'],
-                        'search_type': 'exact_assembly_law'
-                    }
-                    results.append(result)
+            results = []
+            for row in rows:
+                result = {
+                    'law_id': row['id'],
+                    'law_name': row['law_name'],
+                    'law_type': row['law_type'],
+                    'category': row['category'],
+                    'promulgation_date': row['promulgation_date'],
+                    'enforcement_date': row['enforcement_date'],
+                    'full_text': row['full_text'],
+                    'summary': row['summary'],
+                    'search_type': 'exact_assembly_law'
+                }
+                results.append(result)
 
-                self.logger.info(f"Found {len(results)} assembly law results for query: {query}")
-                return results
+            self.logger.info(f"Found {len(results)} assembly law results for query: {query}")
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
+            return results
 
         except Exception as e:
             self.logger.error(f"Error searching assembly laws: {e}")

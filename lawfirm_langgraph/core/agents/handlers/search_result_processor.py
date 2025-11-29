@@ -118,16 +118,32 @@ class SearchResultProcessor:
             print(input_msg, flush=True, file=sys.stdout)
             self.logger.info(input_msg)
 
-            # 1. 품질 평가 (병렬 Task 사용)
-            quality_evaluation = asyncio.run(SearchResultTasks.evaluate_quality_parallel(
-                semantic_results=semantic_results,
-                keyword_results=keyword_results,
-                query=query,
-                query_type=query_type_str,
-                search_params=search_params,
-                evaluate_semantic_func=self.evaluate_semantic_quality,
-                evaluate_keyword_func=self.evaluate_keyword_quality
-            ))
+            # 🔥 최적화 1: 단일 asyncio.run()으로 모든 병렬 작업 통합
+            async def process_all_parallel():
+                # 품질 평가와 병합을 병렬로 실행
+                quality_task = SearchResultTasks.evaluate_quality_parallel(
+                    semantic_results=semantic_results,
+                    keyword_results=keyword_results,
+                    query=query,
+                    query_type=query_type_str,
+                    search_params=search_params,
+                    evaluate_semantic_func=self.evaluate_semantic_quality,
+                    evaluate_keyword_func=self.evaluate_keyword_quality
+                )
+                
+                # 병합 및 재순위는 동기로 실행 (빠름)
+                merged_docs = self._merge_and_rerank_results(
+                    semantic_results, keyword_results, query, query_type_str,
+                    extracted_keywords, legal_field, search_params, state
+                )
+                
+                # 품질 평가와 병합을 병렬로 실행
+                quality_evaluation = await quality_task
+                
+                return quality_evaluation, merged_docs
+            
+            # 단일 asyncio.run() 호출
+            quality_evaluation, merged_docs = asyncio.run(process_all_parallel())
             WorkflowUtils.set_state_value(state, "search_quality_evaluation", quality_evaluation)
 
             overall_quality = quality_evaluation["overall_quality"]
@@ -139,35 +155,28 @@ class SearchResultProcessor:
                     state, semantic_results, keyword_results, semantic_count, keyword_count,
                     quality_evaluation, query, query_type_str, search_params, extracted_keywords, legal_field
                 )
+                # 재검색 후 재병합
+                merged_docs = self._merge_and_rerank_results(
+                    semantic_results, keyword_results, query, query_type_str,
+                    extracted_keywords, legal_field, search_params, state
+                )
 
-            # 3. 병합 및 재순위
-            merged_docs = self._merge_and_rerank_results(
-                semantic_results, keyword_results, query, query_type_str, 
-                extracted_keywords, legal_field, search_params, state
-            )
-
-            # 4. 키워드 가중치 적용 (병렬 Task 사용)
-            if merged_docs and self.calculate_keyword_weights:
-                weighted_docs = asyncio.run(SearchResultTasks.apply_keyword_weights_parallel(
+            # 🔥 최적화 2: 키워드 가중치와 필터링을 통합 (한 번의 순회로 처리)
+            if merged_docs:
+                final_docs, filter_stats = self._apply_weights_and_filter_in_one_pass(
                     documents=merged_docs,
                     extracted_keywords=extracted_keywords,
                     query=query,
                     query_type=query_type_str,
                     legal_field=legal_field,
-                    calculate_keyword_weights_func=self.calculate_keyword_weights,
-                    calculate_keyword_match_score_func=self.calculate_keyword_match_score,
-                    calculate_weighted_final_score_func=self.calculate_weighted_final_score,
-                    search_params=search_params
-                ))
-                merged_docs = weighted_docs
-
-            # 5. 필터링 및 검증 (병렬 Task 사용)
-            final_docs, filter_stats = asyncio.run(SearchResultTasks.filter_documents_parallel(
-                documents=merged_docs,
-                min_relevance=0.80,
-                min_content_length=5,
-                min_final_score=0.55
-            ))
+                    search_params=search_params,
+                    min_relevance=0.80,
+                    min_content_length=5,
+                    min_final_score=0.55
+                )
+            else:
+                final_docs = []
+                filter_stats = {"total": 0, "filtered": 0, "skipped": 0}
             
             self.logger.info(
                 f"📊 [FILTER] Total: {filter_stats['total']}, "
@@ -225,6 +234,106 @@ class SearchResultProcessor:
                 WorkflowUtils.set_state_value(state, "merged_documents", [])
 
         return state
+
+    def _apply_weights_and_filter_in_one_pass(
+        self,
+        documents: List[Dict],
+        extracted_keywords: List[str],
+        query: str,
+        query_type: str,
+        legal_field: str,
+        search_params: Dict,
+        min_relevance: float,
+        min_content_length: int,
+        min_final_score: float
+    ) -> Tuple[List[Dict], Dict[str, int]]:
+        """가중치 적용과 필터링을 한 번의 순회로 처리"""
+        if not documents:
+            return [], {"total": 0, "filtered": 0, "skipped": 0}
+        
+        # 키워드 가중치 계산 함수가 있으면 사용
+        if self.calculate_keyword_weights:
+            # 벡터화된 키워드 매칭 (한 번에 처리)
+            keyword_scores = self._calculate_keyword_scores_batch(
+                documents, extracted_keywords, query, query_type, legal_field
+            )
+        else:
+            keyword_scores = {i: 0.0 for i in range(len(documents))}
+        
+        # 필터링과 가중치 적용을 동시에
+        final_docs = []
+        total_count = len(documents)
+        filtered_count = 0
+        skipped_count = 0
+        
+        for idx, doc in enumerate(documents):
+            # 기본 필터링
+            content = str(doc.get("content", doc.get("text", "")))
+            if len(content) < min_content_length:
+                skipped_count += 1
+                continue
+            
+            relevance = doc.get("relevance_score", doc.get("score", 0.0))
+            if relevance < min_relevance:
+                filtered_count += 1
+                continue
+            
+            # 가중치 적용
+            keyword_weight = keyword_scores.get(idx, 0.0)
+            if self.calculate_weighted_final_score:
+                final_score = self.calculate_weighted_final_score(
+                    relevance, keyword_weight, doc, search_params
+                )
+            else:
+                # 기본 가중치 계산
+                final_score = relevance * 0.7 + keyword_weight * 0.3
+            
+            if final_score < min_final_score:
+                filtered_count += 1
+                continue
+            
+            # 최종 점수 업데이트
+            doc["final_score"] = final_score
+            doc["keyword_weight"] = keyword_weight
+            if "score" not in doc:
+                doc["score"] = relevance
+            final_docs.append(doc)
+        
+        # 최종 점수로 정렬
+        final_docs.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
+        
+        filter_stats = {
+            "total": total_count,
+            "filtered": filtered_count,
+            "skipped": skipped_count
+        }
+        
+        return final_docs, filter_stats
+
+    def _calculate_keyword_scores_batch(
+        self,
+        documents: List[Dict],
+        keywords: List[str],
+        query: str,
+        query_type: str,
+        legal_field: str
+    ) -> Dict[int, float]:
+        """문서 배치에 대한 키워드 점수 일괄 계산"""
+        if not self.calculate_keyword_match_score:
+            return {i: 0.0 for i in range(len(documents))}
+        
+        scores = {}
+        for idx, doc in enumerate(documents):
+            content = str(doc.get("content", doc.get("text", "")))
+            if self.calculate_keyword_match_score:
+                match_score = self.calculate_keyword_match_score(
+                    content, keywords, query, query_type, legal_field
+                )
+                scores[idx] = match_score
+            else:
+                scores[idx] = 0.0
+        
+        return scores
 
     def _evaluate_search_quality(
         self,

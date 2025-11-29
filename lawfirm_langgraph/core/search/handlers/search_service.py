@@ -53,8 +53,7 @@ class MLEnhancedSearchService:
         self.stopword_processor = None
         if KoreanStopwordProcessor:
             try:
-                self.stopword_processor = KoreanStopwordProcessor()
-                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+                self.stopword_processor = KoreanStopwordProcessor.get_instance()
             except Exception as e:
                 self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
         

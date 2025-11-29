@@ -12,14 +12,34 @@ except ImportError:
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
-from dotenv import load_dotenv
-
-# .env 파일 로드
-load_dotenv()
+# 환경 변수 로드 (중앙 집중식 로더 사용)
+try:
+    import sys
+    from pathlib import Path
+    
+    # 프로젝트 루트 찾기
+    _current_file = Path(__file__)
+    _core_dir = _current_file.parent.parent.parent
+    _langgraph_dir = _core_dir.parent
+    _project_root = _langgraph_dir.parent
+    
+    # 공통 로더 사용
+    if str(_project_root) not in sys.path:
+        sys.path.insert(0, str(_project_root))
+    from utils.env_loader import ensure_env_loaded
+    
+    # 프로젝트 루트 .env 파일 명시적으로 로드 (중복 방지)
+    ensure_env_loaded(_project_root)
+except ImportError:
+    # 공통 로더가 없으면 환경 변수만 사용
+    pass
 
 logger = get_logger(__name__)
+
+# 설정 캐시 (싱글톤)
+_cached_config: Optional['LangGraphConfig'] = None
 
 
 class CheckpointStorageType(Enum):
@@ -89,8 +109,23 @@ class LangGraphConfig:
     use_agentic_mode: bool = False  # Agentic AI 모드 활성화 (Tool Use/Function Calling)
 
     @classmethod
-    def from_env(cls) -> 'LangGraphConfig':
-        """환경 변수에서 설정 로드"""
+    def from_env(cls, force_reload: bool = False) -> 'LangGraphConfig':
+        """
+        환경 변수에서 설정 로드 (캐싱 적용)
+        
+        Args:
+            force_reload: True이면 캐시 무시하고 새로 로드 (기본값: False)
+            
+        Returns:
+            LangGraphConfig 인스턴스
+        """
+        # global 선언을 먼저 해야 함
+        global _cached_config
+        
+        if not force_reload and _cached_config is not None:
+            logger.debug("LangGraphConfig reused from cache")
+            return _cached_config
+        
         config = cls()
 
         # LangGraph 활성화 설정
@@ -177,6 +212,10 @@ class LangGraphConfig:
         config.use_agentic_mode = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
 
         logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
+        
+        # 캐시 저장
+        _cached_config = config
+        
         return config
 
     def validate(self) -> List[str]:

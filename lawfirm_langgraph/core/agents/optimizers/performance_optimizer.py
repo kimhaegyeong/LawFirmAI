@@ -26,7 +26,7 @@ class PerformanceCache:
     def __init__(self, cache_db_path: str = "./data/cache.db"):
         self.cache_db_path = cache_db_path
         self.logger = get_logger(__name__)
-        # 연결 풀 초기화
+        # 연결 풀 초기화 (필수)
         try:
             from core.data.connection_pool import get_connection_pool
             self._connection_pool = get_connection_pool(self.cache_db_path)
@@ -37,18 +37,26 @@ class PerformanceCache:
                 self._connection_pool = get_connection_pool(self.cache_db_path)
                 self.logger.debug("Using connection pool for cache database")
             except ImportError:
-                self._connection_pool = None
-                self.logger.debug("Connection pool not available, using direct connections")
+                raise RuntimeError(
+                    "Connection pool is required. "
+                    "Please ensure connection_pool module is available. "
+                    "Direct SQLite connections are not allowed per project rules."
+                )
+        if not self._connection_pool:
+            raise RuntimeError(
+                "Connection pool initialization failed. "
+                "Direct SQLite connections are not allowed per project rules."
+            )
         self._initialize_cache_db()
     
     def _initialize_cache_db(self):
         """캐시 데이터베이스 초기화"""
         Path(self.cache_db_path).parent.mkdir(parents=True, exist_ok=True)
         
-        if self._connection_pool:
-            conn = self._connection_pool.get_connection()
-        else:
-            conn = sqlite3.connect(self.cache_db_path)
+        # 연결 풀 필수 사용
+        if not self._connection_pool:
+            raise RuntimeError("Connection pool is required for cache database initialization")
+        conn = self._connection_pool.get_connection()
         cursor = conn.cursor()
         
         # 답변 캐시 테이블
@@ -100,8 +108,7 @@ class PerformanceCache:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_document_query_hash ON document_cache(query_hash)')
         
         conn.commit()
-        if not self._connection_pool:
-            conn.close()
+        # 연결 풀을 사용하므로 수동으로 닫지 않음
         self.logger.info("Cache database initialized")
     
     def _generate_query_hash(self, query: str, query_type: str = "") -> str:
@@ -114,10 +121,10 @@ class PerformanceCache:
         try:
             query_hash = self._generate_query_hash(query, query_type)
             
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -146,13 +153,11 @@ class PerformanceCache:
                     "access_count": row["access_count"]
                 }
                 
-                if not self._connection_pool:
-                    conn.close()
+                # 연결 풀을 사용하므로 수동으로 닫지 않음
                 self.logger.info(f"Cache hit for query: {query[:50]}...")
                 return result
             
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             return None
             
         except Exception as e:
@@ -189,10 +194,10 @@ class PerformanceCache:
             else:
                 sources_json = json.dumps([], ensure_ascii=False)
             
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -202,8 +207,7 @@ class PerformanceCache:
             ''', (query_hash, query, query_type, answer_str, confidence, sources_json))
             
             conn.commit()
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             self.logger.info(f"Cached answer for query: {query[:50]}...")
             return True
@@ -217,10 +221,10 @@ class PerformanceCache:
         try:
             query_hash = self._generate_query_hash(query)
             
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -242,14 +246,12 @@ class PerformanceCache:
                 conn.commit()
                 
                 keywords = json.loads(row["keywords"])
-                if not self._connection_pool:
-                    conn.close()
+                # 연결 풀을 사용하므로 수동으로 닫지 않음
                 
                 self.logger.info(f"Cache hit for keywords: {query[:50]}...")
                 return keywords
             
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             return None
             
         except Exception as e:
@@ -261,10 +263,10 @@ class PerformanceCache:
         try:
             query_hash = self._generate_query_hash(query)
             
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -274,8 +276,7 @@ class PerformanceCache:
             ''', (query_hash, query, json.dumps(keywords)))
             
             conn.commit()
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             self.logger.info(f"Cached keywords for query: {query[:50]}...")
             return True
@@ -289,10 +290,10 @@ class PerformanceCache:
         try:
             query_hash = self._generate_query_hash(query, query_type)
             
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -314,14 +315,12 @@ class PerformanceCache:
                 conn.commit()
                 
                 documents = json.loads(row["documents"])
-                if not self._connection_pool:
-                    conn.close()
+                # 연결 풀을 사용하므로 수동으로 닫지 않음
                 
                 self.logger.info(f"Cache hit for documents: {query[:50]}...")
                 return documents
             
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             return None
             
         except Exception as e:
@@ -333,10 +332,10 @@ class PerformanceCache:
         try:
             query_hash = self._generate_query_hash(query, query_type)
             
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -346,8 +345,7 @@ class PerformanceCache:
             ''', (query_hash, query, query_type, json.dumps(documents)))
             
             conn.commit()
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             self.logger.info(f"Cached documents for query: {query[:50]}...")
             return True
@@ -359,10 +357,10 @@ class PerformanceCache:
     def clear_cache(self, cache_type: str = "all") -> bool:
         """캐시 정리"""
         try:
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             if cache_type == "all":
@@ -377,8 +375,7 @@ class PerformanceCache:
                 cursor.execute('DELETE FROM document_cache')
             
             conn.commit()
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             self.logger.info(f"Cleared {cache_type} cache")
             return True
@@ -390,10 +387,10 @@ class PerformanceCache:
     def get_cache_stats(self) -> Dict[str, Any]:
         """캐시 통계 조회"""
         try:
-            if self._connection_pool:
-                conn = self._connection_pool.get_connection()
-            else:
-                conn = sqlite3.connect(self.cache_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             # 각 캐시 테이블의 통계
@@ -416,8 +413,7 @@ class PerformanceCache:
             cursor.execute('SELECT SUM(access_count) FROM document_cache')
             total_document_access = cursor.fetchone()[0] or 0
             
-            if not self._connection_pool:
-                conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             return {
                 "answer_cache": {

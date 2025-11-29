@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """
 lawfirm_v2.db 전용 법률 데이터 연동 서비스
-FTS5 키워드 검색 + 벡터 의미 검색 지원
+PostgreSQL tsvector 키워드 검색 + 벡터 의미 검색 지원
 """
 
 import logging
@@ -12,7 +12,6 @@ except ImportError:
 import os
 import re
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
@@ -68,6 +67,8 @@ def route_query(query: str) -> str:
 
 class LegalDataConnectorV2:
     """lawfirm_v2.db 전용 법률 데이터베이스 연결 및 검색 서비스"""
+    
+    _okt_logged: bool = False  # KoNLPy Okt 초기화 로그 출력 여부 (최초 1회만)
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
@@ -133,7 +134,8 @@ class LegalDataConnectorV2:
         
         try:
             self._db_adapter = DatabaseAdapter(self.database_url)
-            self.logger.info(f"DatabaseAdapter initialized: type={self._db_adapter.db_type}")
+            # DatabaseAdapter 초기화 로그는 DatabaseAdapter 내부에서 출력되므로 중복 방지
+            # (캐시에서 재사용 시에는 DEBUG 레벨로만 출력됨)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize DatabaseAdapter: {e}") from e
         
@@ -145,25 +147,59 @@ class LegalDataConnectorV2:
         # FTS 테이블 존재 여부 확인
         self._check_fts_tables()
         
-        # 🔥 수정: KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        # 🔥 수정: KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용, 싱글톤)
         self.stopword_processor = None
         if KoreanStopwordProcessor:
             try:
-                self.stopword_processor = KoreanStopwordProcessor()
-                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+                self.stopword_processor = KoreanStopwordProcessor.get_instance()
             except Exception as e:
                 self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
         
-        # 🔥 수정: KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
+        # 🔥 수정: KoNLPy 형태소 분석기 초기화 (싱글톤 사용)
         self._okt = None
         try:
-            from konlpy.tag import Okt  # pyright: ignore[reportMissingImports]
-            self._okt = Okt()
-            self.logger.debug("KoNLPy Okt initialized successfully")
+            from lawfirm_langgraph.core.utils.konlpy_singleton import get_okt_instance
+            self._okt = get_okt_instance()
         except ImportError:
-            self.logger.debug("KoNLPy not available, will use fallback method")
-        except Exception as e:
-            self.logger.warning(f"Error initializing KoNLPy: {e}, will use fallback method")
+            try:
+                from core.utils.konlpy_singleton import get_okt_instance
+                self._okt = get_okt_instance()
+            except ImportError:
+                # 폴백: 직접 초기화 (싱글톤 유틸리티가 없는 경우)
+                try:
+                    from konlpy.tag import Okt  # pyright: ignore[reportMissingImports]
+                    self._okt = Okt()
+                except (ImportError, Exception):
+                    pass
+        
+        # PostgreSQL 정규화 계수 설정 (환경 변수 지원, 기본값 15.0)
+        self.postgresql_normalization_coefficient = float(
+            os.getenv("POSTGRESQL_NORMALIZATION_COEFFICIENT", "15.0")
+        )
+        self.logger.info(
+            f"PostgreSQL normalization coefficient: {self.postgresql_normalization_coefficient}"
+        )
+        
+        # 테이블별 설정 딕셔너리 (테이블명: (text_vector_column, text_content_column, table_alias))
+        self.table_configs = {
+            'statutes_articles': ('text_search_vector', 'article_content', 'sa'),
+            'precedent_contents': ('text_search_vector', 'section_content', 'pc'),
+            'statute_articles': ('text_search_vector', 'text', 'sa'),
+            'case_paragraphs': ('text_search_vector', 'text', 'cp'),
+            'decision_paragraphs': ('text_search_vector', 'text', 'dp'),
+            'interpretation_paragraphs': ('text_search_vector', 'text', 'ip'),
+        }
+        
+        # PGroonga 사용 가능 여부 확인 (초기화 시 한 번만 확인)
+        # Docker 환경에서는 PGroonga가 필수이므로 항상 사용 가능하다고 가정
+        self._pgroonga_available = None
+        if self._db_adapter and self._db_adapter.db_type == "postgresql":
+            pgroonga_available = self._check_pgroonga_available()
+            if not pgroonga_available:
+                self.logger.warning(
+                    "⚠️ PGroonga is not available. Korean text search ('korean' config) requires PGroonga. "
+                    "Please ensure PGroonga is installed in your PostgreSQL instance."
+                )
     
     def _mask_url(self, url: str) -> str:
         """URL에서 비밀번호 마스킹"""
@@ -175,132 +211,554 @@ class LegalDataConnectorV2:
         except Exception:
             pass
         return url
+    
+    def _check_column_exists(self, table_name: str, column_name: str) -> bool:
+        """
+        PostgreSQL 테이블에 컬럼이 존재하는지 확인
+        
+        Args:
+            table_name: 테이블명
+            column_name: 컬럼명
+            
+        Returns:
+            컬럼 존재 여부
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = %s 
+                        AND column_name = %s
+                    )
+                """, (table_name, column_name))
+                row = cursor.fetchone()
+                result = row[0] if row else False
+                return bool(result)
+            finally:
+                cursor.close()
+                conn.close()
+        except Exception as e:
+            self.logger.warning(f"Error checking column existence for {table_name}.{column_name}: {e}")
+            return False
+    
+    def _check_pgroonga_available(self) -> bool:
+        """
+        PGroonga 확장이 설치되어 있고 사용 가능한지 확인
+        
+        Returns:
+            PGroonga 사용 가능 여부
+        """
+        # 이미 확인한 경우 캐시된 값 반환
+        if hasattr(self, '_pgroonga_available') and self._pgroonga_available is not None:
+            return self._pgroonga_available
+        
+        self._pgroonga_available = False
+        try:
+            # Connection Pool 안전 사용 (컨텍스트 매니저)
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                try:
+                    # 1. PGroonga 확장 확인
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM pg_extension 
+                            WHERE extname = 'pgroonga'
+                        ) as exists
+                    """)
+                    row = cursor.fetchone()
+                    # RealDictCursor 사용 시 딕셔너리 형태로 반환되므로 안전하게 접근
+                    has_extension = row.get('exists', False) if row else False
+                    # 딕셔너리가 아닌 경우를 대비한 폴백
+                    if not isinstance(has_extension, bool):
+                        has_extension = list(row.values())[0] if row else False
+                    
+                    if not has_extension:
+                        self.logger.debug("PGroonga extension is not installed. Using 'simple' text search configuration.")
+                        return False
+                    
+                    # 2. PGroonga 함수 확인 (여러 함수 확인하여 더 안정적인 감지)
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM pg_proc 
+                            WHERE proname IN ('pgroonga_query_extract_keywords', 'pgroonga_match_positions_byte', 'pgroonga_normalize')
+                        ) as exists
+                    """)
+                    row = cursor.fetchone()
+                    # RealDictCursor 사용 시 딕셔너리 형태로 반환되므로 안전하게 접근
+                    has_function = row.get('exists', False) if row else False
+                    # 딕셔너리가 아닌 경우를 대비한 폴백
+                    if not isinstance(has_function, bool):
+                        has_function = list(row.values())[0] if row else False
+                    
+                    if has_function:
+                        self._pgroonga_available = True
+                        self.logger.info("✅ PGroonga extension is available. Korean text search will be enhanced.")
+                    else:
+                        # 확장은 있지만 함수가 없는 경우 - 더 자세한 디버깅 정보 제공
+                        cursor.execute("""
+                            SELECT proname, pronamespace::regnamespace as schema
+                            FROM pg_proc 
+                            WHERE proname LIKE '%pgroonga%' 
+                            ORDER BY proname
+                            LIMIT 10
+                        """)
+                        functions = cursor.fetchall()
+                        # RealDictCursor 사용 시 딕셔너리 형태로 반환되므로 안전하게 접근
+                        found_functions = []
+                        if functions:
+                            for row in functions:
+                                if isinstance(row, dict):
+                                    proname = row.get('proname', '')
+                                    schema = row.get('schema', '')
+                                else:
+                                    # 튜플 형태인 경우 (폴백)
+                                    proname = row[0] if len(row) > 0 else ''
+                                    schema = row[1] if len(row) > 1 else ''
+                                if proname:
+                                    found_functions.append(f"{proname} ({schema})")
+                        
+                        if found_functions:
+                            self.logger.warning(
+                                f"PGroonga extension exists but required functions are not available. "
+                                f"Found PGroonga functions: {', '.join(found_functions)}. "
+                                f"Please ensure PGroonga is properly installed and all functions are available."
+                            )
+                        else:
+                            self.logger.warning(
+                                "PGroonga extension exists but no PGroonga functions found. "
+                                "Please ensure PGroonga is properly installed: CREATE EXTENSION IF NOT EXISTS pgroonga;"
+                            )
+                        self._pgroonga_available = False
+                        
+                finally:
+                    cursor.close()
+                    
+        except Exception as e:
+            # 예외 발생 시 더 자세한 로그 출력 (WARNING 레벨)
+            error_type = type(e).__name__
+            error_msg = str(e)
+            self.logger.warning(
+                f"Error checking PGroonga availability: {error_type}: {error_msg}. "
+                f"Using 'simple' text search configuration."
+            )
+            # DEBUG 레벨에서 상세한 traceback 제공
+            import traceback
+            self.logger.debug(f"PGroonga check traceback:\n{traceback.format_exc()}")
+            self._pgroonga_available = False
+        
+        return self._pgroonga_available
+    
+    def _normalize_relevance_score(self, rank_score: float, log_context: Optional[str] = None) -> float:
+        """
+        PostgreSQL ts_rank_cd 점수를 relevance_score로 정규화
+        
+        Args:
+            rank_score: PostgreSQL ts_rank_cd 점수
+            log_context: 로깅 컨텍스트 (선택적)
+            
+        Returns:
+            정규화된 relevance_score (0.0 ~ 1.0)
+        """
+        if rank_score >= 1.0:
+            relevance_score = min(1.0, rank_score)
+        else:
+            relevance_score = max(0.0, min(1.0, rank_score * self.postgresql_normalization_coefficient))
+        
+        # 디버그 로깅
+        if self.logger.isEnabledFor(logging.DEBUG) and log_context:
+            self.logger.debug(
+                f"[RANK_SCORE] {log_context} "
+                f"rank_score={rank_score:.6f}, "
+                f"relevance_score={relevance_score:.4f}, "
+                f"coefficient={self.postgresql_normalization_coefficient}, "
+                f"normalized={'no' if rank_score >= 1.0 else 'yes'}"
+            )
+        
+        return relevance_score
+    
+    @contextmanager
+    def _db_connection_context(self):
+        """
+        데이터베이스 연결 컨텍스트 매니저 (간소화 버전)
+        
+        Usage:
+            with self._db_connection_context() as (conn, cursor):
+                cursor.execute(...)
+        """
+        conn = None
+        cursor = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            yield (conn, cursor)
+        finally:
+            # 리소스 정리
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    conn.close()  # 연결 풀에 반환
+                except Exception:
+                    pass
+    
+    def _build_statute_article_result(self, row: Dict[str, Any], text_content: str, 
+                                     relevance_score: float, search_type: str = "keyword",
+                                     fallback_strategy: Optional[str] = None,
+                                     direct_match: bool = False) -> Dict[str, Any]:
+        """
+        법령 조문 검색 결과 딕셔너리 생성
+        
+        Args:
+            row: 데이터베이스 행 (딕셔너리 또는 튜플)
+            text_content: 텍스트 내용
+            relevance_score: 관련도 점수
+            search_type: 검색 타입
+            fallback_strategy: 폴백 전략 (선택적)
+            direct_match: 직접 매칭 여부
+            
+        Returns:
+            검색 결과 딕셔너리
+        """
+        # row가 딕셔너리가 아닌 경우 처리
+        if not isinstance(row, dict):
+            # 튜플인 경우 기본 필드 매핑 (실제로는 RealDictCursor 사용하므로 dict일 가능성 높음)
+            return {}
+        
+        return {
+            "id": f"statute_article_{row.get('id', 'unknown')}",
+            "type": "statute_article",
+            "content": text_content,
+            "text": text_content,
+            "source": row.get('statute_name', ''),
+            "statute_name": row.get('statute_name', ''),
+            "article_no": row.get('article_no'),
+            "clause_no": row.get('clause_no'),
+            "item_no": row.get('item_no'),
+            "metadata": {
+                "statute_id": row.get('statute_id'),
+                "article_no": row.get('article_no'),
+                "clause_no": row.get('clause_no'),
+                "item_no": row.get('item_no'),
+                "heading": row.get('heading'),
+                "statute_abbrv": row.get('statute_abbrv'),
+                "statute_type": row.get('statute_type'),
+                "category": row.get('category'),
+                "type": "statute_article"
+            },
+            "relevance_score": relevance_score,
+            "search_type": search_type,
+            "fallback_strategy": fallback_strategy,
+            "direct_match": direct_match
+        }
+    
+    def _build_precedent_result(self, row: Dict[str, Any], text_content: str,
+                               relevance_score: float, search_type: str = "keyword",
+                               fallback_strategy: Optional[str] = None) -> Dict[str, Any]:
+        """
+        판례 검색 결과 딕셔너리 생성
+        
+        Args:
+            row: 데이터베이스 행
+            text_content: 텍스트 내용
+            relevance_score: 관련도 점수
+            search_type: 검색 타입
+            fallback_strategy: 폴백 전략 (선택적)
+            
+        Returns:
+            검색 결과 딕셔너리
+        """
+        if not isinstance(row, dict):
+            return {}
+        
+        return {
+            "id": f"case_para_{row.get('id', 'unknown')}",
+            "type": "precedent_content",
+            "content": text_content,
+            "text": text_content,
+            "source": f"{row.get('court', '')} {row.get('doc_id', '')}".strip(),
+            "metadata": {
+                "precedent_id": row.get('precedent_id'),
+                "doc_id": row.get('doc_id'),
+                "court": row.get('court'),
+                "case_type": row.get('case_type'),
+                "casenames": row.get('casenames'),
+                "announce_date": row.get('announce_date'),
+                "type": "precedent_content",
+            },
+            "relevance_score": relevance_score,
+            "search_type": search_type,
+            "fallback_strategy": fallback_strategy
+        }
+    
+    def _build_decision_result(self, row: Dict[str, Any], text_content: str,
+                              relevance_score: float, search_type: str = "keyword",
+                              fallback_strategy: Optional[str] = None) -> Dict[str, Any]:
+        """
+        심결례 검색 결과 딕셔너리 생성
+        
+        Args:
+            row: 데이터베이스 행
+            text_content: 텍스트 내용
+            relevance_score: 관련도 점수
+            search_type: 검색 타입
+            fallback_strategy: 폴백 전략 (선택적)
+            
+        Returns:
+            검색 결과 딕셔너리
+        """
+        if not isinstance(row, dict):
+            return {}
+        
+        return {
+            "id": f"decision_para_{row.get('id', 'unknown')}",
+            "type": "decision",
+            "content": text_content,
+            "text": text_content,
+            "source": f"{row.get('org', '')} {row.get('doc_id', '')}".strip(),
+            "metadata": {
+                "decision_id": row.get('decision_id'),
+                "org": row.get('org'),
+                "doc_id": row.get('doc_id'),
+                "decision_date": row.get('decision_date'),
+                "result": row.get('result'),
+                "para_index": row.get('para_index'),
+            },
+            "relevance_score": relevance_score,
+            "search_type": search_type,
+            "fallback_strategy": fallback_strategy
+        }
+    
+    def _build_interpretation_result(self, row: Dict[str, Any], text_content: str,
+                                    relevance_score: float, search_type: str = "keyword",
+                                    fallback_strategy: Optional[str] = None) -> Dict[str, Any]:
+        """
+        유권해석 검색 결과 딕셔너리 생성
+        
+        Args:
+            row: 데이터베이스 행
+            text_content: 텍스트 내용
+            relevance_score: 관련도 점수
+            search_type: 검색 타입
+            fallback_strategy: 폴백 전략 (선택적)
+            
+        Returns:
+            검색 결과 딕셔너리
+        """
+        if not isinstance(row, dict):
+            return {}
+        
+        return {
+            "id": f"interpretation_para_{row.get('id', 'unknown')}",
+            "type": "interpretation",
+            "content": text_content,
+            "text": text_content,
+            "source": f"{row.get('org', '')} {row.get('title', '')}".strip(),
+            "metadata": {
+                "interpretation_id": row.get('interpretation_id'),
+                "org": row.get('org'),
+                "doc_id": row.get('doc_id'),
+                "title": row.get('title'),
+                "response_date": row.get('response_date'),
+                "para_index": row.get('para_index'),
+            },
+            "relevance_score": relevance_score,
+            "search_type": search_type,
+            "fallback_strategy": fallback_strategy
+        }
 
     def _check_fts_tables(self):
-        """FTS 테이블 존재 여부 확인 및 초기화 필요 여부 안내"""
-        missing_tables = []
+        """PostgreSQL embeddings 테이블 확인"""
+        if not self._db_adapter or self._db_adapter.db_type != "postgresql":
+            self.logger.warning("PostgreSQL only: FTS tables check skipped")
+            return
+        
+        # embeddings 테이블 확인
         has_embeddings = False
+        try:
+            has_embeddings = self._db_adapter.table_exists('embeddings')
+        except Exception as e:
+            self.logger.warning(f"Error checking embeddings table: {e}")
         
-        with self.get_connection() as conn:
-            try:
-                cursor = conn.cursor()
-                
-                # 필수 FTS 테이블 목록
-                # 주의: 해석례(interpretation)와 결정례(decision)는 현재 데이터베이스에 없음
-                # 추후 헌법결정례, 법령해석례가 추가될 수 있으나 현재는 제외
-                # 주의: 해석례(interpretation)와 결정례(decision)는 현재 데이터베이스에 없음
-                # 추후 헌법결정례, 법령해석례가 추가될 수 있으나 현재는 제외
-                # PostgreSQL에서는 FTS 가상 테이블이 없고, tsvector 컬럼을 직접 사용
-                required_fts_tables = [
-                    'statutes_articles',  # PostgreSQL: tsvector 컬럼 사용
-                    'precedent_contents',  # PostgreSQL: tsvector 컬럼 사용
-                    # 'decision_paragraphs',  # 제거: 현재 데이터베이스에 없음
-                    # 'interpretation_paragraphs'  # 제거: 현재 데이터베이스에 없음
-                ]
-                
-                # 테이블 존재 확인 쿼리 (데이터베이스 타입에 따라)
-                if self._db_adapter:
-                    for table_name in required_fts_tables:
-                        if not self._db_adapter.table_exists(table_name):
-                            missing_tables.append(table_name)
-                    has_embeddings = self._db_adapter.table_exists('embeddings')
-                else:
-                    # 하위 호환성: SQLite 직접 쿼리
-                    for table_name in required_fts_tables:
-                        cursor.execute(
-                            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                            (table_name,)
-                        )
-                        if not cursor.fetchone():
-                            missing_tables.append(table_name)
-                    
-                    # embeddings 테이블 확인
-                    cursor.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'"
-                    )
-                    has_embeddings = cursor.fetchone() is not None
-            except Exception as e:
-                self.logger.warning(f"Error checking FTS tables: {e}")
-        
-        if missing_tables:
-            self.logger.error(
-                f"❌ Missing FTS tables: {', '.join(missing_tables)}. "
-                f"Please run: python scripts/init_lawfirm_v2_db.py"
-            )
         if not has_embeddings:
             self.logger.warning(
                 "⚠️ embeddings table not found. "
                 "Semantic search will not work until embeddings are generated."
             )
-        
-        if missing_tables or not has_embeddings:
-            self.logger.error(
-                f"Database initialization incomplete. "
-                f"Required tables missing: FTS={len(missing_tables)}, embeddings={'missing' if not has_embeddings else 'exists'}"
-            )
         else:
-            self.logger.info("✅ All required FTS tables and embeddings table exist.")
+            self.logger.info("✅ embeddings table exists.")
 
-    def _convert_fts5_to_postgresql_fts(self, query: str, table_alias: str = 'sa', text_vector_column: str = 'text_search_vector', text_content_column: str = None) -> tuple[str, str, str]:
+    def _convert_fts5_to_postgresql_fts(self, query: str, table_alias: str = 'sa', text_vector_column: str = 'text_search_vector', text_content_column: str = None, table_name: str = None, use_pgroonga: Optional[bool] = None) -> tuple[str, str, str, str]:
         """
-        FTS5 쿼리를 PostgreSQL Full-Text Search 쿼리로 변환
+        쿼리를 PostgreSQL tsvector 쿼리로 변환 (PGroonga 지원)
         
         Args:
-            query: FTS5 쿼리 (공백으로 구분된 단어들 또는 OR 조건 포함)
+            query: 검색 쿼리 (공백으로 구분된 단어들 또는 OR 조건 포함)
             table_alias: 테이블 별칭 (예: 'sa', 'pc', 'dp', 'ip')
             text_vector_column: tsvector 컬럼명 (기본값: 'text_search_vector', 없으면 None)
             text_content_column: 실제 텍스트 컬럼명 (text_vector_column이 None일 때 사용, 예: 'article_content', 'section_content')
+            table_name: 테이블명 (text_search_vector 컬럼 존재 여부 확인용, 선택적)
+            use_pgroonga: PGroonga 사용 여부 (None이면 자동 감지)
         
         Returns:
-            (WHERE 절, ORDER BY 절, tsquery 문자열) 튜플
+            (WHERE 절, ORDER BY 절, rank_score 표현식, tsquery 문자열) 튜플
         """
+        # PGroonga 사용 여부 결정
+        if use_pgroonga is None:
+            use_pgroonga = self._check_pgroonga_available()
+        
         # PostgreSQL FTS 변환
         # 한국어 검색을 위해 plainto_tsquery 사용 (더 유연한 검색)
         if not query or not query.strip():
-            return "1=0", "1", ""
+            return "1=0", "1", "0", ""
         
         query_clean = query.strip()
         
         # OR 조건이 있는 경우 처리
-        # 주의: OR 조건은 복잡하므로, 일단 OR를 공백으로 대체하여 AND 검색으로 처리
-        # 추후 필요시 OR 조건을 지원하도록 개선 가능
-        if " OR " in query_clean.upper():
+        # PGroonga 사용 시: &@~ 연산자로 'keyword1 OR keyword2' 형식 직접 사용
+        # PostgreSQL 기본 사용 시: to_tsquery 형식으로 변환 (A | B)
+        has_or_condition = " OR " in query_clean.upper()
+        use_to_tsquery = False
+        
+        if has_or_condition:
             import re
-            # OR를 공백으로 대체 (AND 검색으로 처리)
-            # 또는 OR 조건의 첫 번째 부분만 사용
             parts = re.split(r'\s+OR\s+', query_clean, flags=re.IGNORECASE)
             if len(parts) > 1:
-                # 첫 번째 부분 사용 (더 정확한 검색을 위해)
-                query_clean = parts[0].strip()
-                self.logger.debug(f"OR condition detected, using first part: '{query_clean}'")
+                if use_pgroonga:
+                    # PGroonga 사용 시: OR 조건을 그대로 유지 (PGroonga 쿼리 구문)
+                    # 예: 'keyword1 OR keyword2' -> 'keyword1 OR keyword2' (그대로 사용)
+                    query_clean = " OR ".join(part.strip() for part in parts if part.strip())
+                    self.logger.debug(f"PGroonga OR condition detected, using as-is: '{query_clean}'")
+                else:
+                    # PostgreSQL 기본 사용 시: to_tsquery 형식으로 변환 (A | B)
+                    or_parts = []
+                    for part in parts:
+                        part_clean = part.strip()
+                        if part_clean:
+                            # 공백으로 구분된 단어들을 &로 연결
+                            words = part_clean.split()
+                            if len(words) > 1:
+                                or_parts.append(" & ".join(words))
+                            else:
+                                or_parts.append(part_clean)
+                    
+                    if or_parts:
+                        # OR 조건을 |로 연결하여 to_tsquery 형식으로 변환
+                        query_clean = " | ".join(or_parts)
+                        self.logger.debug(f"OR condition detected, converted to to_tsquery: '{query_clean}'")
+                        use_to_tsquery = True
+                    else:
+                        query_clean = parts[0].strip() if parts else query_clean
+                        use_to_tsquery = False
             else:
                 query_clean = parts[0] if parts else query_clean
+                use_to_tsquery = False
         
-        # 일반 쿼리: plainto_tsquery 사용 (한국어 검색에 최적화)
-        # plainto_tsquery는 공백으로 구분된 단어를 자동으로 AND로 처리하고
-        # 한국어 형태소 분석을 수행
-        query_escaped = query_clean.replace("'", "''")
+        # text_search_vector 컬럼 존재 여부 확인 (table_name이 제공된 경우)
+        if table_name and not text_vector_column and not text_content_column:
+            if self._check_column_exists(table_name, 'text_search_vector'):
+                text_vector_column = 'text_search_vector'
+                self.logger.debug(f"text_search_vector column found in {table_name}")
         
-        # tsvector 생성: text_vector_column이 있으면 사용, 없으면 text_content_column으로 생성
-        if text_vector_column and text_vector_column != 'text_search_vector':
-            # 실제 컬럼명이 제공된 경우
-            tsvector_expr = f"{table_alias}.{text_vector_column}"
-        elif text_content_column:
-            # text_content_column으로 tsvector 생성
-            tsvector_expr = f"to_tsvector('simple', {table_alias}.{text_content_column})"
+        # PGroonga 사용 시
+        if use_pgroonga:
+            # PGroonga 전용 연산자 사용 (&@: 단일 키워드, &@~: 쿼리 구문)
+            # PGroonga는 인덱스를 직접 사용하므로 to_tsvector/to_tsquery 불필요
+            # 참고: https://pgroonga.github.io/tutorial/
+            
+            # 검색 대상 컬럼 결정 (PGroonga 인덱스가 있는 컬럼 사용)
+            if text_content_column:
+                # text_content_column 사용 (PGroonga 인덱스가 있으면 자동으로 사용됨)
+                search_column = f"{table_alias}.{text_content_column}"
+            elif text_vector_column:
+                # text_search_vector 컬럼이 있으면 사용 (PGroonga 인덱스가 있을 수 있음)
+                search_column = f"{table_alias}.{text_vector_column}"
+            else:
+                # 기본값: text_search_vector 컬럼 사용 시도
+                search_column = f"{table_alias}.text_search_vector"
+            
+            # WHERE 절, ORDER BY 절, rank_score 표현식 생성 (PGroonga 전용 연산자 사용)
+            # 참고: https://pgroonga.github.io/tutorial/
+            if use_to_tsquery or has_or_condition:
+                # &@~ 연산자 사용 (쿼리 구문 지원: keyword1 OR keyword2)
+                # PGroonga 쿼리 구문: keyword1 OR keyword2 (공백은 AND, OR은 OR)
+                where_clause = f"{search_column} &@~ %s"
+                # pgroonga_score 함수 사용 (정확도 점수)
+                # tableoid와 ctid는 시스템 컬럼이므로 테이블 별칭 없이도 접근 가능
+                # 하지만 명확성을 위해 테이블 별칭 사용
+                rank_score_expr = f"pgroonga_score({table_alias}.tableoid, {table_alias}.ctid)"
+                order_clause = f"{rank_score_expr} DESC"
+            else:
+                # &@ 연산자 사용 (단일 키워드 또는 공백으로 구분된 단어들)
+                # PGroonga는 공백으로 구분된 단어들을 자동으로 AND 조건으로 처리
+                where_clause = f"{search_column} &@ %s"
+                # pgroonga_score 함수 사용 (정확도 점수)
+                rank_score_expr = f"pgroonga_score({table_alias}.tableoid, {table_alias}.ctid)"
+                order_clause = f"{rank_score_expr} DESC"
         else:
-            # 기본값: text_search_vector 컬럼 사용 시도
-            tsvector_expr = f"{table_alias}.{text_vector_column}"
+            # PGroonga가 없으면 'simple' 설정 사용 (PGroonga 없이는 'korean' 설정이 제대로 작동하지 않음)
+            self.logger.debug("PGroonga is not available. Using 'simple' text search configuration.")
+            lang_config = 'simple'
+            
+            # tsvector 생성: text_vector_column이 있으면 사용, 없으면 text_content_column으로 생성
+            if text_vector_column:
+                # text_search_vector 컬럼 사용 (인덱스 활용, 성능 최적화)
+                tsvector_expr = f"{table_alias}.{text_vector_column}"
+            elif text_content_column:
+                # text_content_column으로 tsvector 생성 ('simple' 설정 사용)
+                tsvector_expr = f"to_tsvector('{lang_config}', {table_alias}.{text_content_column})"
+            else:
+                # 기본값: text_search_vector 컬럼 사용 시도
+                tsvector_expr = f"{table_alias}.text_search_vector"
+            
+            # WHERE 절, ORDER BY 절, rank_score 표현식 생성
+            # OR 조건이 있으면 to_tsquery 사용, 없으면 plainto_tsquery 사용
+            if use_to_tsquery:
+                # to_tsquery 사용 (OR 조건 지원)
+                where_clause = f"{tsvector_expr} @@ to_tsquery('{lang_config}', %s)"
+                rank_score_expr = f"ts_rank_cd({tsvector_expr}, to_tsquery('{lang_config}', %s))"
+                order_clause = f"{rank_score_expr} DESC"
+            else:
+                # plainto_tsquery 사용 (일반 검색)
+                where_clause = f"{tsvector_expr} @@ plainto_tsquery('{lang_config}', %s)"
+                rank_score_expr = f"ts_rank_cd({tsvector_expr}, plainto_tsquery('{lang_config}', %s))"
+                order_clause = f"{rank_score_expr} DESC"
         
-        # WHERE 절: plainto_tsquery 사용 (더 유연한 한국어 검색)
-        # 🔥 수정: 'korean' 설정이 없을 수 있으므로 'simple' 사용 (한국어도 처리 가능)
-        where_clause = f"{tsvector_expr} @@ plainto_tsquery('simple', %s)"
+        return where_clause, order_clause, rank_score_expr, query_clean
+    
+    def _get_query_params(self, tsquery: str, limit: int, use_pgroonga: Optional[bool] = None, rank_score_expr: Optional[str] = None) -> tuple:
+        """
+        SQL 쿼리 파라미터 튜플 생성 (PGroonga 사용 여부에 따라 플레이스홀더 개수 결정)
         
-        # ORDER BY 절: ts_rank_cd 사용 (더 정확한 랭킹, 커버 밀도 고려)
-        # 또는 ts_rank 사용 (더 빠름)
-        order_clause = f"ts_rank_cd({tsvector_expr}, plainto_tsquery('simple', %s)) DESC"
+        Args:
+            tsquery: 검색 쿼리 문자열
+            limit: 결과 제한 개수
+            use_pgroonga: PGroonga 사용 여부 (None이면 자동 감지)
+            rank_score_expr: rank_score 표현식 (플레이스홀더 개수 확인용)
+            
+        Returns:
+            SQL 쿼리 파라미터 튜플
+        """
+        if use_pgroonga is None:
+            use_pgroonga = self._check_pgroonga_available()
         
-        return where_clause, order_clause, query_clean
+        if use_pgroonga:
+            # PGroonga: where_clause에 1개, rank_score_expr에 0개 (pgroonga_score는 플레이스홀더 없음)
+            return (tsquery, limit)
+        else:
+            # PostgreSQL 기본: where_clause에 1개, rank_score_expr에 1개 (ts_rank_cd에 플레이스홀더 있음)
+            # rank_score_expr에 플레이스홀더가 있는지 확인
+            if rank_score_expr and '%s' in rank_score_expr:
+                return (tsquery, tsquery, limit)
+            else:
+                # rank_score_expr에 플레이스홀더가 없으면 where_clause만 (예: 하드코딩된 경우)
+                return (tsquery, limit)
     
     def _get_connection(self):
         """
@@ -316,40 +774,53 @@ class LegalDataConnectorV2:
 
     def _analyze_query_plan(self, query: str, table_name: str) -> Optional[Dict[str, Any]]:
         """
-        FTS5 쿼리 실행 계획 분석
+        PostgreSQL tsvector 쿼리 실행 계획 분석
 
         Args:
             query: 검색 쿼리
-            table_name: FTS5 테이블명
+            table_name: 실제 테이블명 (statutes_articles, case_paragraphs 등)
 
         Returns:
             실행 계획 정보 딕셔너리 또는 None
         """
         conn = None
         try:
-            safe_query = self._sanitize_fts5_query(query)
+            safe_query = self._sanitize_tsquery(query)
             if not safe_query:
                 return None
 
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            # EXPLAIN QUERY PLAN 실행
+            # 테이블별 텍스트 컬럼 매핑
+            # ⚠️ 사용 중단 테이블 제거: case_paragraphs, decision_paragraphs, interpretation_paragraphs
+            # Open Law 스키마 테이블만 사용: statutes_articles, precedent_contents
+            text_column_map = {
+                'statutes_articles': 'article_content',  # Open Law 스키마
+                'precedent_contents': 'section_content',  # Open Law 스키마
+                # 사용 중단: 'case_paragraphs', 'decision_paragraphs', 'interpretation_paragraphs'
+            }
+            
+            text_column = text_column_map.get(table_name, 'text')
+            
+            # PostgreSQL EXPLAIN
             explain_query = f"""
-                EXPLAIN QUERY PLAN
-                SELECT rowid, bm25({table_name}) as rank_score
+                EXPLAIN
+                SELECT id, 
+                       ts_rank_cd(to_tsvector('simple', {text_column}), 
+                                  plainto_tsquery('simple', %s)) as rank_score
                 FROM {table_name}
-                WHERE {table_name} MATCH ?
-                ORDER BY rank_score
+                WHERE to_tsvector('simple', {text_column}) @@ plainto_tsquery('simple', %s)
+                ORDER BY rank_score DESC
                 LIMIT 10
             """
-            cursor.execute(explain_query, (safe_query,))
+            cursor.execute(explain_query, (safe_query, safe_query))
             plan_rows = cursor.fetchall()
             
             # 실행 계획 분석
             plan_info = {
-                "uses_index": any("FTS" in str(row) or "MATCH" in str(row) for row in plan_rows),
-                "scan_type": "FTS" if any("FTS" in str(row) for row in plan_rows) else "UNKNOWN",
+                "uses_index": any("Index" in str(row) or "GIN" in str(row) for row in plan_rows),
+                "scan_type": "GIN" if any("GIN" in str(row) for row in plan_rows) else "Seq Scan",
                 "plan_detail": [str(row) for row in plan_rows]
             }
             
@@ -369,9 +840,9 @@ class LegalDataConnectorV2:
             except Exception:
                 pass
 
-    def _optimize_fts5_query(self, query: str) -> str:
+    def _optimize_tsquery(self, query: str) -> str:
         """
-        FTS5 쿼리 최적화 (형태소 분석 기반 조사/어미 제거)
+        tsquery 최적화 (형태소 분석 기반 조사/어미 제거)
 
         Args:
             query: 원본 쿼리
@@ -382,16 +853,16 @@ class LegalDataConnectorV2:
         # 🔥 수정: 안전한 체크 - hasattr 사용
         if hasattr(self, '_okt') and self._okt is not None:
             try:
-                return self._optimize_fts5_query_morphological(query)
+                return self._optimize_tsquery_morphological(query)
             except Exception as e:
                 self.logger.warning(f"Error in morphological analysis: {e}, using fallback")
-                return self._optimize_fts5_query_fallback(query)
+                return self._optimize_tsquery_fallback(query)
         else:
-            return self._optimize_fts5_query_fallback(query)
+            return self._optimize_tsquery_fallback(query)
     
-    def _optimize_fts5_query_morphological(self, query: str) -> str:
+    def _optimize_tsquery_morphological(self, query: str) -> str:
         """
-        형태소 분석 기반 FTS5 쿼리 최적화
+        형태소 분석 기반 tsquery 최적화
         
         Args:
             query: 원본 쿼리
@@ -457,16 +928,16 @@ class LegalDataConnectorV2:
         
         # 핵심 키워드가 없으면 폴백 방식 사용
         if not core_keywords:
-            return self._optimize_fts5_query_fallback(query)
+            return self._optimize_tsquery_fallback(query)
         
         optimized = " ".join(core_keywords)
         self.logger.debug(f"Query optimized (morphological): '{query}' -> '{optimized}'")
         
         return optimized
     
-    def _optimize_fts5_query_fallback(self, query: str) -> str:
+    def _optimize_tsquery_fallback(self, query: str) -> str:
         """
-        FTS5 쿼리 최적화 (폴백 방식: 기존 방식)
+        tsquery 최적화 (폴백 방식: 기존 방식)
         
         Args:
             query: 원본 쿼리
@@ -540,13 +1011,13 @@ class LegalDataConnectorV2:
         
         return optimized
 
-    def _sanitize_fts5_query(self, query: str) -> str:
+    def _sanitize_tsquery(self, query: str) -> str:
         """
-        FTS5 쿼리를 안전하게 변환
+        tsquery를 안전하게 변환
         - 특수 문자가 있으면 이스케이프 처리
         - 빈 쿼리는 빈 문자열 반환
         - 단순 키워드 검색에 최적화
-        - FTS5는 기본적으로 공백으로 구분된 단어를 AND 조건으로 처리
+        - PostgreSQL tsquery는 기본적으로 공백으로 구분된 단어를 AND 조건으로 처리
         - 따옴표와 AND/OR 구문을 포함한 복잡한 쿼리 처리
         - 개선: 법령명과 조문번호 추출, "제XX조" 패턴 인식, 불필요한 단어 필터링
         """
@@ -661,10 +1132,10 @@ class LegalDataConnectorV2:
             else:
                 return ""
         
-        # 8단계: 최대 5개 단어/구문만 사용 (FTS5 성능 최적화)
+        # 8단계: 최대 5개 단어/구문만 사용 (tsquery 성능 최적화)
         clean_words = clean_words[:5]
         
-        # 9단계: FTS5 쿼리 생성 (개선: 법령명+조문번호 구문은 하나의 구문으로 처리)
+        # 9단계: tsquery 생성 (개선: 법령명+조문번호 구문은 하나의 구문으로 처리)
         if not clean_words:
             sanitized = ""
         elif len(clean_words) == 1:
@@ -690,7 +1161,7 @@ class LegalDataConnectorV2:
                 # 일반 단어만 있으면 OR 조건
                 sanitized = " OR ".join(clean_words[:3])
         
-        # 10단계: FTS5 쿼리 정제 (개선: "OR OR" 오류 방지)
+        # 10단계: tsquery 정제 (개선: "OR OR" 오류 방지)
         # 빈 문자열 제거 및 중복 OR 제거
         sanitized = sanitized.strip()
         if sanitized:
@@ -715,11 +1186,11 @@ class LegalDataConnectorV2:
         if sanitized:
             sanitized = sanitized.replace("'", "''")
         
-        self.logger.debug(f"FTS5 query sanitized: '{query[:100]}' -> '{sanitized}'")
+        self.logger.debug(f"tsquery sanitized: '{query[:100]}' -> '{sanitized}'")
         return sanitized
 
     def search_statutes_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 법령 조문 (최적화됨)"""
+        """PostgreSQL tsvector 키워드 검색: 법령 조문"""
         try:
             # 🔥 개선: 조문 번호가 있으면 직접 검색 먼저 시도
             import re
@@ -732,23 +1203,20 @@ class LegalDataConnectorV2:
                 # 조문 번호 직접 검색 먼저 시도
                 direct_results = self.search_statute_article_direct(query, limit=limit)
                 if direct_results:
-                    self.logger.info(f"✅ [FTS WITH DIRECT] 조문 직접 검색 성공: {len(direct_results)}개, FTS 검색 스킵")
+                    self.logger.info(f"✅ [TSVECTOR] 조문 직접 검색 성공: {len(direct_results)}개")
                     return direct_results
-                else:
-                    self.logger.debug(f"⚠️ [FTS WITH DIRECT] 조문 직접 검색 실패, FTS 검색 진행")
             
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
+            # tsquery 최적화 및 안전화
+            optimized_query = self._optimize_tsquery(query)
+            safe_query = self._sanitize_tsquery(optimized_query)
             if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}' (optimized: '{optimized_query}')")
+                self.logger.warning(f"Empty or invalid tsquery: '{query}'")
                 return []
             
             # 검색 쿼리 로깅
-            self.logger.info(f"FTS statute search: original='{query}', optimized='{optimized_query}', safe='{safe_query}'")
+            self.logger.info(f"TSVECTOR search: original='{query}', optimized='{optimized_query}', safe='{safe_query}'")
             
             # 쿼리 최적화: 불완전한 단어 제거 (예: "손해배상에" -> "손해배상")
-            import re
             words = safe_query.split()
             cleaned_words = []
             original_cleaned = safe_query
@@ -770,7 +1238,7 @@ class LegalDataConnectorV2:
 
             # 실행 계획 분석 (디버그 모드)
             if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "statute_articles_fts")
+                plan_info = self._analyze_query_plan(query, "statutes_articles")
                 if plan_info:
                     self.logger.debug(f"Query plan analysis: {plan_info}")
 
@@ -778,65 +1246,49 @@ class LegalDataConnectorV2:
             cursor = conn.cursor()
             
             try:
-                # PostgreSQL FTS 검색으로 변환
-                if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                    # PostgreSQL FTS 사용
-                    where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                        safe_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
+                # text_search_vector 컬럼 존재 여부 확인
+                has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
+                
+                # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                if has_text_search_vector:
+                    where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                        safe_query, table_alias='sa', text_vector_column='text_search_vector', 
+                        text_content_column=None, table_name='statutes_articles'
                     )
-                    
-                    if not tsquery:
-                        self.logger.warning(f"Empty tsquery generated from query: '{safe_query}'")
-                        return []
-                    
-                    # PostgreSQL FTS 쿼리 (plainto_tsquery 사용)
-                    # plainto_tsquery는 한국어 형태소 분석을 수행하고 공백으로 구분된 단어를 AND로 처리
-                    # 🔥 수정: where_clause와 order_clause에 이미 %s가 포함되어 있으므로 tsquery를 2번 전달
-                    sql_query = f"""
-                        SELECT
-                            sa.id,
-                            sa.statute_id,
-                            sa.article_no,
-                            sa.clause_no,
-                            sa.item_no,
-                            sa.article_title as heading,
-                            sa.article_content as text,
-                            s.law_name_kr as statute_name,
-                            s.law_abbrv as statute_abbrv,
-                            s.law_type as statute_type,
-                            s.domain as category,
-                            ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
-                        FROM statutes_articles sa
-                        JOIN statutes s ON sa.statute_id = s.id
-                        WHERE {where_clause}
-                        ORDER BY {order_clause}
-                        LIMIT %s
-                    """
-                    # where_clause와 order_clause에 각각 %s가 포함되어 있으므로 tsquery를 2번, limit을 1번 전달
-                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                 else:
-                    # SQLite FTS5 (레거시 지원)
-                    cursor.execute("""
-                        SELECT
-                            sa.id,
-                            sa.statute_id,
-                            sa.article_no,
-                            sa.clause_no,
-                            sa.item_no,
-                            sa.article_title as heading,
-                            sa.article_content as text,
-                            s.law_name_kr as statute_name,
-                            s.law_abbrv as statute_abbrv,
-                            s.law_type as statute_type,
-                            s.domain as category,
-                            bm25(statute_articles_fts) as rank_score
-                        FROM statute_articles_fts
-                        JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
-                        JOIN statutes s ON sa.statute_id = s.id
-                        WHERE statute_articles_fts MATCH ?
-                        ORDER BY rank_score
-                        LIMIT ?
-                    """, (safe_query, limit))
+                    where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                        safe_query, table_alias='sa', text_vector_column=None, 
+                        text_content_column='article_content', table_name='statutes_articles'
+                    )
+                
+                if not tsquery:
+                    self.logger.warning(f"Empty tsquery generated from query: '{safe_query}'")
+                    return []
+                
+                # PostgreSQL tsvector 쿼리 (PGroonga 사용 시 'korean', 미사용 시 'simple' 설정 자동 적용)
+                sql_query = f"""
+                    SELECT
+                        sa.id,
+                        sa.statute_id,
+                        sa.article_no,
+                        sa.clause_no,
+                        sa.item_no,
+                        sa.article_title as heading,
+                        sa.article_content as text,
+                        s.law_name_kr as statute_name,
+                        s.law_abbrv as statute_abbrv,
+                        s.law_type as statute_type,
+                        s.domain as category,
+                        {rank_score_expr} as rank_score
+                    FROM statutes_articles sa
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE {where_clause}
+                    ORDER BY {order_clause}
+                    LIMIT %s
+                """
+                # 플레이스홀더 개수 자동 결정
+                query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                cursor.execute(sql_query, query_params)
 
                 results = []
                 for row in cursor.fetchall():
@@ -845,39 +1297,19 @@ class LegalDataConnectorV2:
                     if not text_content:
                         self.logger.warning(f"Empty text content for statute article id={row['id']}, article_no={row['article_no']}")
                     
-                    # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                    if row['rank_score']:
-                        # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                    else:
-                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                    # PostgreSQL ts_rank_cd 점수 정규화
+                    rank_score = row.get('rank_score', 0.0)
+                    relevance_score = self._normalize_relevance_score(
+                        rank_score, 
+                        log_context=f"query='{query[:50]}', type=statute_article_tsvector"
+                    )
                     
-                    results.append({
-                        "id": f"statute_article_{row['id']}",
-                        "type": "statute_article",
-                        "source_type": "statute_article",
-                        "content": text_content,
-                        "text": text_content,  # text 필드도 추가 (호환성)
-                        "source": row['statute_name'],
-                        "statute_name": row['statute_name'],
-                        "article_no": row['article_no'],
-                        "clause_no": row['clause_no'],
-                        "item_no": row['item_no'],
-                        "metadata": {
-                            "statute_id": row['statute_id'],
-                            "article_no": row['article_no'],
-                            "clause_no": row['clause_no'],
-                            "item_no": row['item_no'],
-                            "heading": row['heading'],
-                            "statute_abbrv": row['statute_abbrv'],
-                            "statute_type": row['statute_type'],
-                            "category": row['category'],
-                            "source_type": "statute_article"
-                        },
-                        "relevance_score": relevance_score,
-                        "search_type": "keyword"
-                    })
+                    result = self._build_statute_article_result(
+                        row, text_content, relevance_score, 
+                        search_type="keyword", fallback_strategy=None
+                    )
+                    if result:
+                        results.append(result)
             finally:
                 # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
                 try:
@@ -889,17 +1321,17 @@ class LegalDataConnectorV2:
                 except Exception:
                     pass
             
-            self.logger.info(f"FTS search found {len(results)} statute articles for query: '{query}' (safe_query: '{safe_query}')")
+            self.logger.info(f"TSVECTOR search found {len(results)} statute articles for query: '{query}'")
             
             # 결과가 없으면 폴백 검색 시도
             if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
+                self.logger.warning(f"No TSVECTOR results for query: '{query}'. Trying fallback strategies...")
                 results = self._fallback_statute_search(query, safe_query, words, limit)
             
             return results
 
         except Exception as e:
-            self.logger.error(f"Error in FTS statute search for query '{query}': {e}", exc_info=True)
+            self.logger.error(f"Error in tsvector search for query '{query}': {e}", exc_info=True)
             return []
     
     def search_statute_article_direct(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
@@ -1082,7 +1514,7 @@ class LegalDataConnectorV2:
                 
                 # 해당 조문 직접 조회 (여러 형식으로 시도)
                 # 🔥 개선: 여러 article_no 형식을 OR 조건으로 시도
-                where_conditions = " OR ".join([f"sa.article_no = %s" for _ in article_no_variants])
+                where_conditions = " OR ".join(["sa.article_no = %s" for _ in article_no_variants])
                 params = [statute_id] + article_no_variants + [limit * 2]
                 
                 cursor.execute(f"""
@@ -1121,7 +1553,6 @@ class LegalDataConnectorV2:
                         results.append({
                             "id": f"statute_article_{row['id']}",
                             "type": "statute_article",
-                            "source_type": "statute_article",
                             "content": text_content,
                             "text": text_content,
                             "source": row['statute_name'],
@@ -1136,7 +1567,7 @@ class LegalDataConnectorV2:
                                 "statute_abbrv": row['statute_abbrv'],
                                 "statute_type": row['statute_type'],
                                 "category": row['category'],
-                                "source_type": "statute_article"
+                                "type": "statute_article"
                             },
                             "relevance_score": 1.0,
                             "final_weighted_score": 1.0,
@@ -1209,106 +1640,66 @@ class LegalDataConnectorV2:
                 cursor = conn.cursor()
                 
                 try:
-                    # PostgreSQL FTS 검색으로 변환
-                    if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                        # 🔥 수정: text_search_vector 컬럼이 없으므로 text_content_column 사용
-                        where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                            fallback_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
+                    # text_search_vector 컬럼 존재 여부 확인
+                    has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
+                    
+                    # PostgreSQL tsvector 쿼리
+                    if has_text_search_vector:
+                        where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                            fallback_query, table_alias='sa', text_vector_column='text_search_vector',
+                            text_content_column=None, table_name='statutes_articles'
                         )
-                        
-                        if not tsquery:
-                            self.logger.warning(f"Empty tsquery generated from fallback query: '{fallback_query}'")
-                            return []
-                        
-                        sql_query = f"""
-                            SELECT
-                                sa.id,
-                                sa.statute_id,
-                                sa.article_no,
-                                sa.clause_no,
-                                sa.item_no,
-                                sa.article_title as heading,
-                                sa.article_content as text,
-                                s.law_name_kr as statute_name,
-                                s.law_abbrv as statute_abbrv,
-                                s.law_type as statute_type,
-                                s.domain as category,
-                                ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
-                            FROM statutes_articles sa
-                            JOIN statutes s ON sa.statute_id = s.id
-                            WHERE {where_clause}
-                            ORDER BY {order_clause}
-                            LIMIT %s
-                        """
-                        # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                        cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                     else:
-                        # SQLite FTS5 (레거시 지원)
-                        cursor.execute("""
-                            SELECT
-                                sa.id,
-                                sa.statute_id,
-                                sa.article_no,
-                                sa.clause_no,
-                                sa.item_no,
-                                sa.article_title as heading,
-                                sa.article_content as text,
-                                s.law_name_kr as statute_name,
-                                s.law_abbrv as statute_abbrv,
-                                s.law_type as statute_type,
-                                s.domain as category,
-                                bm25(statute_articles_fts) as rank_score
-                            FROM statute_articles_fts
-                            JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
-                            JOIN statutes s ON sa.statute_id = s.id
-                            WHERE statute_articles_fts MATCH ?
-                            ORDER BY rank_score
-                            LIMIT ?
-                        """, (fallback_query, limit))
+                        where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                            fallback_query, table_alias='sa', text_vector_column=None,
+                            text_content_column='article_content', table_name='statutes_articles'
+                        )
+                    
+                    if not tsquery:
+                        self.logger.warning(f"Empty tsquery generated from fallback query: '{fallback_query}'")
+                        return []
+                    
+                    # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                    sql_query = f"""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.law_name_kr as statute_name,
+                            s.law_abbrv as statute_abbrv,
+                            s.law_type as statute_type,
+                            s.domain as category,
+                            {rank_score_expr} as rank_score
+                        FROM statutes_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE {where_clause}
+                        ORDER BY {order_clause}
+                        LIMIT %s
+                    """
+                    query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                    cursor.execute(sql_query, query_params)
                     
                     for row in cursor.fetchall():
                         if row['id'] not in seen_ids:
                             seen_ids.add(row['id'])
                             text_content = row['text'] if row['text'] else ""
-                            # relevance_score 계산 개선
-                            if row.get('rank_score') is not None:
-                                rank_score = row['rank_score']
-                                if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                                    # PostgreSQL ts_rank는 0.0 ~ 1.0 범위
-                                    relevance_score = max(0.0, min(1.0, rank_score * 10.0))
-                                else:
-                                    # SQLite BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                                    relevance_score = max(0.0, min(1.0, abs(rank_score) / 100.0))
-                            else:
-                                # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                                relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                            # PostgreSQL ts_rank_cd 점수 정규화
+                            rank_score = row.get('rank_score', 0.0)
+                            relevance_score = self._normalize_relevance_score(
+                                rank_score,
+                                log_context="fallback_strategy=law_article_only"
+                            )
                             
-                            fallback_results.append({
-                                "id": f"statute_article_{row['id']}",
-                                "type": "statute_article",
-                                "source_type": "statute_article",
-                                "content": text_content,
-                                "text": text_content,
-                                "source": row['statute_name'],
-                                "statute_name": row['statute_name'],
-                                "article_no": row['article_no'],
-                                "clause_no": row['clause_no'],
-                                "item_no": row['item_no'],
-                                "metadata": {
-                                    "statute_id": row['statute_id'],
-                                    "article_no": row['article_no'],
-                                    "clause_no": row['clause_no'],
-                                    "item_no": row['item_no'],
-                                    "heading": row['heading'],
-                                    "statute_abbrv": row['statute_abbrv'],
-                                    "statute_type": row['statute_type'],
-                                    "category": row['category'],
-                                    "source_type": "statute_article"
-                                },
-                                "relevance_score": relevance_score,
-                                "search_type": "keyword",
-                                "fallback_strategy": "law_article_only"
-                            })
+                            result = self._build_statute_article_result(
+                                row, text_content, relevance_score,
+                                search_type="keyword", fallback_strategy="law_article_only"
+                            )
+                            if result:
+                                fallback_results.append(result)
                 finally:
                     # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
                     try:
@@ -1347,105 +1738,66 @@ class LegalDataConnectorV2:
                 cursor = conn.cursor()
                 
                 try:
-                    # PostgreSQL FTS 검색으로 변환
-                    if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                        where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                            keyword_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
+                    # text_search_vector 컬럼 존재 여부 확인
+                    has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
+                    
+                    # PostgreSQL tsvector 쿼리
+                    if has_text_search_vector:
+                        where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                            keyword_query, table_alias='sa', text_vector_column='text_search_vector',
+                            text_content_column=None, table_name='statutes_articles'
                         )
-                        
-                        if not tsquery:
-                            self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
-                            return []
-                        
-                        sql_query = f"""
-                            SELECT
-                                sa.id,
-                                sa.statute_id,
-                                sa.article_no,
-                                sa.clause_no,
-                                sa.item_no,
-                                sa.article_title as heading,
-                                sa.article_content as text,
-                                s.law_name_kr as statute_name,
-                                s.law_abbrv as statute_abbrv,
-                                s.law_type as statute_type,
-                                s.domain as category,
-                                ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
-                            FROM statutes_articles sa
-                            JOIN statutes s ON sa.statute_id = s.id
-                            WHERE {where_clause}
-                            ORDER BY {order_clause}
-                            LIMIT %s
-                        """
-                        # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                        cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                     else:
-                        # SQLite FTS5 (레거시 지원)
-                        cursor.execute("""
-                            SELECT
-                                sa.id,
-                                sa.statute_id,
-                                sa.article_no,
-                                sa.clause_no,
-                                sa.item_no,
-                                sa.article_title as heading,
-                                sa.article_content as text,
-                                s.law_name_kr as statute_name,
-                                s.law_abbrv as statute_abbrv,
-                                s.law_type as statute_type,
-                                s.domain as category,
-                                bm25(statute_articles_fts) as rank_score
-                            FROM statute_articles_fts
-                            JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
-                            JOIN statutes s ON sa.statute_id = s.id
-                            WHERE statute_articles_fts MATCH ?
-                            ORDER BY rank_score
-                            LIMIT ?
-                        """, (keyword_query, limit))
+                        where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                            keyword_query, table_alias='sa', text_vector_column=None,
+                            text_content_column='article_content', table_name='statutes_articles'
+                        )
+                    
+                    if not tsquery:
+                        self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
+                        return []
+                    
+                    # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                    sql_query = f"""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.law_name_kr as statute_name,
+                            s.law_abbrv as statute_abbrv,
+                            s.law_type as statute_type,
+                            s.domain as category,
+                            {rank_score_expr} as rank_score
+                        FROM statutes_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE {where_clause}
+                        ORDER BY {order_clause}
+                        LIMIT %s
+                    """
+                    query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                    cursor.execute(sql_query, query_params)
                     
                     for row in cursor.fetchall():
                         if row['id'] not in seen_ids:
                             seen_ids.add(row['id'])
                             text_content = row['text'] if row['text'] else ""
-                            # relevance_score 계산 개선
-                            if row.get('rank_score') is not None:
-                                rank_score = row['rank_score']
-                                if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                                    # PostgreSQL ts_rank는 0.0 ~ 1.0 범위
-                                    relevance_score = max(0.0, min(1.0, rank_score * 10.0))
-                                else:
-                                    # SQLite BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                                    relevance_score = max(0.0, min(1.0, abs(rank_score) / 100.0))
-                            else:
-                                # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                                relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                            # PostgreSQL ts_rank_cd 점수 정규화
+                            rank_score = row.get('rank_score', 0.0)
+                            relevance_score = self._normalize_relevance_score(
+                                rank_score,
+                                log_context="fallback_strategy=keyword_only"
+                            )
                             
-                            fallback_results.append({
-                                "id": f"statute_article_{row['id']}",
-                                "type": "statute_article",
-                                "source_type": "statute_article",
-                                "content": text_content,
-                                "text": text_content,
-                                "source": row['statute_name'],
-                                "statute_name": row['statute_name'],
-                                "article_no": row['article_no'],
-                                "clause_no": row['clause_no'],
-                                "item_no": row['item_no'],
-                                "metadata": {
-                                    "statute_id": row['statute_id'],
-                                    "article_no": row['article_no'],
-                                    "clause_no": row['clause_no'],
-                                    "item_no": row['item_no'],
-                                    "heading": row['heading'],
-                                    "statute_abbrv": row['statute_abbrv'],
-                                    "statute_type": row['statute_type'],
-                                    "category": row['category'],
-                                    "source_type": "statute_article"
-                                },
-                                "relevance_score": relevance_score,
-                                "search_type": "keyword",
-                                "fallback_strategy": "keyword_only"
-                            })
+                            result = self._build_statute_article_result(
+                                row, text_content, relevance_score,
+                                search_type="keyword", fallback_strategy="keyword_only"
+                            )
+                            if result:
+                                fallback_results.append(result)
                 finally:
                     # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
                     try:
@@ -1476,101 +1828,66 @@ class LegalDataConnectorV2:
                     conn = self._get_connection()
                     cursor = conn.cursor()
                     try:
-                        # PostgreSQL FTS 검색으로 변환
-                        if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                            where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                                fallback_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
+                        # text_search_vector 컬럼 존재 여부 확인
+                        has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
+                        
+                        # PostgreSQL tsvector 쿼리
+                        if has_text_search_vector:
+                            where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                fallback_query, table_alias='sa', text_vector_column='text_search_vector',
+                                text_content_column=None, table_name='statutes_articles'
                             )
-                            
-                            if not tsquery:
-                                self.logger.warning(f"Empty tsquery generated from fallback query: '{fallback_query}'")
-                                return []
-                            
-                            sql_query = f"""
-                                SELECT
-                                    sa.id,
-                                    sa.statute_id,
-                                    sa.article_no,
-                                    sa.clause_no,
-                                    sa.item_no,
-                                    sa.article_title as heading,
-                                    sa.article_content as text,
-                                    s.law_name_kr as statute_name,
-                                    s.law_abbrv as statute_abbrv,
-                                    s.law_type as statute_type,
-                                    s.domain as category,
-                                    ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
-                                FROM statutes_articles sa
-                                JOIN statutes s ON sa.statute_id = s.id
-                                WHERE {where_clause}
-                                ORDER BY {order_clause}
-                                LIMIT %s
-                            """
-                            # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                            cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                         else:
-                            # SQLite FTS5 (레거시 지원) - PostgreSQL에서는 사용하지 않음
-                            # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
-                            cursor.execute("""
-                                SELECT
-                                    sa.id,
-                                    sa.statute_id,
-                                    sa.article_no,
-                                    sa.clause_no,
-                                    sa.item_no,
-                                    sa.article_title as heading,
-                                    sa.article_content as text,
-                                    s.law_name_kr as statute_name,
-                                    s.law_abbrv as statute_abbrv,
-                                    s.law_type as statute_type,
-                                    s.domain as category,
-                                    bm25(statute_articles_fts) as rank_score
-                                FROM statute_articles_fts
-                                JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
-                                JOIN statutes s ON sa.statute_id = s.id
-                                WHERE statute_articles_fts MATCH ?
-                                ORDER BY rank_score
-                                LIMIT ?
-                            """, (fallback_query, limit))
+                            where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                fallback_query, table_alias='sa', text_vector_column=None,
+                                text_content_column='article_content', table_name='statutes_articles'
+                            )
+                        
+                        if not tsquery:
+                            self.logger.warning(f"Empty tsquery generated from fallback query: '{fallback_query}'")
+                            return []
+                        
+                        # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                        sql_query = f"""
+                            SELECT
+                                sa.id,
+                                sa.statute_id,
+                                sa.article_no,
+                                sa.clause_no,
+                                sa.item_no,
+                                sa.article_title as heading,
+                                sa.article_content as text,
+                                s.law_name_kr as statute_name,
+                                s.law_abbrv as statute_abbrv,
+                                s.law_type as statute_type,
+                                s.domain as category,
+                                {rank_score_expr} as rank_score
+                            FROM statutes_articles sa
+                            JOIN statutes s ON sa.statute_id = s.id
+                            WHERE {where_clause}
+                            ORDER BY {order_clause}
+                            LIMIT %s
+                        """
+                        query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                        cursor.execute(sql_query, query_params)
                         
                         for row in cursor.fetchall():
                             if row['id'] not in seen_ids:
                                 seen_ids.add(row['id'])
                                 text_content = row['text'] if row['text'] else ""
-                                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                                if row['rank_score']:
-                                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                                else:
-                                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                                    relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                                # PostgreSQL ts_rank_cd 점수 정규화
+                                rank_score = row.get('rank_score', 0.0)
+                                relevance_score = self._normalize_relevance_score(
+                                    rank_score,
+                                    log_context="fallback_strategy=article_number_only"
+                                )
                                 
-                                fallback_results.append({
-                                    "id": f"statute_article_{row['id']}",
-                                    "type": "statute_article",
-                                    "source_type": "statute_article",
-                                    "content": text_content,
-                                    "text": text_content,
-                                    "source": row['statute_name'],
-                                    "statute_name": row['statute_name'],
-                                    "article_no": row['article_no'],
-                                    "clause_no": row['clause_no'],
-                                    "item_no": row['item_no'],
-                                    "metadata": {
-                                        "statute_id": row['statute_id'],
-                                        "article_no": row['article_no'],
-                                        "clause_no": row['clause_no'],
-                                        "item_no": row['item_no'],
-                                        "heading": row['heading'],
-                                        "statute_abbrv": row['statute_abbrv'],
-                                        "statute_type": row['statute_type'],
-                                        "category": row['category'],
-                                        "source_type": "statute_article"
-                                    },
-                                    "relevance_score": relevance_score,
-                                    "search_type": "keyword",
-                                    "fallback_strategy": "article_number_only"
-                                })
+                                result = self._build_statute_article_result(
+                                    row, text_content, relevance_score,
+                                    search_type="keyword", fallback_strategy="article_number_only"
+                                )
+                                if result:
+                                    fallback_results.append(result)
                     finally:
                         # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
                         try:
@@ -1588,6 +1905,73 @@ class LegalDataConnectorV2:
             
             if not fallback_results:
                 self.logger.warning(f"All fallback strategies failed for query: '{original_query}'")
+                # 최종 폴백: 단일 키워드로 검색 시도
+                if words:
+                    try:
+                        first_word = words[0]
+                        if len(first_word) >= 2:  # 최소 2자 이상
+                            self.logger.info(f"Trying final fallback: single keyword '{first_word}'")
+                            conn = self._get_connection()
+                            cursor = conn.cursor()
+                            
+                            # 단일 키워드로 간단한 검색 (PostgreSQL tsvector)
+                            simple_query = f"{first_word}"
+                            where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                simple_query,
+                                table_alias='sa',
+                                text_content_column='article_content'
+                            )
+                            
+                            # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                            query_sql = f"""
+                                SELECT sa.id, 
+                                       {rank_score_expr} as rank_score
+                                FROM statutes_articles sa
+                                WHERE {where_clause}
+                                ORDER BY {order_clause}
+                                LIMIT %s
+                            """
+                            cursor.execute(query_sql, (tsquery, tsquery, tsquery, limit))
+                            
+                            rows = cursor.fetchall()
+                            if rows:
+                                self.logger.info(f"✅ Final fallback found {len(rows)} results")
+                                # 결과를 직접 처리
+                                for row in rows:
+                                    doc_id = row[0] if isinstance(row, (tuple, list)) else row['id']
+                                    if doc_id not in seen_ids:
+                                        # statutes_articles에서 직접 조회
+                                        cursor2 = conn.cursor()
+                                        cursor2.execute("""
+                                            SELECT sa.id, sa.statute_id, sa.article_no, sa.article_content as text,
+                                                   s.law_name_kr as statute_name
+                                            FROM statutes_articles sa
+                                            JOIN statutes s ON sa.statute_id = s.id
+                                            WHERE sa.id = %s
+                                        """, (doc_id,))
+                                        doc_row = cursor2.fetchone()
+                                        cursor2.close()
+                                        
+                                        if doc_row:
+                                            doc = {
+                                                "id": f"statute_article_{doc_row['id']}",
+                                                "type": "statute_article",
+                                                "content": doc_row['text'],
+                                                "text": doc_row['text'],
+                                                "source": doc_row['statute_name'],
+                                                "statute_name": doc_row['statute_name'],
+                                                "article_no": doc_row['article_no'],
+                                                "relevance_score": 0.2,
+                                                "search_type": "keyword",
+                                                "fallback_strategy": "final_fallback"
+                                            }
+                                            fallback_results.append(doc)
+                                            seen_ids.add(doc_id)
+                            
+                            cursor.close()
+                            conn.close()
+                    except Exception as e:
+                        self.logger.debug(f"Final fallback failed: {e}")
             
             return fallback_results[:limit]
             
@@ -1621,50 +2005,60 @@ class LegalDataConnectorV2:
                     conn = self._get_connection()
                     cursor = conn.cursor()
                     try:
-                        # PostgreSQL FTS 검색으로 변환
-                        if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                            where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                                keyword_query, table_alias='pc', text_vector_column=None, text_content_column='section_content'
+                        # text_search_vector 컬럼 존재 여부 확인
+                        has_text_search_vector = self._check_column_exists('precedent_contents', 'text_search_vector')
+                        
+                        # PostgreSQL tsvector 쿼리
+                        if has_text_search_vector:
+                            where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                keyword_query, table_alias='pc', text_vector_column='text_search_vector',
+                                text_content_column=None, table_name='precedent_contents'
                             )
-                            
-                            if not tsquery:
-                                self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
-                                return []
-                            
-                            sql_query = f"""
-                                SELECT
-                                    pc.id,
-                                    pc.precedent_id,
-                                    pc.section_content as text,
-                                    p.case_number as doc_id,
-                                    p.court_name as court,
-                                    p.case_type_name as case_type,
-                                    p.case_name as casenames,
-                                    p.decision_date as announce_date,
-                                    ts_rank_cd(to_tsvector('simple', pc.section_content), plainto_tsquery('simple', %s)) as rank_score
-                                FROM precedent_contents pc
-                                JOIN precedents p ON pc.precedent_id = p.id
-                                WHERE {where_clause}
-                                ORDER BY {order_clause}
-                                LIMIT %s
-                            """
-                            # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                            cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
-                            
-                            for row in cursor.fetchall():
+                        else:
+                            where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                keyword_query, table_alias='pc', text_vector_column=None,
+                                text_content_column='section_content', table_name='precedent_contents'
+                            )
+                        
+                        if not tsquery:
+                            self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
+                            return []
+                        
+                        # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                        sql_query = f"""
+                            SELECT
+                                pc.id,
+                                pc.precedent_id,
+                                pc.section_content as text,
+                                p.case_number as doc_id,
+                                p.court_name as court,
+                                p.case_type_name as case_type,
+                                p.case_name as casenames,
+                                p.decision_date as announce_date,
+                                {rank_score_expr} as rank_score
+                            FROM precedent_contents pc
+                            JOIN precedents p ON pc.precedent_id = p.id
+                            WHERE {where_clause}
+                            ORDER BY {order_clause}
+                            LIMIT %s
+                        """
+                        query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                        cursor.execute(sql_query, query_params)
+                        
+                        for row in cursor.fetchall():
                                 if row['id'] not in seen_ids:
                                     seen_ids.add(row['id'])
                                 text_content = row['text'] if row['text'] else ""
-                                # relevance_score 계산 개선
-                                if row['rank_score']:
-                                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                                else:
-                                    relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                                # PostgreSQL ts_rank_cd 점수 정규화 (통일된 로직 사용)
+                                rank_score = row.get('rank_score', 0.0)
+                                relevance_score = self._normalize_relevance_score(
+                                    rank_score,
+                                    log_context="fallback_strategy=keyword_only"
+                                )
                                 
                                 fallback_results.append({
                                     "id": f"case_para_{row['id']}",
                                     "type": "precedent_content",
-                                    "source_type": "precedent_content",
                                     "content": text_content,
                                     "text": text_content,
                                     "source": f"{row['court']} {row['doc_id']}",
@@ -1676,7 +2070,7 @@ class LegalDataConnectorV2:
                                         "casenames": row.get('casenames'),
                                         "announce_date": row.get('announce_date'),
                                         "para_index": row.get('para_index'),
-                                        "source_type": "precedent_content",
+                                        "type": "precedent_content",
                                     },
                                     "relevance_score": relevance_score,
                                     "search_type": "keyword",
@@ -1713,39 +2107,63 @@ class LegalDataConnectorV2:
                             conn = self._get_connection()
                             cursor = conn.cursor()
                             try:
-                                cursor.execute("""
+                                # text_search_vector 컬럼 존재 여부 확인
+                                has_text_search_vector = self._check_column_exists('precedent_contents', 'text_search_vector')
+                                
+                                # ⚠️ 사용 중단: case_paragraphs 테이블은 더 이상 사용하지 않음
+                                # Open Law 스키마의 precedent_contents 테이블 사용
+                                # FTS5 대신 PostgreSQL FTS 사용
+                                if has_text_search_vector:
+                                    where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                        keyword_query, table_alias='pc', text_vector_column='text_search_vector',
+                                        text_content_column=None, table_name='precedent_contents'
+                                    )
+                                else:
+                                    where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                                        keyword_query, table_alias='pc', text_vector_column=None,
+                                        text_content_column='section_content', table_name='precedent_contents'
+                                    )
+                                
+                                if not tsquery:
+                                    self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
+                                    return []
+                                
+                                # PostgreSQL tsvector 쿼리 (PGroonga 지원)
+                                sql_query = f"""
                                     SELECT
-                                        cp.id,
-                                        cp.case_id,
-                                        cp.para_index,
-                                        cp.text,
-                                        c.doc_id,
-                                        c.court,
-                                        c.case_type,
-                                        c.casenames,
-                                        c.announce_date,
-                                        bm25(case_paragraphs_fts) as rank_score
-                                    FROM case_paragraphs_fts
-                                    JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
-                                    JOIN cases c ON cp.case_id = c.id
-                                    WHERE case_paragraphs_fts MATCH ?
-                                    ORDER BY rank_score
-                                    LIMIT ?
-                                """, (keyword_query, limit))
+                                        pc.id,
+                                        pc.precedent_id,
+                                        pc.section_type,
+                                        pc.section_content as text,
+                                        p.precedent_id as doc_id,
+                                        p.court_name as court,
+                                        p.case_type_name as case_type,
+                                        p.case_name as casenames,
+                                        p.decision_date as announce_date,
+                                        {rank_score_expr} as rank_score
+                                    FROM precedent_contents pc
+                                    JOIN precedents p ON pc.precedent_id = p.id
+                                    WHERE {where_clause}
+                                    ORDER BY {order_clause}
+                                    LIMIT %s
+                                """
+                                query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                                cursor.execute(sql_query, query_params)
                                 
                                 for row in cursor.fetchall():
                                     if row['id'] not in seen_ids:
                                         seen_ids.add(row['id'])
                                         text_content = row['text'] if row['text'] else ""
-                                        if row['rank_score']:
-                                            relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                                        else:
-                                            relevance_score = 0.15  # 전략 2는 더 낮은 점수
+                                        # PostgreSQL ts_rank_cd 점수 정규화 (통일된 로직 사용)
+                                        rank_score = row.get('rank_score', 0.0)
+                                        relevance_score = self._normalize_relevance_score(
+                                            rank_score,
+                                            log_context="fallback_strategy=keyword_from_original"
+                                        )
                                         
                                         fallback_results.append({
                                             "id": f"case_para_{row['id']}",
                                             "type": "precedent_content",
-                                            "source_type": "precedent_content",
                                             "content": text_content,
                                             "text": text_content,
                                             "source": f"{row['court']} {row['doc_id']}",
@@ -1757,7 +2175,7 @@ class LegalDataConnectorV2:
                                                 "casenames": row.get('casenames'),
                                                 "announce_date": row.get('announce_date'),
                                                 "para_index": row.get('para_index'),
-                                                "source_type": "precedent_content",
+                                                "type": "precedent_content",
                                             },
                                             "relevance_score": relevance_score,
                                             "search_type": "keyword",
@@ -1784,264 +2202,41 @@ class LegalDataConnectorV2:
             return []
     
     def _fallback_decision_search(self, original_query: str, safe_query: str, words: List[str], limit: int = 20) -> List[Dict[str, Any]]:
-        """폴백 검색 전략: 심결례 검색"""
-        fallback_results = []
-        seen_ids = set()
+        """
+        폴백 검색 전략: 심결례 검색
         
-        try:
-            # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
-            if words:
-                keywords = [w for w in words[:3] if len(w) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
-                if keywords:
-                    keyword_query = " OR ".join(keywords)
-                    self.logger.info(f"Fallback decision search: Using keywords: '{keyword_query}'")
-                    
-                    conn = self._get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        # PostgreSQL FTS 검색으로 변환
-                        if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                            where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                                keyword_query, table_alias='dp', text_vector_column=None, text_content_column='text'
-                            )
-                            
-                            if not tsquery:
-                                self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
-                                return []
-                            
-                            sql_query = f"""
-                                SELECT
-                                    dp.id,
-                                    dp.decision_id,
-                                    dp.para_index,
-                                    dp.text,
-                                    d.org,
-                                    d.doc_id,
-                                    d.decision_date,
-                                    d.result,
-                                    ts_rank_cd(to_tsvector('simple', dp.text), plainto_tsquery('korean', %s)) as rank_score
-                                FROM decision_paragraphs dp
-                                JOIN decisions d ON dp.decision_id = d.id
-                                WHERE {where_clause}
-                                ORDER BY {order_clause}
-                                LIMIT %s
-                            """
-                            # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                            cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
-                        else:
-                            # SQLite FTS5 (레거시 지원)
-                            cursor.execute("""
-                                SELECT
-                                    dp.id,
-                                    dp.decision_id,
-                                    dp.para_index,
-                                    dp.text,
-                                    d.org,
-                                    d.doc_id,
-                                    d.decision_date,
-                                    d.result,
-                                    bm25(decision_paragraphs_fts) as rank_score
-                                FROM decision_paragraphs_fts
-                                JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
-                                JOIN decisions d ON dp.decision_id = d.id
-                                WHERE decision_paragraphs_fts MATCH ?
-                                ORDER BY rank_score
-                                LIMIT ?
-                            """, (keyword_query, limit))
-                        
-                        for row in cursor.fetchall():
-                            if row['id'] not in seen_ids:
-                                seen_ids.add(row['id'])
-                                text_content = row['text'] if row['text'] else ""
-                                # relevance_score 계산 개선
-                                if row['rank_score']:
-                                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                                else:
-                                    relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                                
-                                fallback_results.append({
-                                    "id": f"decision_para_{row['id']}",
-                                    "type": "decision",
-                                    "content": text_content,
-                                    "text": text_content,
-                                    "source": f"{row['org']} {row['doc_id']}",
-                                    "metadata": {
-                                        "decision_id": row['decision_id'],
-                                        "org": row['org'],
-                                        "doc_id": row['doc_id'],
-                                        "decision_date": row['decision_date'],
-                                        "result": row['result'],
-                                        "para_index": row['para_index'],
-                                    },
-                                    "relevance_score": relevance_score,
-                                    "search_type": "keyword",
-                                    "fallback_strategy": "keyword_only"
-                                })
-                    finally:
-                        # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                        try:
-                            cursor.close()
-                        except Exception:
-                            pass
-                        try:
-                            conn.close()  # 연결 풀에 반환
-                        except Exception:
-                            pass
-                    
-                    if fallback_results:
-                        self.logger.info(f"Fallback decision search found {len(fallback_results)} results")
-                        return fallback_results[:limit]
-            
-            return fallback_results[:limit]
-            
-        except Exception as e:
-            self.logger.error(f"Error in fallback decision search: {e}", exc_info=True)
-            return []
+        ⚠️ 사용 중단: decision_paragraphs 테이블은 더 이상 사용하지 않음
+        이 메서드는 현재 비활성화되어 있으며, 향후 제거 예정입니다.
+        """
+        # ⚠️ 사용 중단 테이블(decision_paragraphs) 참조로 인해 비활성화
+        self.logger.warning("_fallback_decision_search is disabled: decision_paragraphs table is deprecated")
+        return []
     
     def _fallback_interpretation_search(self, original_query: str, safe_query: str, words: List[str], limit: int = 20) -> List[Dict[str, Any]]:
-        """폴백 검색 전략: 유권해석 검색"""
-        fallback_results = []
-        seen_ids = set()
+        """
+        폴백 검색 전략: 유권해석 검색
         
-        try:
-            # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
-            if words:
-                keywords = [w.strip() for w in words[:3] if w.strip() and len(w.strip()) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w.strip()))]
-                if keywords:
-                    # 빈 문자열 제거 및 중복 제거
-                    keywords = list(dict.fromkeys(keywords))  # 순서 유지하면서 중복 제거
-                    keyword_query = " OR ".join(keywords)
-                    # "OR OR" 오류 방지
-                    keyword_query = keyword_query.replace(" OR OR ", " OR ").strip()
-                    if keyword_query and not keyword_query.startswith("OR") and not keyword_query.endswith("OR") and keyword_query != "OR":
-                        self.logger.info(f"Fallback interpretation search: Using keywords: '{keyword_query}'")
-                        
-                        conn = self._get_connection()
-                        cursor = conn.cursor()
-                        
-                        try:
-                            # PostgreSQL FTS 검색으로 변환
-                            if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                                where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                                    keyword_query, table_alias='ip', text_vector_column=None, text_content_column='text'
-                                )
-                                
-                                if not tsquery:
-                                    self.logger.warning(f"Empty tsquery generated from keyword query: '{keyword_query}'")
-                                    return []
-                                
-                                sql_query = f"""
-                                    SELECT
-                                        ip.id,
-                                        ip.interpretation_id,
-                                        ip.para_index,
-                                        ip.text,
-                                        i.org,
-                                        i.doc_id,
-                                        i.title,
-                                        i.response_date,
-                                        ts_rank_cd(to_tsvector('simple', ip.text), plainto_tsquery('simple', %s)) as rank_score
-                                    FROM interpretation_paragraphs ip
-                                    JOIN interpretations i ON ip.interpretation_id = i.id
-                                    WHERE {where_clause}
-                                    ORDER BY {order_clause}
-                                    LIMIT %s
-                                """
-                                # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                                cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
-                            else:
-                                # SQLite FTS5 (레거시 지원)
-                                cursor.execute("""
-                                    SELECT
-                                        ip.id,
-                                        ip.interpretation_id,
-                                        ip.para_index,
-                                        ip.text,
-                                        i.org,
-                                        i.doc_id,
-                                        i.title,
-                                        i.response_date,
-                                        bm25(interpretation_paragraphs_fts) as rank_score
-                                    FROM interpretation_paragraphs_fts
-                                    JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
-                                    JOIN interpretations i ON ip.interpretation_id = i.id
-                                    WHERE interpretation_paragraphs_fts MATCH ?
-                                    ORDER BY rank_score
-                                    LIMIT ?
-                                """, (keyword_query, limit))
-                        except Exception as e:
-                            self.logger.warning(f"FTS query error in fallback interpretation search: {e}, query: '{keyword_query}'")
-                            if not self._connection_pool:
-                                try:
-                                    conn.close()
-                                except Exception:
-                                    pass
-                            keywords = []
-                    else:
-                        self.logger.warning(f"Fallback interpretation search: Invalid keyword query: '{keyword_query}', skipping")
-                        keywords = []
-                    
-                    if keywords:  # keywords가 있을 때만 fetchall 실행
-                        try:
-                            for row in cursor.fetchall():
-                                if row['id'] not in seen_ids:
-                                    seen_ids.add(row['id'])
-                                    text_content = row['text'] if row['text'] else ""
-                                    # relevance_score 계산 개선
-                                    if row['rank_score']:
-                                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                                    else:
-                                        relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                                    
-                                    fallback_results.append({
-                                        "id": f"interpretation_para_{row['id']}",
-                                        "type": "interpretation",
-                                        "content": text_content,
-                                        "text": text_content,
-                                        "source": f"{row['org']} {row['title']}",
-                                        "metadata": {
-                                            "interpretation_id": row['interpretation_id'],
-                                            "org": row['org'],
-                                            "doc_id": row['doc_id'],
-                                            "title": row['title'],
-                                            "response_date": row['response_date'],
-                                            "para_index": row['para_index'],
-                                        },
-                                        "relevance_score": relevance_score,
-                                        "search_type": "keyword",
-                                        "fallback_strategy": "keyword_only"
-                                    })
-                        finally:
-                            # 연결 풀링 사용 시 close() 호출하지 않음
-                            if not self._connection_pool:
-                                try:
-                                    conn.close()
-                                except Exception:
-                                    pass
-                        
-                        if fallback_results:
-                            self.logger.info(f"Fallback interpretation search found {len(fallback_results)} results")
-                            return fallback_results[:limit]
-            
-            return fallback_results[:limit]
-            
-        except Exception as e:
-            self.logger.error(f"Error in fallback interpretation search: {e}", exc_info=True)
-            return []
+        ⚠️ 사용 중단: interpretation_paragraphs 테이블은 더 이상 사용하지 않음
+        이 메서드는 현재 비활성화되어 있으며, 향후 제거 예정입니다.
+        """
+        # ⚠️ 사용 중단 테이블(interpretation_paragraphs) 참조로 인해 비활성화
+        self.logger.warning("_fallback_interpretation_search is disabled: interpretation_paragraphs table is deprecated")
+        return []
 
     def search_cases_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 판례 (최적화됨)"""
+        """PostgreSQL tsvector 키워드 검색: 판례"""
         try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
+            # tsquery 최적화 및 안전화
+            optimized_query = self._optimize_tsquery(query)
+            safe_query = self._sanitize_tsquery(optimized_query)
             if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}'")
+                self.logger.warning(f"Empty or invalid tsquery: '{query}'")
                 return []
 
             # 실행 계획 분석 (디버그 모드)
+            # ⚠️ 사용 중단: case_paragraphs → precedent_contents로 변경
             if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "case_paragraphs_fts")
+                plan_info = self._analyze_query_plan(query, "precedent_contents")
                 if plan_info:
                     self.logger.debug(f"Query plan analysis: {plan_info}")
 
@@ -2049,43 +2244,39 @@ class LegalDataConnectorV2:
             cursor = conn.cursor()
             
             try:
-                # PostgreSQL FTS 검색으로 변환
-                if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                    # PostgreSQL FTS 사용
-                    where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                        safe_query, table_alias='pc', text_vector_column=None, text_content_column='section_content'
-                    )
-                    
-                    if not tsquery:
-                        self.logger.warning(f"Empty tsquery generated from query: '{safe_query}'")
-                        return []
-                    
-                    # PostgreSQL FTS 쿼리
-                    sql_query = f"""
-                        SELECT
-                            pc.id,
-                            pc.precedent_id,
-                            pc.section_content as text,
-                            p.case_number as doc_id,
-                            p.court_name as court,
-                            p.case_type_name as case_type,
-                            p.case_name as casenames,
-                            p.decision_date as announce_date,
-                            ts_rank_cd(to_tsvector('simple', pc.section_content), plainto_tsquery('simple', %s)) as rank_score
-                        FROM precedent_contents pc
-                        JOIN precedents p ON pc.precedent_id = p.id
-                        WHERE {where_clause}
-                        ORDER BY {order_clause}
-                        LIMIT %s
-                    """
-                    # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
-                else:
-                    # 🔥 레거시: case_paragraphs 테이블은 더 이상 사용하지 않음
-                    # precedent_contents를 사용하도록 변경 필요
-                    # SQLite FTS5는 레거시이므로 주석 처리
-                    self.logger.warning("⚠️ case_paragraphs FTS5 검색은 레거시입니다. precedent_contents를 사용하세요.")
-                    return []  # 빈 결과 반환
+                # PostgreSQL tsvector 쿼리
+                # 주의: precedent_contents (open_law 스키마)는 text_search_vector 컬럼이 없어서 text_content_column 사용
+                where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
+                    safe_query, table_alias='pc', text_vector_column=None, text_content_column='section_content'
+                )
+                
+                if not tsquery:
+                    self.logger.warning(f"Empty tsquery generated from query: '{safe_query}'")
+                    return []
+                
+                # PostgreSQL tsvector 쿼리
+                # precedent_contents는 text_search_vector가 없으므로 to_tsvector 사용
+                # rank_score_expr 사용 (PGroonga 또는 PostgreSQL 기본)
+                sql_query = f"""
+                    SELECT
+                        pc.id,
+                        pc.precedent_id,
+                        pc.section_content as text,
+                        p.case_number as doc_id,
+                        p.court_name as court,
+                        p.case_type_name as case_type,
+                        p.case_name as casenames,
+                        p.decision_date as announce_date,
+                        {rank_score_expr} as rank_score
+                    FROM precedent_contents pc
+                    JOIN precedents p ON pc.precedent_id = p.id
+                    WHERE {where_clause}
+                    ORDER BY {order_clause}
+                    LIMIT %s
+                """
+                # 플레이스홀더 개수 자동 결정
+                query_params = self._get_query_params(tsquery, limit, rank_score_expr=rank_score_expr)
+                cursor.execute(sql_query, query_params)
 
                 # 법령명과 조문번호 추출 (점수 가중치 계산용)
                 import re
@@ -2099,18 +2290,12 @@ class LegalDataConnectorV2:
                 results = []
                 for row in cursor.fetchall():
                     text_content = row['text'] if row['text'] else ""
-                    # relevance_score 계산 개선
-                    if row.get('rank_score') is not None:
-                        rank_score = row['rank_score']
-                        if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                            # PostgreSQL ts_rank는 0.0 ~ 1.0 범위 (일반적으로 작은 값)
-                            relevance_score = max(0.0, min(1.0, rank_score * 10.0))
-                        else:
-                            # SQLite BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                            relevance_score = max(0.0, min(1.0, abs(rank_score) / 100.0))
-                    else:
-                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                    # PostgreSQL ts_rank_cd 점수 정규화
+                    rank_score = row.get('rank_score', 0.0)
+                    relevance_score = self._normalize_relevance_score(
+                        rank_score,
+                        log_context=f"query='{query[:50]}', type=precedent_content_tsvector"
+                    )
                     
                     # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
                     if query_law_name and query_article_no:
@@ -2125,25 +2310,12 @@ class LegalDataConnectorV2:
                             relevance_score = max(0.7, min(1.0, boosted_score))
                             self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
                     
-                    results.append({
-                        "id": f"case_para_{row['id']}",
-                        "type": "precedent_content",
-                        "source_type": "precedent_content",
-                        "content": text_content,
-                        "text": text_content,
-                        "source": f"{row['court']} {row['doc_id']}",
-                        "metadata": {
-                            "precedent_id": row.get('precedent_id'),  # 🔥 수정: case_id -> precedent_id
-                            "doc_id": row.get('doc_id'),
-                            "court": row.get('court'),
-                            "case_type": row.get('case_type'),
-                            "casenames": row.get('casenames'),
-                            "announce_date": row.get('announce_date'),
-                            "source_type": "precedent_content",
-                        },
-                        "relevance_score": relevance_score,
-                        "search_type": "keyword"
-                    })
+                    result = self._build_precedent_result(
+                        row, text_content, relevance_score,
+                        search_type="keyword"
+                    )
+                    if result:
+                        results.append(result)
             finally:
                 # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
                 try:
@@ -2177,336 +2349,41 @@ class LegalDataConnectorV2:
                 return []
 
     def search_decisions_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 심결례 (최적화됨)"""
-        try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
-            if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}'")
-                return []
-
-            # 실행 계획 분석 (디버그 모드)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "decision_paragraphs_fts")
-                if plan_info:
-                    self.logger.debug(f"Query plan analysis: {plan_info}")
-
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            try:
-                # PostgreSQL FTS 검색으로 변환
-                if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                    # PostgreSQL FTS 사용
-                    where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                        safe_query, table_alias='dp', text_vector_column=None, text_content_column='text'
-                    )
-                    
-                    if not tsquery:
-                        self.logger.warning(f"Empty tsquery generated from query: '{safe_query}'")
-                        return []
-                    
-                    # PostgreSQL FTS 쿼리
-                    sql_query = f"""
-                        SELECT
-                            dp.id,
-                            dp.decision_id,
-                            dp.para_index,
-                            dp.text,
-                            d.org,
-                            d.doc_id,
-                            d.decision_date,
-                            d.result,
-                            ts_rank_cd(dp.text_search_vector, plainto_tsquery('simple', %s)) as rank_score
-                        FROM decision_paragraphs dp
-                        JOIN decisions d ON dp.decision_id = d.id
-                        WHERE {where_clause}
-                        ORDER BY {order_clause}
-                        LIMIT %s
-                    """
-                    # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
-                else:
-                    # SQLite FTS5 (레거시 지원)
-                    cursor.execute("""
-                        SELECT
-                            dp.id,
-                            dp.decision_id,
-                            dp.para_index,
-                            dp.text,
-                            d.org,
-                            d.doc_id,
-                            d.decision_date,
-                            d.result,
-                            bm25(decision_paragraphs_fts) as rank_score
-                        FROM decision_paragraphs_fts
-                        JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
-                        JOIN decisions d ON dp.decision_id = d.id
-                        WHERE decision_paragraphs_fts MATCH ?
-                        ORDER BY rank_score
-                        LIMIT ?
-                    """, (safe_query, limit))
-
-                # 법령명과 조문번호 추출 (점수 가중치 계산용)
-                import re
-                law_pattern = re.compile(r'([가-힣]+법)')
-                article_pattern = re.compile(r'제\s*(\d+)\s*조')
-                law_match = law_pattern.search(query)
-                article_match = article_pattern.search(query)
-                query_law_name = law_match.group(1) if law_match else None
-                query_article_no = article_match.group(1) if article_match else None
-                
-                results = []
-                for row in cursor.fetchall():
-                    text_content = row['text'] if row['text'] else ""
-                    # relevance_score 계산 개선
-                    if row.get('rank_score') is not None:
-                        rank_score = row['rank_score']
-                        if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                            # PostgreSQL ts_rank는 0.0 ~ 1.0 범위 (일반적으로 작은 값)
-                            relevance_score = max(0.0, min(1.0, rank_score * 10.0))
-                        else:
-                            # SQLite BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                            relevance_score = max(0.0, min(1.0, abs(rank_score) / 100.0))
-                    else:
-                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
-                    
-                    # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
-                    if query_law_name and query_article_no:
-                        # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
-                        law_in_text = query_law_name in text_content
-                        article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
-                        
-                        if law_in_text and article_in_text:
-                            # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
-                            # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
-                            boosted_score = relevance_score * 3.0
-                            relevance_score = max(0.7, min(1.0, boosted_score))
-                            self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
-                    
-                    results.append({
-                        "id": f"decision_para_{row['id']}",
-                        "type": "decision",
-                        "content": text_content,
-                        "text": text_content,
-                        "source": f"{row['org']} {row['doc_id']}",
-                        "metadata": {
-                            "decision_id": row['decision_id'],
-                            "org": row['org'],
-                            "doc_id": row['doc_id'],
-                            "decision_date": row['decision_date'],
-                            "result": row['result'],
-                            "para_index": row['para_index'],
-                        },
-                        "relevance_score": relevance_score,
-                        "search_type": "keyword"
-                    })
-            finally:
-                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-                try:
-                    conn.close()  # 연결 풀에 반환
-                except Exception:
-                    pass
-            
-            self.logger.info(f"FTS search found {len(results)} decision paragraphs for query: {query}")
-            
-            # 결과가 없으면 폴백 검색 시도
-            if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
-                import re
-                words = safe_query.split() if safe_query else []
-                results = self._fallback_decision_search(query, safe_query, words, limit)
-            
-            return results
-
-        except Exception as e:
-            self.logger.error(f"Error in FTS decision search: {e}", exc_info=True)
-            # 에러 발생 시에도 폴백 시도
-            try:
-                import re
-                words = safe_query.split() if safe_query else []
-                return self._fallback_decision_search(query, safe_query, words, limit)
-            except Exception:
-                return []
+        """
+        PostgreSQL tsvector 키워드 검색: 심결례
+        
+        ⚠️ 사용 중단: decision_paragraphs 테이블은 더 이상 사용하지 않음
+        이 메서드는 현재 비활성화되어 있으며, 향후 제거 예정입니다.
+        """
+        # ⚠️ 사용 중단 테이블(decision_paragraphs) 참조로 인해 비활성화
+        self.logger.warning("search_decisions_fts is disabled: decision_paragraphs table is deprecated")
+        return []
 
     def search_interpretations_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 유권해석 (최적화됨)"""
-        try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
-            if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}'")
-                return []
-
-            # 실행 계획 분석 (디버그 모드)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "interpretation_paragraphs_fts")
-                if plan_info:
-                    self.logger.debug(f"Query plan analysis: {plan_info}")
-
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            try:
-                # PostgreSQL FTS 검색으로 변환
-                if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                    # PostgreSQL FTS 사용
-                    where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                        safe_query, table_alias='ip', text_vector_column='text_search_vector'
-                    )
-                    
-                    if not tsquery:
-                        self.logger.warning(f"Empty tsquery generated from query: '{safe_query}'")
-                        return []
-                    
-                    # PostgreSQL FTS 쿼리
-                    sql_query = f"""
-                        SELECT
-                            ip.id,
-                            ip.interpretation_id,
-                            ip.para_index,
-                            ip.text,
-                            i.org,
-                            i.doc_id,
-                            i.title,
-                            i.response_date,
-                            ts_rank_cd(ip.text_search_vector, plainto_tsquery('simple', %s)) as rank_score
-                        FROM interpretation_paragraphs ip
-                        JOIN interpretations i ON ip.interpretation_id = i.id
-                        WHERE {where_clause}
-                        ORDER BY {order_clause}
-                        LIMIT %s
-                    """
-                    # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
-                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
-                else:
-                    # SQLite FTS5 (레거시 지원)
-                    cursor.execute("""
-                        SELECT
-                            ip.id,
-                            ip.interpretation_id,
-                            ip.para_index,
-                            ip.text,
-                            i.org,
-                            i.doc_id,
-                            i.title,
-                            i.response_date,
-                            bm25(interpretation_paragraphs_fts) as rank_score
-                        FROM interpretation_paragraphs_fts
-                        JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
-                        JOIN interpretations i ON ip.interpretation_id = i.id
-                        WHERE interpretation_paragraphs_fts MATCH ?
-                        ORDER BY rank_score
-                        LIMIT ?
-                    """, (safe_query, limit))
-
-                # 법령명과 조문번호 추출 (점수 가중치 계산용)
-                import re
-                law_pattern = re.compile(r'([가-힣]+법)')
-                article_pattern = re.compile(r'제\s*(\d+)\s*조')
-                law_match = law_pattern.search(query)
-                article_match = article_pattern.search(query)
-                query_law_name = law_match.group(1) if law_match else None
-                query_article_no = article_match.group(1) if article_match else None
-                
-                results = []
-                for row in cursor.fetchall():
-                    text_content = row['text'] if row['text'] else ""
-                    # relevance_score 계산 개선
-                    if row.get('rank_score') is not None:
-                        rank_score = row['rank_score']
-                        if self._db_adapter and self._db_adapter.db_type == 'postgresql':
-                            # PostgreSQL ts_rank는 0.0 ~ 1.0 범위 (일반적으로 작은 값)
-                            relevance_score = max(0.0, min(1.0, rank_score * 10.0))
-                        else:
-                            # SQLite BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                            relevance_score = max(0.0, min(1.0, abs(rank_score) / 100.0))
-                    else:
-                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
-                    
-                    # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
-                    if query_law_name and query_article_no:
-                        # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
-                        law_in_text = query_law_name in text_content
-                        article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
-                        
-                        if law_in_text and article_in_text:
-                            # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
-                            # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
-                            boosted_score = relevance_score * 3.0
-                            relevance_score = max(0.7, min(1.0, boosted_score))
-                            self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
-                    
-                    results.append({
-                        "id": f"interpretation_para_{row['id']}",
-                        "type": "interpretation",
-                        "content": text_content,
-                        "text": text_content,
-                        "source": f"{row['org']} {row['title']}",
-                        "metadata": {
-                            "interpretation_id": row['interpretation_id'],
-                            "org": row['org'],
-                            "doc_id": row['doc_id'],
-                            "title": row['title'],
-                            "response_date": row['response_date'],
-                            "para_index": row['para_index'],
-                        },
-                        "relevance_score": relevance_score,
-                        "search_type": "keyword"
-                    })
-            finally:
-                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-                try:
-                    conn.close()  # 연결 풀에 반환
-                except Exception:
-                    pass
-            self.logger.info(f"FTS search found {len(results)} interpretation paragraphs for query: {query}")
-            
-            # 결과가 없으면 폴백 검색 시도
-            if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
-                import re
-                words = safe_query.split() if safe_query else []
-                results = self._fallback_interpretation_search(query, safe_query, words, limit)
-            
-            return results
-
-        except Exception as e:
-            self.logger.error(f"Error in FTS interpretation search: {e}", exc_info=True)
-            # 에러 발생 시에도 폴백 시도
-            try:
-                import re
-                words = safe_query.split() if safe_query else []
-                return self._fallback_interpretation_search(query, safe_query, words, limit)
-            except Exception:
-                return []
+        """
+        PostgreSQL tsvector 키워드 검색: 유권해석
+        
+        ⚠️ 사용 중단: interpretation_paragraphs 테이블은 더 이상 사용하지 않음
+        이 메서드는 현재 비활성화되어 있으며, 향후 제거 예정입니다.
+        """
+        # ⚠️ 사용 중단 테이블(interpretation_paragraphs) 참조로 인해 비활성화
+        self.logger.warning("search_interpretations_fts is disabled: interpretation_paragraphs table is deprecated")
+        return []
 
     def search_documents(self, query: str, category: Optional[str] = None, limit: int = 10, force_fts: bool = False) -> List[Dict[str, Any]]:
         """
-        통합 검색: 라우팅에 따라 FTS5 또는 벡터 검색 (병렬 처리)
+        통합 검색: 라우팅에 따라 tsvector 또는 벡터 검색 (병렬 처리)
 
         Args:
             query: 검색 쿼리
             category: 카테고리 (하위 호환성을 위해 유지, 현재 사용하지 않음)
             limit: 최대 결과 수
-            force_fts: True이면 라우팅과 관계없이 강제로 FTS5 검색 수행
+            force_fts: True이면 라우팅과 관계없이 강제로 tsvector 검색 수행
 
         Returns:
             검색 결과 리스트
         """
-        # force_fts가 True이면 라우팅 무시하고 강제로 FTS5 검색
+        # force_fts가 True이면 라우팅 무시하고 강제로 tsvector 검색
         if force_fts:
             return self._search_documents_parallel(query, limit=limit)
         
@@ -2514,7 +2391,7 @@ class LegalDataConnectorV2:
         route = route_query(query)
         
         if route == "text2sql":
-            # FTS5 키워드 검색 (병렬 처리)
+            # tsvector 키워드 검색 (병렬 처리)
             return self._search_documents_parallel(query, limit=limit)
         else:
             # 벡터 검색은 별도 SemanticSearchEngineV2에서 처리
@@ -2524,7 +2401,7 @@ class LegalDataConnectorV2:
     
     def _search_documents_parallel(self, query: str, limit: int = 10, timeout: float = 10.0) -> List[Dict[str, Any]]:
         """
-        병렬 FTS5 검색 실행
+        병렬 tsvector 검색 실행
         
         Args:
             query: 검색 쿼리

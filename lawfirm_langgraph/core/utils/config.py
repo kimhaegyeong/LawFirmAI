@@ -6,6 +6,7 @@ Configuration Management
 
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,11 +29,9 @@ try:
         
         # 프로젝트 루트 .env 파일 명시적으로 로드
         ensure_env_loaded(_project_root)
-        loaded_files = load_all_env_files(_project_root)
-        if loaded_files:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug(f"✅ Config: 환경 변수 로드 완료 ({len(loaded_files)}개 .env 파일)")
+        # load_all_env_files는 ensure_env_loaded 내부에서 호출되므로 중복 호출 방지
+        # loaded_files = load_all_env_files(_project_root)  # 중복 호출 제거
+        # 로드 완료 로그는 ensure_env_loaded 내부에서 출력되므로 별도 로그 불필요
     except ImportError:
         # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
         try:
@@ -367,3 +366,30 @@ class Config(BaseSettings):
                 level=log_level,
                 format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
+
+
+# 전역 설정 인스턴스 (지연 초기화)
+_config_instance: Optional[Config] = None
+_config_lock = threading.Lock()
+
+
+def get_config() -> Config:
+    """설정 인스턴스 가져오기 (지연 초기화 싱글톤)
+    
+    ⚠️ DEPRECATED: 이 함수는 레거시입니다.
+    새로운 코드에서는 `lawfirm_langgraph.config.app_config.get_config()`를 사용하세요.
+    
+    Returns:
+        Config: 설정 인스턴스 (싱글톤)
+    
+    Note:
+        첫 호출 시에만 초기화되며, 이후 호출은 캐시된 인스턴스를 반환합니다.
+        이는 설정 로드 시간을 크게 단축시킵니다.
+    """
+    global _config_instance
+    if _config_instance is None:
+        with _config_lock:
+            # Double-check locking pattern
+            if _config_instance is None:
+                _config_instance = Config()
+    return _config_instance

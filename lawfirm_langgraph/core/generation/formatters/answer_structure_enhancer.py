@@ -134,57 +134,22 @@ else:
 class AnswerStructureEnhancer:
     """답변 구조화 향상 시스템"""
 
-    def __init__(self, llm=None, max_few_shot_examples: int = 2,
-                 enable_few_shot: bool = True, enable_cot: bool = True):
+    def __init__(self, llm=None, enable_cot: bool = True):
         """
         초기화
 
         Args:
             llm: LangChain LLM 인스턴스 (없으면 자동 초기화)
                 - Google Gemini 지원
-            max_few_shot_examples: Few-Shot 예시 최대 개수 (기본값: 2)
-                - 프롬프트 길이 제한에 따라 조정 가능
-            enable_few_shot: Few-Shot 예시 사용 여부 (기본값: True)
-                - False로 설정 시 예시 섹션 제외
             enable_cot: Chain-of-Thought 사용 여부 (기본값: True)
                 - False로 설정 시 간단한 Step 1,2,3 가이드 사용
-
-        Raises:
-            FileNotFoundError: Few-Shot 예시 파일을 찾을 수 없는 경우 (경고만 발생)
-
-        Note:
-            Few-Shot 예시는 data/training/few_shot_examples.json 파일에서 로드됩니다.
-            캐싱이 적용되어 여러 번 호출 시 파일 I/O가 발생하지 않습니다.
         """
         # 설정 저장
-        self.max_few_shot_examples = max_few_shot_examples
-        self.enable_few_shot = enable_few_shot
         self.enable_cot = enable_cot
 
-        try:
-            from core.generation.formatters.enhancement.loaders import (
-                StructureTemplateLoader,
-                QualityIndicatorLoader,
-                FewShotExampleLoader
-            )
-            
-            template_loader = StructureTemplateLoader()
-            quality_loader = QualityIndicatorLoader()
-            few_shot_loader = FewShotExampleLoader()
-            
-            self.structure_templates = template_loader.load()
-            self.quality_indicators = quality_loader.load()
-            self.few_shot_examples = few_shot_loader.load() if enable_few_shot else {}
-            self._few_shot_loader = few_shot_loader  # 나중에 사용하기 위해 저장
-            self._few_shot_examples_cache = None  # 호환성 유지
-        except ImportError:
-            # 폴백: 기존 메서드 사용
-            logger.debug("New loaders not available, using legacy methods")
-            self.structure_templates = self._load_structure_templates()
-            self.quality_indicators = self._load_quality_indicators()
-            self._few_shot_examples_cache = None
-            self.few_shot_examples = self._load_few_shot_examples() if enable_few_shot else {}
-            self._few_shot_loader = None
+        # 기존 메서드 사용
+        self.structure_templates = self._load_structure_templates()
+        self.quality_indicators = self._load_quality_indicators()
 
         # 법적 근거 강화 시스템 초기화 (지연 초기화)
         self._citation_enhancer = None
@@ -644,103 +609,6 @@ class AnswerStructureEnhancer:
             }
         }
 
-    def _load_few_shot_examples(self) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Few-Shot 예시 데이터 로드 (캐싱 적용)
-
-        Returns:
-            Dict[str, List[Dict[str, Any]]]: 질문 유형별 Few-Shot 예시 데이터
-        """
-        # 캐시 확인
-        if hasattr(self, '_few_shot_examples_cache') and self._few_shot_examples_cache is not None:
-            return self._few_shot_examples_cache
-
-        import json
-        import os
-
-        # 파일 경로 설정
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        examples_file = os.path.join(
-            current_dir,
-            '..',
-            '..',
-            'data',
-            'training',
-            'few_shot_examples.json'
-        )
-
-        try:
-            if os.path.exists(examples_file):
-                with open(examples_file, 'r', encoding='utf-8') as f:
-                    examples = json.load(f)
-                    # 캐시에 저장
-                    self._few_shot_examples_cache = examples
-                    safe_log_debug(logger, f"Few-shot examples loaded and cached: {len(examples)} question types")
-                    return examples
-            else:
-                # 파일이 없으면 빈 딕셔너리 반환
-                safe_log_warning(logger, f"Few-shot examples file not found: {examples_file}")
-                return {}
-        except Exception as e:
-            # 에러 발생 시 빈 딕셔너리 반환
-            safe_log_warning(logger, f"Failed to load few-shot examples: {e}")
-            return {}
-
-    def _get_few_shot_examples(self, question_type: QuestionType, question: str = "") -> List[Dict[str, Any]]:
-        """
-        질문 유형별 Few-Shot 예시 반환 (리팩토링: 새로운 로더 사용)
-        
-        Args:
-            question_type: 질문 유형 (QuestionType enum)
-            question: 질문 텍스트 (유사도 계산용, 선택적)
-            
-        Returns:
-            List[Dict[str, Any]]: 질문 유형별 Few-Shot 예시 리스트
-        """
-        # 새로운 로더 사용 시도
-        if hasattr(self, '_few_shot_loader') and self._few_shot_loader is not None:
-            try:
-                max_examples = getattr(self, 'max_few_shot_examples', 2)
-                return self._few_shot_loader.get_examples(question_type, question, max_examples)
-            except Exception as e:
-                logger.warning(f"Failed to get examples from new loader: {e}, falling back to legacy method")
-        
-        # 폴백: 기존 메서드 사용
-        if not hasattr(self, 'few_shot_examples') or not self.few_shot_examples:
-            return []
-
-        # 질문 유형을 문자열로 변환
-        question_type_str = question_type.value if isinstance(question_type, QuestionType) else str(question_type)
-
-        # 해당 질문 유형의 예시 가져오기
-        examples = self.few_shot_examples.get(question_type_str, [])
-
-        # 검증 통과한 예시만 필터링 (품질 메트릭 포함)
-        valid_examples = []
-        for ex in examples:
-            if hasattr(self, '_validate_few_shot_example') and self._validate_few_shot_example(ex):
-                valid_examples.append(ex)
-            elif not hasattr(self, '_validate_few_shot_example'):
-                # 검증 메서드가 없으면 기본 검증만 수행
-                if all(key in ex for key in ['question', 'original_answer', 'enhanced_answer', 'improvements']):
-                    valid_examples.append(ex)
-
-        # 검증 실패한 예시가 있으면 경고
-        if len(valid_examples) < len(examples):
-            invalid_count = len(examples) - len(valid_examples)
-            safe_log_warning(logger, f"{question_type_str}: {invalid_count}개 예시가 검증 실패했습니다.")
-
-        # 질문이 제공되고 예시가 여러 개인 경우 유사도 기반 정렬 시도
-        if question and len(valid_examples) > 1:
-            try:
-                if hasattr(self, '_sort_examples_by_similarity'):
-                    valid_examples = self._sort_examples_by_similarity(valid_examples, question)
-            except Exception as e:
-                safe_log_debug(logger, f"Failed to sort examples by similarity: {e}")
-
-        # 설정된 최대 개수까지만 반환 (프롬프트 길이 제한)
-        max_examples = getattr(self, 'max_few_shot_examples', 2)
-        return valid_examples[:max_examples]
 
     def _load_quality_indicators(self) -> Dict[str, List[str]]:
         """품질 지표 로드"""
@@ -1003,23 +871,6 @@ class AnswerStructureEnhancer:
 
         keywords_preview = ", ".join(list(answer_keywords)[:10]) if answer_keywords else "없음"
 
-        # Few-Shot 예시 섹션 생성 (Phase 1.1: 선택적 포함 - term_explanation일 때만)
-        few_shot_examples_section = ""
-        if self.enable_few_shot and question_type == QuestionType.TERM_EXPLANATION:
-            few_shot_examples = self._get_few_shot_examples(question_type, question)
-            # Phase 1.1: 최대 1개만 포함 (프롬프트 길이 축소)
-            if few_shot_examples:
-                example = few_shot_examples[0]  # 첫 번째 예시만 사용
-                few_shot_examples_section = "\n## 📚 개선 예시 (참고용)\n\n"
-                few_shot_examples_section += f"""**질문**: {example.get('question', '')}
-
-**원본 답변**: {example.get('original_answer', '')[:200]}...
-
-**개선된 답변**: {example.get('enhanced_answer', '')[:200]}...
-
-**주요 개선 사항**: {', '.join(example.get('improvements', [])[:3])}
-"""
-
         prompt = f"""당신은 법률 답변 포맷팅 전문가입니다. 아래 변환 규칙을 정확히 적용하세요.
 
 **중요**: 최종 답변에는 작업 과정(STEP, 평가, 체크리스트 등)을 포함하지 마세요. 오직 변환된 답변 내용만 작성하세요.
@@ -1119,8 +970,6 @@ class AnswerStructureEnhancer:
 
 
 원본의 핵심 키워드 확인: {keywords_preview}
-
-{few_shot_examples_section}
 
 ## 📝 질문 정보
 
@@ -1456,7 +1305,9 @@ class AnswerStructureEnhancer:
 
         try:
             # 1. 문서별 근거 비교 표 제거 (CRITICAL)
+            logger.debug(f"[TABLE_REMOVAL] 표 제거 전 답변 길이: {len(structured_answer)} 문자")
             structured_answer = self._remove_comparison_table(structured_answer)
+            logger.debug(f"[TABLE_REMOVAL] 표 제거 후 답변 길이: {len(structured_answer)} 문자")
             
             # 2. 통합 정리 함수 사용
             structured_answer = self._clean_structured_answer(structured_answer, question_type)
@@ -2033,6 +1884,9 @@ class AnswerStructureEnhancer:
             
             if table_start_idx >= 0:
                 logger.info("문서별 근거 비교 표 제거 및 텍스트 변환 완료")
+                logger.debug(f"[TABLE_REMOVAL] 표 제거 전 길이: {len(answer)} 문자, 표 제거 후 길이: {len(result)} 문자")
+            else:
+                logger.debug("[TABLE_REMOVAL] 표가 발견되지 않았습니다 (표 제거 로직 통과)")
             
             return result
             
@@ -3195,9 +3049,6 @@ class AnswerStructureEnhancer:
         try:
             self.structure_templates = self._load_structure_templates()
             self.quality_indicators = self._load_quality_indicators()
-            # 캐시 무효화
-            if hasattr(self, '_few_shot_examples_cache'):
-                self._few_shot_examples_cache = None
             logger.info("Templates reloaded successfully")
         except Exception as e:
             logger.error(f"Failed to reload templates: {e}", exc_info=True)

@@ -655,11 +655,15 @@ class MultiQuerySearchAgentNode:
         try:
             self._initialize_search_engines()
             
-            if not self.keyword_search or not self.semantic_search:
-                self.logger.error("❌ [MULTI-QUERY] Search engines not available")
+            # 🔥 개선: semantic_search가 없어도 keyword_search만으로 검색 가능
+            if not self.keyword_search:
+                self.logger.error("❌ [MULTI-QUERY] Keyword search engine not available")
                 state.setdefault("search", {})["results"] = []
                 state.setdefault("retrieved_docs", [])
                 return state
+            
+            if not self.semantic_search:
+                self.logger.warning("⚠️ [MULTI-QUERY] Semantic search not available, using keyword search only")
             
             # 🔥 개선: 질의 타입에 따라 검색할 문서 타입 결정
             query_type = None
@@ -681,6 +685,10 @@ class MultiQuerySearchAgentNode:
             all_results = []
             seen_doc_ids = set()
             
+            # 🔥 최적화 1: 동적 타임아웃 및 조기 종료
+            min_results_needed = 10  # 최소 필요 결과 수
+            max_results_target = 20  # 목표 최대 결과 수
+            
             with ThreadPoolExecutor(max_workers=6) as executor:
                 futures = []
                 for sub_query in multi_queries:
@@ -690,17 +698,22 @@ class MultiQuerySearchAgentNode:
                         self._search_keywords_with_type_filter,
                         sub_query, source_types, limit=5
                     )
-                    # 🔥 개선: source_types 파라미터 전달
-                    vector_future = executor.submit(
-                        self.semantic_search.search,
-                        sub_query, k=5, source_types=source_types
-                    )
-                    futures.append(("keyword", sub_query, keyword_future))
-                    futures.append(("vector", sub_query, vector_future))
+                    # 🔥 최적화: 키워드 검색은 5초 타임아웃
+                    futures.append(("keyword", sub_query, keyword_future, 5.0))
+                    
+                    # 🔥 개선: semantic_search가 있을 때만 벡터 검색 실행
+                    if self.semantic_search:
+                        vector_future = executor.submit(
+                            self.semantic_search.search,
+                            sub_query, k=5, source_types=source_types
+                        )
+                        # 🔥 최적화: 벡터 검색은 8초 타임아웃
+                        futures.append(("vector", sub_query, vector_future, 8.0))
                 
-                for search_type, sub_query, future in futures:
+                # 🔥 최적화 2: 조기 종료 로직 적용
+                for search_type, sub_query, future, timeout in futures:
                     try:
-                        results = future.result(timeout=10.0)
+                        results = future.result(timeout=timeout)
                         for result in results:
                             doc_id = self._get_doc_id(result)
                             if doc_id and doc_id not in seen_doc_ids:
@@ -709,11 +722,36 @@ class MultiQuerySearchAgentNode:
                                 result["search_type"] = search_type
                                 result["original_query"] = query
                                 all_results.append(result)
+                                
+                                # 🔥 최적화 3: 충분한 결과 수집 시 조기 종료
+                                if len(all_results) >= max_results_target:
+                                    # 나머지 futures 취소
+                                    for _, _, f, _ in futures:
+                                        if not f.done():
+                                            f.cancel()
+                                    self.logger.debug(f"✅ [MULTI-QUERY] 조기 종료: {len(all_results)}개 결과 수집 완료")
+                                    break
+                    except TimeoutError:
+                        self.logger.warning(f"⚠️ [MULTI-QUERY] Search timeout for '{sub_query}' ({search_type}, timeout: {timeout}s)")
                     except Exception as e:
                         self.logger.warning(f"⚠️ [MULTI-QUERY] Search failed for '{sub_query}': {e}")
+                    
+                    # 조기 종료 체크 (외부 루프에서도)
+                    if len(all_results) >= max_results_target:
+                        break
             
-            # 리랭킹
-            ranked_results = self._rerank_multi_query_results(all_results, query)
+            # 🔥 최적화 4: 리랭킹 최적화 (상위 N개만 리랭킹)
+            if len(all_results) > 20:
+                # 빠른 정렬 후 상위 20개만 리랭킹
+                all_results.sort(key=lambda x: x.get("relevance_score", x.get("score", 0.0)), reverse=True)
+                ranked_results = self._rerank_multi_query_results(all_results[:20], query)
+                # 나머지는 그대로 추가 (점수만 정규화)
+                for result in all_results[20:]:
+                    if "final_score" not in result:
+                        result["final_score"] = result.get("relevance_score", result.get("score", 0.0))
+                ranked_results.extend(all_results[20:])
+            else:
+                ranked_results = self._rerank_multi_query_results(all_results, query)
             retrieved_docs = self._convert_to_retrieved_docs(ranked_results)
             
             # 🔥 LangGraph state 업데이트: 직접 설정 (LangGraph는 반환된 state를 병합함)

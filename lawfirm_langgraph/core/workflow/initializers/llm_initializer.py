@@ -106,9 +106,9 @@ class LLMInitializer:
                 return gemini_llm_fast
             except Exception as e:
                 logger.warning(f"Failed to initialize fast LLM: {e}. Using main LLM.")
-                return self.main_llm
+                return self.main_llm if self.main_llm is not None else self.create_mock_llm()
 
-        return self.main_llm
+        return self.main_llm if self.main_llm is not None else self.create_mock_llm()
 
     def initialize_validator_llm(self) -> Any:
         """품질 검증용 LLM 초기화"""
@@ -133,7 +133,7 @@ class LLMInitializer:
                 return validator_llm
             except Exception as e:
                 logger.warning(f"Failed to initialize validator LLM: {e}. Using main LLM.")
-                return self.main_llm
+                return self.main_llm if self.main_llm is not None else self.create_mock_llm()
 
-        return self.main_llm
+        return self.main_llm if self.main_llm is not None else self.create_mock_llm()
 

@@ -29,6 +29,7 @@ class KeywordExtractor:
     형태소 분석을 활용하여 조사/어미를 자동 제거하고 핵심 키워드를 추출합니다.
     """
     
+    _okt_logged: bool = False  # KoNLPy Okt 초기화 로그 출력 여부 (최초 1회만)
     
     # 조사 패턴 (정규식)
     JOSA_PATTERN = re.compile(
@@ -86,28 +87,35 @@ class KeywordExtractor:
         self.use_morphology = use_morphology
         self.logger = logger_instance or logging.getLogger(__name__)
         
-        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용, 싱글톤)
         self.stopword_processor = None
         if KoreanStopwordProcessor:
             try:
-                self.stopword_processor = KoreanStopwordProcessor()
-                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+                self.stopword_processor = KoreanStopwordProcessor.get_instance()
             except Exception as e:
                 self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
         
-        # KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
+        # KoNLPy 형태소 분석기 초기화 (싱글톤 사용)
         self._okt = None
         if use_morphology:
             try:
-                from konlpy.tag import Okt
-                self._okt = Okt()
-                self.logger.debug("KoNLPy Okt initialized successfully")
+                from lawfirm_langgraph.core.utils.konlpy_singleton import get_okt_instance
+                self._okt = get_okt_instance()
+                if self._okt is None:
+                    self.use_morphology = False
             except ImportError:
-                self.logger.debug("KoNLPy not available, will use fallback method")
-                self.use_morphology = False
-            except Exception as e:
-                self.logger.warning(f"Error initializing KoNLPy: {e}, will use fallback method")
-                self.use_morphology = False
+                try:
+                    from core.utils.konlpy_singleton import get_okt_instance
+                    self._okt = get_okt_instance()
+                    if self._okt is None:
+                        self.use_morphology = False
+                except ImportError:
+                    # 폴백: 직접 초기화 (싱글톤 유틸리티가 없는 경우)
+                    try:
+                        from konlpy.tag import Okt
+                        self._okt = Okt()
+                    except (ImportError, Exception):
+                        self.use_morphology = False
     
     def extract_keywords(
         self,

@@ -63,6 +63,15 @@ except ImportError:
     TORCH_AVAILABLE = False
     logging.warning("PyTorch not available for quantization")
 
+# ModelCacheManager import
+try:
+    from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager
+except ImportError:
+    try:
+        from core.shared.utils.model_cache_manager import get_model_cache_manager
+    except ImportError:
+        get_model_cache_manager = None
+
 logger = get_logger(__name__)
 
 
@@ -197,14 +206,36 @@ class LegalVectorStore:
                 if not SENTENCE_TRANSFORMERS_AVAILABLE:
                     raise ImportError("SentenceTransformers is required but not installed")
 
-                # GPU 사용 여부에 따라 모델 로딩
-                # safetensors 우선 사용 (PyTorch 보안 취약점 회피)
-                if self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
-                    self.model = SentenceTransformer(self.model_name, device="cuda")
-                    self.logger.info("Model loaded on GPU")
+                # ModelCacheManager 사용 (중복 로딩 방지)
+                if get_model_cache_manager:
+                    try:
+                        model_cache = get_model_cache_manager()
+                        device = "cuda" if (self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available()) else None
+                        self.model = model_cache.get_model(
+                            self.model_name,
+                            device=device
+                        )
+                        if self.model:
+                            self.logger.info(f"Model loaded via cache manager: {self.model_name} (device: {device or 'default'})")
+                        else:
+                            raise ValueError(f"Failed to load model {self.model_name} via cache manager")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load model via cache manager: {e}, falling back to direct load")
+                        # 폴백: 직접 로드
+                        if self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
+                            self.model = SentenceTransformer(self.model_name, device="cuda")
+                            self.logger.info("Model loaded on GPU (direct)")
+                        else:
+                            self.model = SentenceTransformer(self.model_name)
+                            self.logger.info("Model loaded on CPU (direct)")
                 else:
-                    self.model = SentenceTransformer(self.model_name)
-                    self.logger.info("Model loaded on CPU")
+                    # ModelCacheManager가 없으면 직접 로드
+                    if self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
+                        self.model = SentenceTransformer(self.model_name, device="cuda")
+                        self.logger.info("Model loaded on GPU")
+                    else:
+                        self.model = SentenceTransformer(self.model_name)
+                        self.logger.info("Model loaded on CPU")
 
                 # Float16 양자화 적용
                 if self.enable_quantization and TORCH_AVAILABLE:

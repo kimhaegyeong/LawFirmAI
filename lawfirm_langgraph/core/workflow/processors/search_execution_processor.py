@@ -76,6 +76,70 @@ class SearchExecutionProcessor:
         
         # 검색 쿼리 중복 방지 캐시
         self._executed_queries = set()  # 실행된 쿼리 추적
+        
+        # 쿼리 정규화 함수 (유사 쿼리 감지를 위해)
+        self._normalize_query = self._create_query_normalizer()
+    
+    def _create_query_normalizer(self):
+        """쿼리 정규화 함수 생성 (유사 쿼리 감지용)"""
+        import re
+        
+        def normalize_query(query: str) -> str:
+            """쿼리를 정규화하여 유사 쿼리 감지"""
+            if not query or not isinstance(query, str):
+                return ""
+            # 소문자 변환
+            normalized = query.lower()
+            # 연속된 공백을 하나로
+            normalized = re.sub(r'\s+', ' ', normalized)
+            # 앞뒤 공백 제거
+            normalized = normalized.strip()
+            # 특수문자 정규화 (한글은 유지)
+            normalized = re.sub(r'[^\w\s가-힣]', '', normalized)
+            return normalized
+        
+        return normalize_query
+    
+    def _generate_query_hash(
+        self,
+        original_query: str,
+        optimized_queries: Dict[str, Any],
+        search_type: str = "combined"
+    ) -> str:
+        """쿼리 해시 생성 (정규화 포함)"""
+        import hashlib
+        
+        # 쿼리 정규화
+        normalized_original = self._normalize_query(original_query)
+        semantic_query_str = self._normalize_query(str(optimized_queries.get('semantic_query', '')))
+        keyword_queries = optimized_queries.get('keyword_queries', [])
+        keyword_queries_str = str(sorted([self._normalize_query(str(kq)) for kq in keyword_queries]))
+        multi_queries = optimized_queries.get('multi_queries', [])
+        multi_queries_str = str(sorted([self._normalize_query(str(mq)) for mq in multi_queries]))
+        
+        # 해시 생성
+        query_hash = hashlib.md5(
+            f"{search_type}:{normalized_original}:{semantic_query_str}:{keyword_queries_str}:{multi_queries_str}".encode('utf-8')
+        ).hexdigest()
+        
+        return query_hash
+    
+    def _check_and_mark_duplicate_query(
+        self,
+        query_hash: str,
+        original_query: str,
+        search_type: str = "combined"
+    ) -> bool:
+        """중복 쿼리 체크 및 마킹 (True: 중복, False: 새 쿼리)"""
+        if query_hash in self._executed_queries:
+            self.logger.info(
+                f"⚠️ [DUPLICATE SEARCH] {search_type} 검색: 동일한 쿼리로 이미 검색됨 "
+                f"(hash: {query_hash[:16]}..., query: '{original_query[:50]}...')"
+            )
+            return True
+        else:
+            self._executed_queries.add(query_hash)
+            return False
 
     def get_search_params(self, state: LegalWorkflowState) -> Dict[str, Any]:
         """검색에 필요한 모든 파라미터를 한 번에 가져오기 (State 접근 최적화)"""
@@ -719,15 +783,62 @@ class SearchExecutionProcessor:
             phase1_sufficient = False
             
             # 검색 쿼리 중복 방지: 동일한 쿼리로 이미 검색했는지 확인
-            import hashlib
-            query_hash = hashlib.md5(
-                f"{original_query}:{str(optimized_queries.get('semantic_query', ''))}".encode('utf-8')
-            ).hexdigest()
+            query_hash = self._generate_query_hash(original_query, optimized_queries, "combined")
             
-            if query_hash in self._executed_queries:
-                self.logger.info(f"⚠️ [DUPLICATE SEARCH] 동일한 쿼리로 이미 검색됨: {query_hash[:16]}... (스킵)")
-            else:
-                self._executed_queries.add(query_hash)
+            if self._check_and_mark_duplicate_query(query_hash, original_query, "combined"):
+                self.logger.info(f"⚠️ [DUPLICATE SEARCH] 동일한 쿼리로 이미 검색됨: {query_hash[:16]}... (검색 스킵)")
+                # 중복 쿼리 발견 시 State에서 이전 결과를 가져오거나 빈 결과 반환
+                # State에서 이전 검색 결과 확인
+                previous_semantic = self._get_state_value(state, "semantic_results", [])
+                previous_keyword = self._get_state_value(state, "keyword_results", [])
+                previous_semantic_count = self._get_state_value(state, "semantic_count", 0)
+                previous_keyword_count = self._get_state_value(state, "keyword_count", 0)
+                
+                if previous_semantic or previous_keyword:
+                    self.logger.info(
+                        f"✅ [DUPLICATE SEARCH] 이전 검색 결과 재사용: "
+                        f"semantic={len(previous_semantic)}, keyword={len(previous_keyword)}"
+                    )
+                    semantic_results = previous_semantic if previous_semantic else []
+                    keyword_results = previous_keyword if previous_keyword else []
+                    semantic_count = previous_semantic_count if previous_semantic_count else len(semantic_results)
+                    keyword_count = previous_keyword_count if previous_keyword_count else len(keyword_results)
+                    
+                    # State에 결과 저장
+                    self._set_state_value(state, "semantic_results", semantic_results)
+                    self._set_state_value(state, "keyword_results", keyword_results)
+                    self._set_state_value(state, "semantic_count", semantic_count)
+                    self._set_state_value(state, "keyword_count", keyword_count)
+                    
+                    # 조기 종료 플래그 설정하여 Phase 2 스킵
+                    early_exit_triggered = True
+                    early_exit_reason = "Duplicate query - using previous results"
+                    phase1_sufficient = True
+                else:
+                    # 이전 결과가 없으면 빈 결과 반환
+                    self.logger.warning(
+                        f"⚠️ [DUPLICATE SEARCH] 이전 검색 결과 없음, 빈 결과 반환"
+                    )
+                    semantic_results = []
+                    keyword_results = []
+                    semantic_count = 0
+                    keyword_count = 0
+                    early_exit_triggered = True
+                    early_exit_reason = "Duplicate query - no previous results"
+                    phase1_sufficient = False
+                
+                # 중복 쿼리이므로 검색 스킵하고 결과 반환
+                # State에 결과 저장
+                self._set_state_value(state, "semantic_results", semantic_results)
+                self._set_state_value(state, "keyword_results", keyword_results)
+                self._set_state_value(state, "semantic_count", semantic_count)
+                self._set_state_value(state, "keyword_count", keyword_count)
+                
+                # 처리 시간 업데이트 (검색 스킵이므로 0으로 설정)
+                if self._update_processing_time_func:
+                    self._update_processing_time_func(state, "search_time", 0.0)
+                
+                return state
             
             # Phase 1: 핵심 검색 작업만 먼저 실행 (semantic + keyword)
             with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1383,6 +1494,17 @@ class SearchExecutionProcessor:
             self._set_state_value(state, "semantic_count", semantic_count)
             self._set_state_value(state, "keyword_count", keyword_count)
             
+            # 🔥 디버그: original_query 저장 확인 (재검색에서 사용)
+            if original_query:
+                self._set_state_value(state, "original_query", original_query)
+                self.logger.info(
+                    f"✅ [STATE SAVE] original_query 저장 완료: "
+                    f"query='{original_query[:50]}...', "
+                    f"semantic_results={len(semantic_results)}, keyword_results={len(keyword_results)}"
+                )
+            else:
+                self.logger.warning("⚠️ [STATE SAVE] original_query가 비어있어 저장하지 않음")
+            
             # State 구조 일관성 확보: retrieved_docs를 헬퍼 함수로 저장
             merged_docs = semantic_results + keyword_results
             set_retrieved_docs(state, merged_docs)
@@ -1567,6 +1689,14 @@ class SearchExecutionProcessor:
         """의미적 검색 실행"""
         self.logger.info("🔍 [EXECUTE_SEMANTIC_SEARCH] 메서드 호출됨")
         self.logger.info(f"🔍 [EXECUTE_SEMANTIC_SEARCH] original_query: {original_query[:50] if original_query else 'N/A'}...")
+        
+        # 중복 쿼리 체크
+        query_hash = self._generate_query_hash(original_query, optimized_queries or {}, "semantic")
+        if self._check_and_mark_duplicate_query(query_hash, original_query, "semantic"):
+            # 중복 쿼리이므로 빈 결과 반환 (이전 결과는 State에 있을 수 있음)
+            self.logger.info("⏭️ [EXECUTE_SEMANTIC_SEARCH] 중복 쿼리로 인해 검색 스킵")
+            return [], 0
+        
         semantic_results = []
         semantic_count = 0
 
@@ -2318,6 +2448,13 @@ class SearchExecutionProcessor:
         original_query: str = ""
     ) -> Tuple[List[Dict[str, Any]], int]:
         """키워드 검색 실행"""
+        # 중복 쿼리 체크
+        query_hash = self._generate_query_hash(original_query, optimized_queries or {}, "keyword")
+        if self._check_and_mark_duplicate_query(query_hash, original_query, "keyword"):
+            # 중복 쿼리이므로 빈 결과 반환 (이전 결과는 State에 있을 수 있음)
+            self.logger.info("⏭️ [EXECUTE_KEYWORD_SEARCH] 중복 쿼리로 인해 검색 스킵")
+            return [], 0
+        
         keyword_results = []
         keyword_count = 0
 

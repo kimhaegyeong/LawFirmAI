@@ -128,6 +128,74 @@ class TermIntegrator:
                 similarities.append(sim)
         
         return np.mean(similarities) if similarities else 0.0
+    
+    def get_synonyms(self, keyword: str, domain: str = None, limit: int = 10) -> List[str]:
+        """
+        키워드의 동의어 조회
+        
+        Args:
+            keyword: 조회할 키워드
+            domain: 도메인 (선택사항)
+            limit: 반환할 최대 개수
+            
+        Returns:
+            동의어 리스트
+        """
+        try:
+            # 동의어 데이터베이스가 있는 경우 사용
+            from lawfirm_langgraph.core.search.optimizers.synonym_database import SynonymDatabase
+            synonym_db = SynonymDatabase()
+            records = synonym_db.get_synonyms(keyword, domain=domain, limit=limit)
+            synonyms = [record.synonym for record in records]
+            self.logger.debug(f"Found {len(synonyms)} synonyms for '{keyword}' from database")
+            return synonyms
+        except Exception as e:
+            self.logger.debug(f"Synonym database not available or error: {e}, using fallback")
+            # 폴백: 유사 용어 그룹에서 찾기
+            # 실제 구현에서는 용어 통합 시스템의 그룹 정보를 활용할 수 있음
+            return []
+    
+    def get_related_laws(self, keyword: str, legal_field: str = None) -> List[Dict[str, Any]]:
+        """
+        키워드와 관련된 법령 조회
+        
+        Args:
+            keyword: 조회할 키워드
+            legal_field: 법률 분야 (선택사항)
+            
+        Returns:
+            관련 법령 정보 리스트
+        """
+        try:
+            # 법령 데이터베이스가 있는 경우 사용
+            # 실제 구현에서는 법령 데이터베이스와 연동
+            related_laws = []
+            
+            # 패턴 기반 법령 추출 (폴백)
+            import re
+            law_patterns = [
+                r'민법\s*제?\s*\d+조',
+                r'상법\s*제?\s*\d+조',
+                r'형법\s*제?\s*\d+조',
+                r'민사소송법\s*제?\s*\d+조',
+                r'형사소송법\s*제?\s*\d+조',
+            ]
+            
+            # 키워드에서 법령 패턴 추출
+            for pattern in law_patterns:
+                matches = re.findall(pattern, keyword)
+                for match in matches:
+                    related_laws.append({
+                        'law_name': match.split()[0] if ' ' in match else match,
+                        'article': match,
+                        'relevance': 0.7
+                    })
+            
+            self.logger.debug(f"Found {len(related_laws)} related laws for '{keyword}'")
+            return related_laws[:5]  # 최대 5개 반환
+        except Exception as e:
+            self.logger.debug(f"Related laws lookup failed: {e}")
+            return []
 
 class QualityFilter:
     """품질 기반 용어 필터링"""

@@ -98,6 +98,9 @@ class AnswerFormatterHandler:
         if self.logger.level > logging.INFO:
             self.logger.setLevel(logging.INFO)
         
+        # 🔥 추가: 법령 조문 캐시 (referenced_articles에서 조회한 법령 조문 저장)
+        self._statute_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        
         # 리팩토링된 컴포넌트 초기화
         self.length_config = AnswerLengthConfig()
         self.confidence_config = ConfidenceConfig()
@@ -1595,6 +1598,290 @@ class AnswerFormatterHandler:
         self.logger.info(f"[CONFIDENCE CALC] search_quality_score: {search_quality_score:.3f}")
         return search_quality_score
 
+    def _parse_referenced_articles(self, referenced_articles: str) -> List[Dict[str, str]]:
+        """
+        referenced_articles 문자열에서 법령명과 조문번호 추출
+        
+        Args:
+            referenced_articles: "민법 제750조, 제751조, 근로기준법 제17조" 형식의 문자열
+            
+        Returns:
+            List[Dict[str, str]]: [{"law_name": "민법", "article_no": "750"}, ...]
+        """
+        if not referenced_articles or not isinstance(referenced_articles, str):
+            return []
+        
+        results = []
+        seen_combinations = set()
+        
+        # 패턴 1: "법명 제XX조" 형식
+        pattern1 = re.compile(r'([가-힣]+법)\s*제\s*(\d+)\s*조')
+        matches1 = pattern1.findall(referenced_articles)
+        for law_name, article_no in matches1:
+            key = f"{law_name}::{article_no}"
+            if key not in seen_combinations:
+                results.append({"law_name": law_name, "article_no": article_no})
+                seen_combinations.add(key)
+        
+        # 패턴 2: 연속된 "제XX조" 처리 (이전 법령명이 있는 경우)
+        # "민법 제750조, 제751조, 제752조" 같은 경우 처리
+        pattern2 = re.compile(r'제\s*(\d+)\s*조')
+        
+        # 각 법령명의 위치를 찾아서 그 이후의 "제XX조" 패턴 처리
+        for match in pattern1.finditer(referenced_articles):
+            law_name = match.group(1)
+            match_end = match.end()
+            
+            # 이 법령명 이후의 텍스트에서 "제XX조" 패턴 찾기
+            remaining_text = referenced_articles[match_end:]
+            # 다음 법령명이 나오기 전까지만 처리
+            next_law_match = pattern1.search(remaining_text)
+            if next_law_match:
+                remaining_text = remaining_text[:next_law_match.start()]
+            
+            # 콤마나 공백으로 구분된 "제XX조" 패턴 찾기
+            for article_match in pattern2.finditer(remaining_text):
+                article_no = article_match.group(1)
+                key = f"{law_name}::{article_no}"
+                if key not in seen_combinations:
+                    results.append({"law_name": law_name, "article_no": article_no})
+                    seen_combinations.add(key)
+        
+        return results
+    
+    def _fetch_statute_articles_batch(
+        self, 
+        article_refs: List[Dict[str, str]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        법령 조문 배치 조회 (캐싱 포함)
+        
+        Args:
+            article_refs: [{"law_name": "민법", "article_no": "750"}, ...] 형식의 리스트
+            
+        Returns:
+            Dict[str, Dict[str, Any]]: {"민법::750": {...}, ...} 형식의 딕셔너리
+        """
+        if not article_refs:
+            return {}
+        
+        results = {}
+        uncached_refs = []
+        
+        # 캐시 확인
+        for ref in article_refs:
+            law_name = ref["law_name"]
+            article_no = ref["article_no"]
+            cache_key = f"{law_name}::{article_no}"
+            
+            if cache_key in self._statute_cache:
+                cached_result = self._statute_cache[cache_key]
+                if cached_result is not None:
+                    results[cache_key] = cached_result
+            else:
+                uncached_refs.append(ref)
+        
+        if not uncached_refs:
+            return results
+        
+        # 배치 조회
+        try:
+            from ...data.db_adapter import DatabaseAdapter
+            try:
+                from ...core.utils.config import get_config
+                config = get_config()
+            except ImportError:
+                try:
+                    from core.utils.config import get_config
+                    config = get_config()
+                except ImportError:
+                    from ...core.utils.config import Config
+                    config = Config()
+            db_adapter = DatabaseAdapter(config.database_url)
+            # 컨텍스트 매니저 사용으로 연결 관리 개선
+            with db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # 법령명으로 statute_id 매핑 생성
+                law_names = list(set(ref["law_name"] for ref in uncached_refs))
+                statute_id_map = {}  # {law_name: statute_id}
+                
+                # 법령명으로 statute_id 조회 (배치)
+                placeholders = ",".join(["%s"] * len(law_names))
+                cursor.execute(f"""
+                    SELECT id, law_name_kr, law_abbrv
+                    FROM statutes
+                    WHERE law_name_kr IN ({placeholders}) OR law_abbrv IN ({placeholders})
+                """, law_names + law_names)
+                
+                for row in cursor.fetchall():
+                    statute_id = row['id'] if isinstance(row, dict) else row[0]
+                    law_name_kr = row['law_name_kr'] if isinstance(row, dict) else row[1]
+                    law_abbrv = row['law_abbrv'] if isinstance(row, dict) else row[2]
+                    
+                    # 정확한 매칭
+                    for law_name in law_names:
+                        if law_name == law_name_kr or law_name == law_abbrv:
+                            statute_id_map[law_name] = statute_id
+                            break
+                
+                # LIKE 검색으로 재시도 (정확한 매칭 실패 시) - 배치 처리로 개선
+                unmatched_law_names = [name for name in law_names if name not in statute_id_map]
+                if unmatched_law_names:
+                    # 🔥 성능 최적화: 배치 LIKE 검색 (PostgreSQL ANY 연산자 사용)
+                    # 여러 법령명을 한 번에 LIKE 검색
+                    like_patterns = [f"%{name}%" for name in unmatched_law_names]
+                    
+                    # PostgreSQL의 ANY 연산자 사용하여 배치 LIKE 검색
+                    cursor.execute("""
+                        SELECT DISTINCT ON (law_name_kr) id, law_name_kr, law_abbrv
+                        FROM statutes
+                        WHERE law_name_kr LIKE ANY(%s::text[]) 
+                           OR law_abbrv LIKE ANY(%s::text[])
+                        ORDER BY law_name_kr, id
+                    """, (like_patterns, like_patterns))
+                    
+                    # 결과 매칭
+                    for row in cursor.fetchall():
+                        statute_id = row['id'] if isinstance(row, dict) else row[0]
+                        law_name_kr = row['law_name_kr'] if isinstance(row, dict) else row[1]
+                        law_abbrv = row['law_abbrv'] if isinstance(row, dict) else row[2]
+                        
+                        # 각 법령명에 대해 가장 유사한 매칭 찾기
+                        for law_name in unmatched_law_names:
+                            if law_name not in statute_id_map:
+                                # 정확한 매칭 우선
+                                if law_name == law_name_kr or law_name == law_abbrv:
+                                    statute_id_map[law_name] = statute_id
+                                    break
+                                # 부분 매칭 (법령명이 포함된 경우)
+                                elif law_name in law_name_kr or law_name in law_abbrv:
+                                    statute_id_map[law_name] = statute_id
+                                    break
+                
+                # 조문번호별로 그룹화하여 조회
+                statute_articles_map = {}  # {statute_id: [article_no_variants]}
+                for ref in uncached_refs:
+                    law_name = ref["law_name"]
+                    article_no = ref["article_no"]
+                    
+                    if law_name not in statute_id_map:
+                        continue
+                    
+                    statute_id = statute_id_map[law_name]
+                    if statute_id not in statute_articles_map:
+                        statute_articles_map[statute_id] = []
+                    
+                    # 조문번호 형식 변환
+                    article_no_clean = article_no.lstrip('0')
+                    article_no_variants = [
+                        article_no_clean.zfill(6),  # "000750"
+                        article_no_clean.zfill(4) + "00",  # "075000"
+                        article_no_clean.zfill(5) + "0",  # "007500"
+                        article_no_clean  # "750"
+                    ]
+                    article_no_variants = list(dict.fromkeys(article_no_variants))
+                    
+                    statute_articles_map[statute_id].append({
+                        "law_name": law_name,
+                        "article_no": article_no,
+                        "variants": article_no_variants
+                    })
+                
+                # 각 statute_id별로 배치 조회
+                for statute_id, articles_info in statute_articles_map.items():
+                    all_variants = []
+                    article_mapping = {}  # {variant: (law_name, article_no)}
+                    
+                    for article_info in articles_info:
+                        for variant in article_info["variants"]:
+                            all_variants.append(variant)
+                            article_mapping[variant] = (article_info["law_name"], article_info["article_no"])
+                    
+                    if not all_variants:
+                        continue
+                    
+                    # 배치 조회
+                    placeholders = ",".join(["%s"] * len(all_variants))
+                    cursor.execute(f"""
+                        SELECT 
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.law_name_kr as statute_name,
+                            s.law_abbrv as statute_abbrv
+                        FROM statutes_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE sa.statute_id = %s AND sa.article_no IN ({placeholders})
+                        ORDER BY 
+                            CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
+                            sa.clause_no,
+                            CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
+                            sa.item_no
+                    """, [statute_id] + all_variants)
+                    
+                    for row in cursor.fetchall():
+                        article_no_db = row['article_no'] if isinstance(row, dict) else row[2]
+                        
+                        # variant로 원본 law_name, article_no 찾기
+                        if article_no_db in article_mapping:
+                            law_name, article_no = article_mapping[article_no_db]
+                            cache_key = f"{law_name}::{article_no}"
+                            
+                            if cache_key not in results:
+                                statute_doc = {
+                                    "id": f"statute_article_{row['id'] if isinstance(row, dict) else row[0]}",
+                                    "type": "statute_article",
+                                    "content": (row['text'] if isinstance(row, dict) else row[6]) or "",
+                                    "text": (row['text'] if isinstance(row, dict) else row[6]) or "",
+                                    "source": row['statute_name'] if isinstance(row, dict) else row[7],
+                                    "metadata": {
+                                        "statute_id": row['statute_id'] if isinstance(row, dict) else row[1],
+                                        "statute_name": row['statute_name'] if isinstance(row, dict) else row[7],
+                                        "law_name": row['statute_name'] if isinstance(row, dict) else row[7],
+                                        "article_no": article_no_db,
+                                        "clause_no": row['clause_no'] if isinstance(row, dict) else row[3],
+                                        "item_no": row['item_no'] if isinstance(row, dict) else row[4],
+                                        "heading": row['heading'] if isinstance(row, dict) else row[5],
+                                        "statute_abbrv": row['statute_abbrv'] if isinstance(row, dict) else row[8],
+                                        "type": "statute_article"
+                                    },
+                                    "relevance_score": 0.95,
+                                    "search_type": "referenced_from_precedent",
+                                    "referenced_from": True
+                                }
+                                
+                                results[cache_key] = statute_doc
+                                # 캐시에 저장
+                                self._statute_cache[cache_key] = statute_doc
+                
+                # 조회 실패한 항목은 None으로 캐시 (재조회 방지)
+                for ref in uncached_refs:
+                    law_name = ref["law_name"]
+                    article_no = ref["article_no"]
+                    cache_key = f"{law_name}::{article_no}"
+                    if cache_key not in self._statute_cache:
+                        self._statute_cache[cache_key] = None
+                
+                # 커서는 컨텍스트 매니저가 자동으로 처리하므로 명시적으로 닫을 필요 없음
+                # cursor.close()는 컨텍스트 매니저의 finally 블록에서 처리됨
+                
+        except Exception as e:
+            self.logger.error(f"법령 조문 배치 조회 오류: {e}", exc_info=True)
+            # 오류 발생 시에도 None으로 캐시하여 재시도 방지
+            for ref in uncached_refs:
+                law_name = ref["law_name"]
+                article_no = ref["article_no"]
+                cache_key = f"{law_name}::{article_no}"
+                if cache_key not in self._statute_cache:
+                    self._statute_cache[cache_key] = None
+        
+        return results
+
     def _extract_and_process_sources(
         self,
         state: LegalWorkflowState
@@ -1818,6 +2105,156 @@ class AnswerFormatterHandler:
 
         conversion_rate = (sources_created_count / total_docs * 100) if total_docs > 0 else 0
         self.logger.info(f"[SOURCES] 📊 Conversion statistics: {sources_created_count}/{total_docs} docs converted ({conversion_rate:.1f}%), failed: {sources_failed_count}")
+        
+        # 🔥 추가: 판례 문서의 referenced_articles에서 법령 조문 추출 및 추가 (배치 처리)
+        all_referenced_articles = []
+        precedent_docs_checked = 0
+        precedent_docs_with_references = 0
+        
+        for doc_index, doc in enumerate(retrieved_docs_list, 1):
+            if not isinstance(doc, dict):
+                continue
+            
+            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+            
+            if source_type in ["precedent_content", "case_paragraph"]:
+                precedent_docs_checked += 1
+                referenced_articles = (
+                    doc.get("referenced_articles") or 
+                    metadata.get("referenced_articles") or
+                    ""
+                )
+                
+                if referenced_articles:
+                    self.logger.debug(
+                        f"[REFERENCED_ARTICLES] 판례 문서 {doc_index}에서 referenced_articles 발견: "
+                        f"{referenced_articles[:100]}..."
+                    )
+                    parsed_articles = self._parse_referenced_articles(referenced_articles)
+                    if parsed_articles:
+                        precedent_docs_with_references += 1
+                        all_referenced_articles.extend(parsed_articles)
+                        articles_preview = ', '.join([
+                            f"{a['law_name']} 제{a['article_no']}조" 
+                            for a in parsed_articles[:3]
+                        ])
+                        self.logger.info(
+                            f"[REFERENCED_ARTICLES] 판례 문서 {doc_index}에서 {len(parsed_articles)}개 법령 조문 추출: "
+                            f"{articles_preview}"
+                            f"{'...' if len(parsed_articles) > 3 else ''}"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"[REFERENCED_ARTICLES] 판례 문서 {doc_index}의 referenced_articles 파싱 실패: "
+                            f"{referenced_articles[:100]}..."
+                        )
+                else:
+                    self.logger.debug(
+                        f"[REFERENCED_ARTICLES] 판례 문서 {doc_index}에 referenced_articles 필드 없음 "
+                        f"(type={source_type}, doc_id={doc.get('doc_id') or metadata.get('doc_id') or 'none'})"
+                    )
+        
+        # 배치 조회
+        if all_referenced_articles:
+            self.logger.info(
+                f"[REFERENCED_ARTICLES] 총 {precedent_docs_checked}개 판례 문서 확인, "
+                f"{precedent_docs_with_references}개 문서에서 {len(all_referenced_articles)}개 법령 조문 참조 발견, "
+                f"배치 조회 시작"
+            )
+            
+            # 중복 제거
+            unique_refs = []
+            seen_refs = set()
+            for ref in all_referenced_articles:
+                ref_key = f"{ref['law_name']}::{ref['article_no']}"
+                if ref_key not in seen_refs:
+                    unique_refs.append(ref)
+                    seen_refs.add(ref_key)
+            
+            # 배치 조회
+            statute_docs_map = self._fetch_statute_articles_batch(unique_refs)
+            
+            # sources_detail에 추가
+            referenced_statutes_added = set()
+            for ref in unique_refs:
+                law_name = ref["law_name"]
+                article_no = ref["article_no"]
+                cache_key = f"{law_name}::{article_no}"
+                
+                if cache_key in statute_docs_map and cache_key not in referenced_statutes_added:
+                    statute_doc = statute_docs_map[cache_key]
+                    referenced_statutes_added.add(cache_key)
+                    
+                    try:
+                        merged_metadata = statute_doc.get("metadata", {})
+                        source_info_detail = formatter.format_source("statute_article", merged_metadata) if formatter else None
+                        
+                        if validator:
+                            validation_result = validator.validate_source("statute_article", merged_metadata)
+                            if source_info_detail:
+                                source_info_detail.validation = validation_result
+                        
+                        source_str = f"{law_name} 제{article_no}조"
+                        detail_dict = self._create_source_detail_dict(
+                            source_str, 
+                            "statute_article", 
+                            source_info_detail, 
+                            statute_doc, 
+                            merged_metadata, 
+                            None
+                        )
+                        
+                        if detail_dict:
+                            # sources_detail 개수 제한 확인
+                            if len(final_sources_detail) < MAX_SOURCES_LIMIT:
+                                final_sources_detail.append(detail_dict)
+                                
+                                # sources_list에도 추가 (중복 체크)
+                                source_key = f"{source_str}::{statute_doc.get('id', '')}"
+                                if source_key not in seen_sources:
+                                    if len(final_sources_list) < MAX_SOURCES_LIMIT:
+                                        final_sources_list.append(source_str)
+                                        seen_sources.add(source_key)
+                                        
+                                        # legal_references에도 추가
+                                        legal_ref = self._extract_legal_ref_from_source(source_str, statute_doc, merged_metadata)
+                                        if legal_ref and legal_ref not in seen_legal_refs:
+                                            if len(legal_refs) < MAX_LEGAL_REFERENCES_LIMIT:
+                                                legal_refs.append(legal_ref)
+                                                seen_legal_refs.add(legal_ref)
+                                
+                                self.logger.info(
+                                    f"[REFERENCED_ARTICLES] ✅ 법령 조문 추가: {law_name} 제{article_no}조 "
+                                    f"(참조 출처: 판례)"
+                                )
+                            else:
+                                self.logger.warning(
+                                    f"[REFERENCED_ARTICLES] ⚠️ sources_detail 제한 도달, "
+                                    f"법령 조문 추가 생략: {law_name} 제{article_no}조"
+                                )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"[REFERENCED_ARTICLES] 법령 조문 추가 실패: {law_name} 제{article_no}조 - {e}"
+                        )
+            
+            if referenced_statutes_added:
+                self.logger.info(
+                    f"[REFERENCED_ARTICLES] 총 {len(referenced_statutes_added)}개 법령 조문을 "
+                    f"참고자료에 추가 완료"
+                )
+        else:
+            self.logger.info(
+                f"[REFERENCED_ARTICLES] 총 {precedent_docs_checked}개 판례 문서 확인, "
+                f"referenced_articles 필드가 있는 문서 없음 (데이터 없음 또는 필드 누락)"
+            )
+
+        # 🔥 표에 표시된 문서가 sources_detail에 포함되었는지 확인 및 로깅
+        answer_value = self._recover_and_validate_answer(state)
+        if answer_value:
+            self._log_table_documents_tracking(
+                answer_value, retrieved_docs_list, final_sources_detail, final_sources_list
+            )
 
         normalized_sources = self._normalize_sources(final_sources_list)
         
@@ -2108,6 +2545,202 @@ class AnswerFormatterHandler:
             self.logger.info("[SOURCES_TEST] ===== End Sources Data Analysis =====")
 
         return normalized_sources_clean, final_sources_detail_clean, legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
+
+    def _log_table_documents_tracking(
+        self,
+        answer: str,
+        retrieved_docs: List[Dict[str, Any]],
+        sources_detail: List[Dict[str, Any]],
+        sources: List[str]
+    ) -> None:
+        """표에 표시된 문서가 sources_detail에 포함되었는지 추적 및 로깅"""
+        if not answer or not retrieved_docs:
+            return
+        
+        try:
+            import re
+            
+            self.logger.info("=" * 80)
+            self.logger.info("[TABLE_TRACKING] 표에 표시된 문서 추적 시작")
+            
+            # 표에서 문서 번호 추출
+            table_doc_indices = set()
+            lines = answer.split('\n')
+            in_table = False
+            
+            for i, line in enumerate(lines):
+                # 표 제목 감지
+                if re.search(r'문서별\s*근거\s*비교|근거\s*비교|문서\s*근거', line, re.IGNORECASE):
+                    in_table = True
+                    self.logger.info(f"[TABLE_TRACKING] 표 제목 발견: {line.strip()}")
+                    continue
+                
+                # 표 헤더 라인 건너뛰기
+                if in_table and re.match(r'^\s*\|.*문서.*번호.*\|', line, re.IGNORECASE):
+                    if i + 1 < len(lines) and re.match(r'^\s*\|[\s\-:]+\|', lines[i + 1]):
+                        continue
+                    continue
+                
+                # 표 내용 라인에서 문서 번호 추출
+                if in_table and re.match(r'^\s*\|.*\[.*\].*\|', line):
+                    cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+                    if len(cells) >= 1:
+                        doc_num_str = cells[0]  # [문서 1] 또는 [1]
+                        source = cells[1] if len(cells) > 1 else ""  # 출처
+                        key_basis = cells[2] if len(cells) > 2 else ""  # 핵심 근거
+                        
+                        doc_num_match = re.search(r'\[문서\s*(\d+)\]|\[(\d+)\]', doc_num_str)
+                        if doc_num_match:
+                            doc_index = int(doc_num_match.group(1) or doc_num_match.group(2)) - 1
+                            if 0 <= doc_index < len(retrieved_docs):
+                                table_doc_indices.add(doc_index)
+                                self.logger.info(
+                                    f"[TABLE_TRACKING] 표에서 문서 번호 추출: [문서 {doc_index + 1}] "
+                                    f"(retrieved_docs 인덱스: {doc_index}), "
+                                    f"출처: {source[:50] if source else '없음'}, "
+                                    f"핵심근거: {key_basis[:50] if key_basis else '없음'}"
+                                )
+                    continue
+                
+                # 표 종료 감지
+                if in_table:
+                    if not line.strip() or re.match(r'^#+\s+', line):
+                        in_table = False
+                        self.logger.info("[TABLE_TRACKING] 표 종료 감지 (빈 줄 또는 헤더)")
+                    elif not re.match(r'^\s*\|', line):
+                        in_table = False
+                        self.logger.info("[TABLE_TRACKING] 표 종료 감지 (일반 텍스트)")
+            
+            if not table_doc_indices:
+                self.logger.info("[TABLE_TRACKING] 표에서 문서 번호를 찾을 수 없습니다")
+                self.logger.info("=" * 80)
+                return
+            
+            self.logger.info(f"[TABLE_TRACKING] 표에서 총 {len(table_doc_indices)}개의 문서 번호 추출: {sorted([idx + 1 for idx in table_doc_indices])}")
+            
+            # 각 표 문서에 대해 sources_detail 포함 여부 확인
+            missing_docs = []
+            included_docs = []
+            
+            for doc_index in sorted(table_doc_indices):
+                doc = retrieved_docs[doc_index]
+                if not isinstance(doc, dict):
+                    missing_docs.append({
+                        "doc_index": doc_index + 1,
+                        "reason": "doc이 dict가 아님",
+                        "doc_type": type(doc).__name__
+                    })
+                    continue
+                
+                doc_id = doc.get("doc_id") or doc.get("metadata", {}).get("doc_id") or doc.get("metadata", {}).get("case_id") or ""
+                doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                doc_source = doc.get("source") or doc.get("title") or ""
+                
+                # sources_detail에서 매칭되는 항목 찾기
+                matched = False
+                matched_detail = None
+                
+                for detail in sources_detail:
+                    detail_name = detail.get("name", "")
+                    detail_type = detail.get("type", "")
+                    detail_metadata = detail.get("metadata", {})
+                    detail_doc_id = detail.get("case_number") or detail.get("doc_id") or detail_metadata.get("doc_id") or detail_metadata.get("case_id") or ""
+                    
+                    # 매칭 조건 확인
+                    name_match = detail_name and doc_source and (detail_name in doc_source or doc_source in detail_name)
+                    type_match = detail_type and doc_type and detail_type == doc_type
+                    id_match = detail_doc_id and doc_id and detail_doc_id == doc_id
+                    
+                    if name_match or type_match or id_match:
+                        matched = True
+                        matched_detail = detail
+                        break
+                
+                # sources 리스트에서도 확인
+                if not matched:
+                    for source_str in sources:
+                        if doc_source and doc_source in source_str:
+                            matched = True
+                            break
+                
+                if matched:
+                    included_docs.append({
+                        "doc_index": doc_index + 1,
+                        "doc_id": doc_id,
+                        "doc_type": doc_type,
+                        "doc_source": doc_source[:50] if doc_source else "",
+                        "matched_detail_name": matched_detail.get("name", "") if matched_detail else "",
+                        "matched_detail_type": matched_detail.get("type", "") if matched_detail else ""
+                    })
+                    self.logger.info(
+                        f"[TABLE_TRACKING] ✅ 문서 {doc_index + 1} 포함됨: "
+                        f"doc_id={doc_id or '없음'}, type={doc_type or '없음'}, "
+                        f"source={doc_source[:50] if doc_source else '없음'}, "
+                        f"matched_detail_name={matched_detail.get('name', '') if matched_detail else '없음'}"
+                    )
+                else:
+                    # 누락 원인 분석
+                    reason_parts = []
+                    
+                    # source 생성 실패 여부 확인
+                    metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                    test_source = self._create_source_from_doc(doc, metadata, doc_type, doc_id)
+                    if not test_source:
+                        reason_parts.append("source 생성 실패")
+                    
+                    # doc_id 부재 확인
+                    if not doc_id:
+                        reason_parts.append("doc_id 없음")
+                    
+                    # source_type 부재 확인
+                    if not doc_type:
+                        reason_parts.append("source_type 없음")
+                    
+                    # content 부재 확인
+                    content = doc.get("content", "") or doc.get("text", "")
+                    if not content or len(content.strip()) < 10:
+                        reason_parts.append("content 부재 또는 너무 짧음")
+                    
+                    missing_docs.append({
+                        "doc_index": doc_index + 1,
+                        "doc_id": doc_id,
+                        "doc_type": doc_type,
+                        "doc_source": doc_source[:50] if doc_source else "",
+                        "reason": " | ".join(reason_parts) if reason_parts else "매칭 실패 (원인 불명)",
+                        "test_source": str(test_source)[:50] if test_source else "None",
+                        "content_length": len(content) if content else 0
+                    })
+                    
+                    self.logger.warning(
+                        f"[TABLE_TRACKING] ❌ 문서 {doc_index + 1} 누락됨: "
+                        f"doc_id={doc_id or '없음'}, type={doc_type or '없음'}, "
+                        f"source={doc_source[:50] if doc_source else '없음'}, "
+                        f"원인={reason_parts if reason_parts else '매칭 실패 (원인 불명)'}, "
+                        f"test_source={str(test_source)[:50] if test_source else 'None'}, "
+                        f"content_length={len(content) if content else 0}"
+                    )
+            
+            # 요약 로그
+            self.logger.info("=" * 80)
+            self.logger.info("[TABLE_TRACKING] 📊 표 문서 추적 결과:")
+            self.logger.info(f"  - 표에 표시된 문서 수: {len(table_doc_indices)}")
+            self.logger.info(f"  - sources_detail에 포함된 문서 수: {len(included_docs)}")
+            self.logger.info(f"  - sources_detail에 누락된 문서 수: {len(missing_docs)}")
+            
+            if missing_docs:
+                self.logger.warning("[TABLE_TRACKING] ⚠️ 누락된 문서 상세:")
+                for missing in missing_docs:
+                    self.logger.warning(
+                        f"  - 문서 {missing['doc_index']}: "
+                        f"doc_id={missing.get('doc_id', '없음')}, "
+                        f"type={missing.get('doc_type', '없음')}, "
+                        f"원인={missing.get('reason', '불명')}"
+                    )
+            
+            self.logger.info("=" * 80)
+            
+        except Exception as e:
+            self.logger.warning(f"[TABLE_TRACKING] 표 문서 추적 중 오류 발생: {e}", exc_info=True)
 
     def _create_source_from_doc(
         self,

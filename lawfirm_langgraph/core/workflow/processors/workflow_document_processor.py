@@ -152,10 +152,25 @@ class WorkflowDocumentProcessor:
                 similarity = doc.get("similarity", 0.0)
                 keyword_score = doc.get("keyword_match_score", 0.0)
                 doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or "unknown"
-                doc_type = doc.get("type") or doc.get("source_type", "unknown")
+                # 🔥 개선: doc_id가 int일 수 있으므로 문자열로 변환
+                doc_id_str = str(doc_id) if doc_id != "unknown" else "unknown"
+                # doc_type 추출 (unknown 처리 개선)
+                doc_type = doc.get("type")
+                if doc_type == "unknown":
+                    doc_type = None
+                if not doc_type:
+                    doc_type = doc.get("source_type")
+                if not doc_type:
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        doc_type = metadata.get("source_type") or metadata.get("type")
+                        if doc_type == "unknown":
+                            doc_type = None
+                if not doc_type:
+                    doc_type = "unknown"
                 source = doc.get("source", "")[:100] or "unknown"
                 content_preview = (doc.get("content", "")[:100] or "").replace("\n", " ")
-                doc_scores.append((score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc))
+                doc_scores.append((score, similarity, keyword_score, doc_id_str, doc_type, source, content_preview, doc))
             
             # 점수 분포 통계
             if doc_scores:
@@ -171,10 +186,12 @@ class WorkflowDocumentProcessor:
                 # 모든 문서의 점수 상세 로깅 (정렬된 순서)
                 doc_scores_sorted = sorted(doc_scores, key=lambda x: x[0], reverse=True)
                 self.logger.debug(f"📊 [ALL DOCS SCORES] 모든 {len(doc_scores_sorted)}개 문서의 relevance_score:")
-                for i, (score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc) in enumerate(doc_scores_sorted, 1):
+                for i, (score, similarity, keyword_score, doc_id_str, doc_type, source, content_preview, doc) in enumerate(doc_scores_sorted, 1):
+                    # 🔥 개선: doc_id_str이 이미 문자열이므로 안전하게 슬라이싱
+                    doc_id_display = doc_id_str[:50] if isinstance(doc_id_str, str) else str(doc_id_str)[:50]
                     self.logger.debug(
                         f"   {i}. final_score={score:.3f}, similarity={similarity:.3f}, keyword={keyword_score:.3f}, "
-                        f"type={doc_type}, id={doc_id[:50]}, source={source}, "
+                        f"type={doc_type}, id={doc_id_display}, source={source}, "
                         f"content_preview={content_preview}"
                     )
             
@@ -363,9 +380,23 @@ class WorkflowDocumentProcessor:
                 matched_keywords = doc.get("matched_keywords", [])
                 has_keyword_match = keyword_match_score > 0.0 or len(matched_keywords) > 0
                 
-                # 문서 타입 및 소스 타입 정의 (doc_type 오류 수정)
-                doc_type = doc.get("type") or doc.get("source_type", "unknown")
-                source_type = doc.get("source_type") or doc.get("type", "unknown")
+                # 문서 타입 및 소스 타입 정의 (unknown 처리 개선)
+                # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                normalize_document_type(doc)
+                doc_type = doc.get("type", "unknown")
+                source_type = doc.get("source_type", doc_type)
+                
+                if not source_type:
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        source_type = metadata.get("source_type") or metadata.get("type")
+                        if source_type == "unknown":
+                            source_type = None
+                if not source_type:
+                    source_type = doc_type  # doc_type을 source_type으로 사용
+                if not source_type:
+                    source_type = "unknown"
                 is_legal_doc = (
                     "법" in content[:200] or
                     "조문" in content[:200] or
@@ -785,15 +816,16 @@ class WorkflowDocumentProcessor:
             else:
                 dynamic_threshold = 0.60  # 검색 점수 우선 사용하므로 원래대로 복원
                 statute_threshold = 0.50  # 검색 점수 우선 사용하므로 원래대로 복원
+                doc_scores = []  # vector_docs가 없을 때 빈 리스트로 초기화
             
             # 우선순위 6: 성능 최적화 - 검증 결과 캐싱 및 배치 처리
             filtered_vector_docs = []
             validation_cache = {}  # doc_id -> validation_result
             
-            # 🔥 수정: doc_scores는 (score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc) 형식의 튜플 리스트
+            # 🔥 수정: doc_scores는 (doc, score) 형식의 튜플 리스트
             for item in doc_scores:
-                score = item[0]
-                doc = item[7]  # 마지막 요소가 doc
+                doc = item[0]  # 첫 번째 요소가 doc
+                score = item[1]  # 두 번째 요소가 score
                 doc_type = doc.get("type") or doc.get("source_type", "")
                 
                 # 타입별 차등 임계값 적용

@@ -87,12 +87,26 @@ class DocumentType(str, Enum):
         # 2단계: metadata 필드의 키를 기반으로 추론
         metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
         
-        # statute_article 판단: statute_name, law_name, article_no 중 하나라도 있으면
-        if any(key in metadata for key in ["statute_name", "law_name", "article_no"]):
+        # doc의 최상위 레벨 필드와 metadata 필드를 모두 확인
+        all_fields = {**metadata}
+        # 최상위 레벨 필드도 추가 (metadata보다 우선)
+        # 🔥 현재 테이블 컬럼명 기준으로 업데이트
+        # 법령: statute_name (law_name_kr), article_no, clause_no, item_no
+        # 판례: precedent_id, court (court_name), casenames (case_name), doc_id (case_number)
+        for key in ["statute_name", "law_name", "law_name_kr", "article_no", "article_number", 
+                   "clause_no", "item_no", "statute_id",
+                   "precedent_id", "case_id", "court", "court_name", "ccourt", 
+                   "doc_id", "case_number", "casenames", "case_name"]:
+            if key in doc and doc[key]:
+                all_fields[key] = doc[key]
+        
+        # statute_article 판단: statute_name, law_name, law_name_kr, article_no 중 하나라도 있으면
+        if any(key in all_fields for key in ["statute_name", "law_name", "law_name_kr", "article_no", "article_number", "statute_id"]):
             return cls.STATUTE_ARTICLE
         
-        # precedent_content 판단: case_id, court, casenames, doc_id, precedent_id 중 하나라도 있으면
-        if any(key in metadata for key in ["case_id", "court", "casenames", "doc_id", "precedent_id"]):
+        # precedent_content 판단: precedent_id, court, court_name, casenames, case_name, doc_id, case_number 중 하나라도 있으면
+        if any(key in all_fields for key in ["precedent_id", "case_id", "court", "court_name", "ccourt", 
+                                            "casenames", "case_name", "doc_id", "case_number"]):
             return cls.PRECEDENT_CONTENT
         
         return cls.UNKNOWN

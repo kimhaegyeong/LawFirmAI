@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import re
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
@@ -549,42 +550,12 @@ class UnifiedPromptManager:
                 if isinstance(structured_docs, dict):
                     documents = structured_docs.get("documents", [])
                     if documents:
-                        # structured_documents의 문서들을 context에 추가
-                        doc_contents = []
-                        added_count = 0
-
-                        for doc in documents[:8]:
-                            if isinstance(doc, dict):
-                                normalized_doc = self._normalize_document_fields(doc)
-                                if not normalized_doc:
-                                    logger.debug(f"⚠️ [PROMPT BUILD] Document normalized to None, skipping: {doc.get('id', 'unknown')[:50]}")
-                                    continue
-                                doc_content = normalized_doc.get("content", "")
-                                doc_source = normalized_doc.get("source", "Unknown")
-                                doc_score = normalized_doc.get("relevance_score", 0.0)
-
-                                if doc_content and len(doc_content.strip()) > 10:
-                                    # prompt_optimized_text에 이미 포함되어 있는지 확인
-                                    content_preview = doc_content[:100]
-                                    # 간단한 중복 체크: content의 일부가 prompt_text에 포함되어 있으면 스킵
-                                    if content_preview not in prompt_text:
-                                        # 포함되지 않은 문서 내용 추가
-                                        doc_contents.append(
-                                            f"\n[문서 출처: {doc_source}] [관련도: {doc_score:.3f}]\n{doc_content[:1000]}"
-                                        )
-                                        added_count += 1
-                                    else:
-                                        # 이미 포함되어 있지만 structured_documents에 명시적으로 포함시키기 위해 기록
-                                        logger.debug(f"Document from {doc_source} already in prompt_optimized_text")
-
-                        if doc_contents:
-                            docs_text = "\n\n## 추가 참고 문서\n" + "\n".join(doc_contents)
-                            optimized_context["context"] = optimized_context["context"] + docs_text
-                            logger.info(
-                                f"✅ [CONTEXT OPTIMIZATION] Added {added_count} additional documents "
-                                f"from structured_documents to ensure all search results are included "
-                                f"({len(doc_contents)} chars added)"
-                            )
+                        # 🔥 개선: "추가 참고 문서" 섹션 제거
+                        # "검색된 참고 문서" 섹션만 사용하여 중복 방지
+                        logger.debug(
+                            f"✅ [CONTEXT OPTIMIZATION] Skipping '추가 참고 문서' section. "
+                            f"Documents will be included in '검색된 참고 문서' section only."
+                        )
 
                         # structured_documents를 명시적으로 포함 (항상)
                         # 이는 LLM이 문서 구조를 명확히 이해할 수 있도록 함
@@ -834,6 +805,18 @@ class UnifiedPromptManager:
         """base_prompt 간소화 - 모든 문서 섹션 제거"""
         import re
         
+        # 🔥 개선: 예시 부분 보호 (임시로 플레이스홀더로 교체)
+        # 예시 패턴: (예: "...") 형식 (여러 줄 포함 가능)
+        example_placeholders = {}
+        # 예시 패턴: (예: 로 시작하여 ) 로 끝나는 부분 (최대 500자, 여러 줄 포함)
+        example_pattern = r'\(예:\s*"[^"]{0,500}"\)'
+        example_matches = list(re.finditer(example_pattern, base_prompt, re.DOTALL))
+        # 역순으로 교체하여 인덱스 변경 문제 방지
+        for i, match in enumerate(reversed(example_matches)):
+            placeholder = f"__EXAMPLE_PLACEHOLDER_{len(example_matches) - 1 - i}__"
+            example_placeholders[placeholder] = match.group(0)
+            base_prompt = base_prompt[:match.start()] + placeholder + base_prompt[match.end():]
+        
         # 🔥 개선: 모든 문서 관련 섹션 패턴 추가
         document_section_patterns = [
             r'## 검색된 법률 문서.*?(?=##|$)',
@@ -872,13 +855,58 @@ class UnifiedPromptManager:
         for pattern in sections_to_remove:
             base_prompt = re.sub(pattern, '', base_prompt, flags=re.DOTALL)
         
-        # 중복된 설명 제거
+        # 중복된 설명 제거 (더 정확한 패턴 - 섹션 제목으로 시작하는 것만 매칭)
+        # 🔥 개선: 예시 부분을 보호하기 위해 더 정확한 패턴 사용
+        # "## 한국 법률 특성" 섹션만 매칭하고, 다음 섹션(##) 전까지만 매칭
         base_prompt = re.sub(
-            r'한국 법률 특성.*?실무적 관점.*?(?=##|$)', 
-            '## 한국 법률 특성\n- 성문법 중심, 대법원 판례 중시, 실무적 관점\n', 
+            r'(## 한국 법률 특성\s*\n)(?:### .*?\n)*.*?실무적 관점.*?(?=\n## |$)', 
+            r'\1- 성문법 중심, 대법원 판례 중시, 실무적 관점\n', 
             base_prompt, 
             flags=re.DOTALL
         )
+        
+        # 🔥 성능 최적화: 긴 예시 간소화
+        # 예시 패턴 찾아서 간소화
+        base_prompt = re.sub(
+            r'❌ "([^"]+)" \(잘못된 예\)\s*\n\s*✅ "([^"]+)" \(올바른 예\)',
+            r'❌ "\1" → ✅ "\2"',
+            base_prompt,
+            flags=re.MULTILINE
+        )
+        
+        # 반복되는 예시 제거 (3개 이상 연속)
+        base_prompt = re.sub(
+            r'(❌ "[^"]+" → ✅ "[^"]+"\n){3,}',
+            lambda m: m.group(0).split('\n')[0] + '\n',  # 첫 번째 예시만 유지
+            base_prompt
+        )
+        
+        # 🔥 성능 최적화: 반복 지침 통합
+        # "문서 기반 답변만 허용" 같은 반복 지침 제거
+        base_prompt = re.sub(
+            r'⚠️\s*\*\*중요\*\*:.*?인용하지 마세요\.\s*',
+            '⚠️ 관련 문서만 인용, 최소 2개 필수\n',
+            base_prompt,
+            flags=re.DOTALL
+        )
+        
+        # "띄어쓰기 필수" 반복 제거 (더 정확한 패턴 - 섹션 제목만 매칭)
+        base_prompt = re.sub(
+            r'### \d+\. 띄어쓰기 필수 준수\s*\n.*?(?=### |## |$)',
+            '',
+            base_prompt,
+            flags=re.DOTALL
+        )
+        
+        # "자연스러운 문단 흐름" 반복 제거 (원본 템플릿에는 해당 섹션이 없으므로 비활성화)
+        # 🔥 개선: 원본 템플릿에는 "### 3. 자연스러운 문단 흐름" 섹션이 없으므로 이 패턴은 실행하지 않음
+        # 대신 "자연스러운 문단 흐름 유지"라는 문구만 있는 경우는 그대로 유지
+        # base_prompt = re.sub(
+        #     r'### \d+\. 자연스러운 문단 흐름\s*\n.*?(?=### |## |$)',
+        #     '',
+        #     base_prompt,
+        #     flags=re.DOTALL
+        # )
         
         # 🔥 개선: 중복된 답변 생성 규칙 제거
         base_prompt = re.sub(
@@ -888,6 +916,74 @@ class UnifiedPromptManager:
             flags=re.DOTALL
         )
         
+        # 🔥 개선: 중복된 "문서 인용 규칙" 및 "중요 사항" 섹션 제거
+        # 문서 인용 규칙 및 중요 사항은 나중에 추가되므로 base_prompt에서 제거
+        base_prompt = re.sub(
+            r'## 문서 인용 규칙.*?(?=##|$)',
+            '',
+            base_prompt,
+            flags=re.DOTALL
+        )
+        base_prompt = re.sub(
+            r'## 중요 사항.*?(?=##|$)',
+            '',
+            base_prompt,
+            flags=re.DOTALL
+        )
+        
+        # 🔥 개선: 원본 문서 데이터 제거 ([문서 출처: ...] 형식)
+        base_prompt = re.sub(
+            r'\[문서 출처:\s*[^\]]+\]\s*\[관련도:\s*[\d.]+\].*?(?=\n\n|\[문서 출처:|##|$)',
+            '',
+            base_prompt,
+            flags=re.DOTALL
+        )
+        
+        # 🔥 개선: 의미 없는 단독 헤더 제거 (# 만 있는 줄)
+        base_prompt = re.sub(
+            r'^\s*#\s*$',
+            '',
+            base_prompt,
+            flags=re.MULTILINE
+        )
+        
+        # 🔥 개선: 이중 헤더 수정 (## ## -> ##)
+        base_prompt = re.sub(
+            r'##\s+##\s+',
+            '## ',
+            base_prompt
+        )
+        
+        # 🔥 개선: 연속된 구분선 제거 (--- 다음 ---)
+        base_prompt = re.sub(
+            r'---\s*\n\s*---',
+            '---',
+            base_prompt
+        )
+        
+        # 🔥 개선: base_prompt 끝의 구분선 제거 (나중에 추가되므로)
+        base_prompt = re.sub(
+            r'---\s*$',
+            '',
+            base_prompt,
+            flags=re.MULTILINE
+        )
+        base_prompt = base_prompt.rstrip()
+        
+        # 🔥 개선: 연속된 빈 줄 정리 (3개 이상 연속 빈 줄을 2개로, 2개 연속 빈 줄은 1개로)
+        base_prompt = re.sub(
+            r'\n{3,}',
+            '\n\n',
+            base_prompt
+        )
+        
+        # 🔥 개선: 섹션 제목 앞의 불필요한 빈 줄 제거 (## 앞에 빈 줄이 2개 이상이면 1개로)
+        base_prompt = re.sub(
+            r'\n{2,}(## )',
+            r'\n\1',
+            base_prompt
+        )
+        
         # 🔥 개선: 중복된 체크리스트 제거
         base_prompt = re.sub(
             r'## 답변 작성 체크리스트.*?(?=##|$)',
@@ -895,6 +991,10 @@ class UnifiedPromptManager:
             base_prompt,
             flags=re.DOTALL
         )
+        
+        # 🔥 개선: 예시 부분 복원
+        for placeholder, original_example in example_placeholders.items():
+            base_prompt = base_prompt.replace(placeholder, original_example)
         
         return base_prompt.strip()
     
@@ -1103,9 +1203,11 @@ class UnifiedPromptManager:
                             
                             logger.debug(f"✅ [DOC TYPE RESTORE] retrieved_docs에서 type 및 법률 정보 복원: {orig_type} (source_type={orig_doc.get('source_type', 'N/A')}, statute_name={orig_doc.get('statute_name', 'N/A')}, law_name={orig_doc.get('law_name', 'N/A')}, article_no={orig_doc.get('article_no', 'N/A')})")
             
-            # 문서 정규화 및 중복 제거
+            # 문서 정규화
             normalized_count = 0
             skipped_count = 0
+            normalized_docs_temp = []
+            
             for idx, doc in enumerate(raw_documents):
                 logger.debug(f"🔍 [DEBUG] Processing doc {idx+1}/{doc_count}: type={type(doc)}, keys={list(doc.keys()) if isinstance(doc, dict) else 'N/A'}")
                 # 🔥 개선: doc이 None이거나 dict가 아니면 스킵
@@ -1115,20 +1217,30 @@ class UnifiedPromptManager:
                     continue
                 normalized = self._normalize_document_fields(doc)
                 if normalized and isinstance(normalized, dict):
-                    # 문서 ID 생성 (중복 체크용)
-                    doc_id = self._generate_document_id(normalized)
-                    if doc_id not in seen_doc_ids:
-                        seen_doc_ids.add(doc_id)
-                        normalized_docs.append(normalized)
-                        normalized_count += 1
-                        logger.debug(f"✅ [DEBUG] Doc {idx+1} normalized successfully, has metadata: {bool(normalized.get('metadata'))}")
-                    else:
-                        logger.debug(f"⚠️ [FINAL PROMPT] Duplicate document removed: {doc_id}")
+                    normalized_docs_temp.append(normalized)
+                    normalized_count += 1
+                    logger.debug(f"✅ [DEBUG] Doc {idx+1} normalized successfully, has metadata: {bool(normalized.get('metadata'))}")
                 else:
                     skipped_count += 1
                     logger.warning(f"⚠️ [DEBUG] Doc {idx+1} normalization returned None or invalid (skipped)")
 
             logger.info(f"📋 [FINAL PROMPT] Normalization: {normalized_count} succeeded, {skipped_count} skipped")
+            
+            # 🔥 강화된 중복 제거 적용 (프롬프트 실행 전)
+            before_dedup = len(normalized_docs_temp)
+            normalized_docs = self._enhanced_deduplicate_before_prompt(
+                normalized_docs_temp,
+                query=query,
+                similarity_threshold=0.85,
+                mmr_lambda=0.7
+            )
+            after_dedup = len(normalized_docs)
+            
+            if before_dedup != after_dedup:
+                logger.info(
+                    f"✅ [FINAL PROMPT] Enhanced deduplication: {before_dedup} → {after_dedup} documents "
+                    f"({before_dedup - after_dedup} duplicates removed)"
+                )
 
             # 문서 최적화 (중복 제거 및 정렬)
             before_optimize = len(normalized_docs)
@@ -1734,7 +1846,7 @@ class UnifiedPromptManager:
             if not documents_section:
                 prompt_optimized_text = context.get("prompt_optimized_text", "")
                 if prompt_optimized_text and len(prompt_optimized_text.strip()) > 100:
-                    documents_section = "\n\n## 검색된 법률 문서\n\n"
+                    documents_section = "\n\n## 검색된 참고 문서\n\n"
                     documents_section += prompt_optimized_text[:5000] + ("..." if len(prompt_optimized_text) > 5000 else "")
                     documents_section += "\n\n"
                     logger.info("✅ [FINAL PROMPT] Added prompt_optimized_text as fallback")
@@ -1743,7 +1855,7 @@ class UnifiedPromptManager:
             if not documents_section:
                 context_text = context.get("context", "")
                 if context_text and len(context_text.strip()) > 100 and document_count > 0:
-                    documents_section = "\n\n## 검색된 법률 문서\n\n"
+                    documents_section = "\n\n## 검색된 참고 문서\n\n"
                     documents_section += context_text[:5000] + ("..." if len(context_text) > 5000 else "")
                     documents_section += "\n\n"
                     logger.info("✅ [FINAL PROMPT] Added context_text as fallback")
@@ -1822,16 +1934,24 @@ class UnifiedPromptManager:
         doc_count = len(normalized_docs) if normalized_docs else 0
         has_sufficient_docs = documents_section and normalized_docs and doc_count >= 3
         
+        # 🔥 개선: 문서 인용 규칙 및 중요 사항 섹션 생성 (표 작성 지침 포함)
         if has_sufficient_docs:
-            sorted_docs = sorted(
-                normalized_docs,
-                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
-                reverse=True
-            )[:5]
+            # 문서 인용 규칙 및 중요 사항 섹션 (표 작성 지침 포함)
+            document_citation_section = """
+## 문서 인용 규칙 및 중요 사항
 
-            # 🔥 개선: instruction_section 강화 (TASK 1 - 문서 번호 미표시 문제 해결)
-            instruction_section = """
-**문서별 근거 비교 표 작성** (필수):
+### 문서 인용 방법
+- 답변에서 문서를 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요
+- 각 문서의 출처를 명확히 표시하세요
+- 판례 인용 시에는 법원명과 판결일을 함께 언급하세요
+
+### 문서 활용 원칙
+- 위 문서의 내용을 바탕으로 답변을 생성하세요
+- 문서에서 추론하거나 추측하지 말고, 문서에 명시된 내용만 사용하세요
+- 문서에 없는 정보는 포함하지 마세요
+- 여러 문서의 내용을 종합하여 일관된 답변을 구성하세요
+
+### 문서별 근거 비교 표 작성 (필수)
 - 표의 첫 번째 열('문서 번호' 열)에 반드시 [문서 1], [문서 2] 형식으로 번호 포함
 - 빈 셀 절대 금지 (문서 번호 열이 비어있으면 답변이 거부됩니다)
 - 아래 '검색된 참고 문서' 섹션에 표시된 문서 번호를 그대로 사용
@@ -1852,16 +1972,36 @@ class UnifiedPromptManager:
 
 **중요**: 표를 작성할 때 반드시 각 행의 첫 번째 열에 [문서 N] 형식을 포함하세요. 빈 셀은 절대 허용되지 않습니다.
 """
+            instruction_section = ""
         else:
-            # 🔥 개선: instruction_section 간소화
+            # 🔥 개선: 문서가 부족한 경우 문서 인용 규칙 섹션만 생성
             if doc_count > 0 and doc_count < 3:
-                instruction_section = f"""
+                document_citation_section = f"""
+## 문서 인용 규칙 및 중요 사항
+
+### 문서 인용 방법
+- 답변에서 문서를 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요
+- 각 문서의 출처를 명확히 표시하세요
+- 판례 인용 시에는 법원명과 판결일을 함께 언급하세요
+
+### 문서 활용 원칙
+- 위 문서의 내용을 바탕으로 답변을 생성하세요
+- 문서에서 추론하거나 추측하지 말고, 문서에 명시된 내용만 사용하세요
+- 문서에 없는 정보는 포함하지 마세요
+- 여러 문서의 내용을 종합하여 일관된 답변을 구성하세요
+
 ⚠️ **중요**: 문서가 {doc_count}개로 부족하므로 **문서별 근거 비교 표를 생성하지 마세요**.
 """
             else:
-                instruction_section = """
+                document_citation_section = """
+## 문서 인용 규칙 및 중요 사항
+
+### 문서 활용 원칙
+- 일반 법적 원칙 기반 답변, 실무적 조언 중심
+
 ⚠️ **중요**: 문서가 없으므로 **문서별 근거 비교 표를 생성하지 마세요**.
 """
+            instruction_section = ""
 
         # Citation 요구사항을 프롬프트 상단에 배치 (법률 RAG 핵심 원칙 통합 - 간소화)
         # 🔥 CRITICAL: 문서 수에 따라 요구사항 조정
@@ -1899,18 +2039,16 @@ class UnifiedPromptManager:
         )
         
         # 최종 프롬프트 구성 (개선: 사용자 프롬프트 순서에 맞춰 조정)
-        # 순서: 필수 요구사항 → 질문-문서 불일치 경고 → Role → 답변 원칙 → 답변 프레임워크 → 특별 지침 → 금지 사항 → 출력 스타일 → 검색된 법률 문서 → 사용자 질문 → 답변 형식 가이드
-        # 🔥 개선: answer_generation_instructions 제거 (중복)
+        # 순서: 필수 요구사항 → 질문-문서 불일치 경고 → Role → 답변 원칙 → 특별 지침 → 금지 사항 → 출력 스타일 → 구분선 → 문서 인용 규칙 및 중요 사항 → 검색된 참고 문서 → 사용자 질문 → 답변 시작
+        # 🔥 개선: answer_generation_instructions 제거 (중복), 표 작성 지침을 문서 인용 규칙 섹션에 통합
         final_prompt_with_instructions = f"""{citation_requirement}
-        
-{mismatch_warning}{simplified_base}{documents_section}
-
+{mismatch_warning}{simplified_base}
 ---
-
+{document_citation_section}
+---
+{documents_section}
 ## 사용자 질문
 {query}
-
-{instruction_section}
 
 답변을 시작하세요:
 """
@@ -2365,8 +2503,8 @@ class UnifiedPromptManager:
         if not documents or len(documents) == 0:
             return ""
 
-        documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
-        documents_section += "다음 문서들은 질문에 대한 답변을 위해 검색된 관련 법률 정보입니다.\n\n"
+        documents_section = "\n\n## 검색된 참고 문서\n\n"
+        documents_section += "다음 5개의 문서를 반드시 참고하여 답변하세요. 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
 
         for idx, doc in enumerate(documents, 1):
             # TASK 3: None 체크 추가
@@ -2384,8 +2522,8 @@ class UnifiedPromptManager:
         if not documents or len(documents) == 0:
             return ""
 
-        documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
-        documents_section += "다음 문서들은 질문에 대한 답변을 위해 검색된 관련 법률 정보입니다.\n\n"
+        documents_section = "\n\n## 검색된 참고 문서\n\n"
+        documents_section += "다음 5개의 문서를 반드시 참고하여 답변하세요. 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
 
         import re
 
@@ -2859,31 +2997,12 @@ class UnifiedPromptManager:
     # 기본 프롬프트 템플릿들
     def _get_korean_legal_expert_prompt(self) -> str:
         """한국 법률 전문가 기본 프롬프트"""
-        return """---
-# Role: 대한민국 법률 전문가 AI 어시스턴트
+        return """# Role: 대한민국 법률 전문가 AI 어시스턴트
 
 당신은 대한민국 법률 전문 상담 AI입니다. 법학 석사 이상의 전문 지식을 보유하고 있으며, 다양한 법률 분야에 대한 실무 경험을 갖춘 것처럼 행동합니다.
 
 ## 한국 법률 특성
-
-### 1. 성문법 중심
-- 민법, 형법, 상법 등 성문법 우선 적용
-- 법령의 정확한 조문 인용 필수
-- 최신 법령 개정사항 반영
-
-### 2. 대법원 판례 중시
-- 대법원 판례의 구속력 인정
-- 최신 판례 우선 참조
-- 판례 번호와 핵심 판결요지 명시
-
-### 3. 헌법재판소 결정
-- 헌법재판소 결정의 중요성
-- 위헌법률심판, 헌법소원 등
-
-### 4. 실무적 관점
-- 법원, 검찰, 법무부 실무 기준
-- 변호사 실무 경험 반영
-- 실제 사건 처리 경험 기반
+- 성문법 중심, 대법원 판례 중시, 실무적 관점
 
 ## 핵심 역할
 
@@ -2901,76 +3020,12 @@ class UnifiedPromptManager:
 
 ### 2. 출처 표기 형식 통일
 - 출처는 답변 내용에 자연스럽게 통합하되, 반드시 `[문서 N]` 형식을 사용하세요
-- 법조문 인용: "민법 제543조에 따르면..." [문서 1]
-- 판례 인용: "대법원 판결에 의하면..." [문서 2] 또는 "서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면..." [문서 2]
-- `[출처: 문서 N]`, `**출처**: 문서명` 등 다른 형식은 사용하지 마세요
-- 예시:
-  * ❌ "불법행위로 인한 손해배상청구권은 손해 및 가해자를 안 날부터 3년간 행사하지 아니하면 시효로 인해 소멸합니다 [출처: 문서 4]."
-  * ✅ "불법행위로 인한 손해배상청구권은 손해 및 가해자를 안 날부터 3년간 행사하지 아니하면 시효로 인해 소멸합니다 [문서 4]."
+- 법조문 인용: "민법 제543조에 따르면..." 형식 사용
+- 판례 인용: `[문서 N]` 형식과 함께 법원명과 판결일을 함께 언급하세요
+  (예: "[문서 1] 서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...")
+- 자연스러운 문단 흐름 유지, 과도한 구조화 지양
 
-### 3. 자연스러운 문단 흐름
-- **과도한 구조화 지양**: 표나 복잡한 섹션 구분은 최소화하세요
-- **자연스러운 문단 흐름**: 법적 내용을 논리적으로 연결된 문단으로 설명하세요
-- **표 사용 최소화**: 문서별 근거 비교 표는 답변 말미에만 간략히 포함 (선택사항)
-- **번호 매기기 제한**: 3개 이상의 항목이 연속될 때만 번호 사용, 그 외에는 자연스러운 문장으로 연결
-- **섹션 제목 최소화**: "[질문 요약]", "[핵심 답변]" 등 명시적 섹션 제목 대신 자연스러운 문단 전환 사용
-- 예시:
-  * ❌ "1. 소멸시효 관리: ... 2. 과실상계 고려: ... 3. 손해액 산정: ..."
-  * ✅ "불법행위로 인한 손해배상과 관련하여 실무에서는 소멸시효 관리가 중요합니다. 손해 및 가해자를 안 날로부터 3년 이내에 행사해야 하므로... 또한 피해자에게도 과실이 있다면 과실상계가 적용될 수 있으므로... 그리고 손해배상액을 청구할 때는..."
-
-### 4. 접근성 있는 언어 및 자연스러운 어조
-- 전문 법률 용어는 쉬운 말로 풀어서 설명
-- 필요시 예시를 들어 이해를 돕기
-- 복잡한 개념은 단계별로 설명
-- **격식체 유지하되 친근함 추가**: 존댓말을 사용하되, 딱딱하지 않게 작성
-- **직접적 표현**: "귀하의 질문은...으로 이해됩니다" 대신 "말씀하신 [내용]에 대해 설명드리겠습니다" 사용
-- **자연스러운 전환**: "또한", "그런데", "다만", "참고로" 등 자연스러운 연결어 사용
-- **불확실성 표현 자연스럽게**: "명시되어 있지 않습니다" 대신 "직접 나와 있지는 않지만" 같은 자연스러운 표현
-- 예시:
-  * ❌ "제공된 문서들에는 민법 제750조의 조문 내용이 직접적으로 명시되어 있지 않습니다. 그러나 문서들은..."
-  * ✅ "제공된 문서에는 민법 제750조의 조문이 직접 나와 있지는 않지만, 불법행위로 인한 손해배상과 관련된 중요한 내용들을 다루고 있습니다."
-
-### 5. 명확한 한계 설정
-- 답변 시작 또는 종료 시 다음 면책 문구를 자연스럽게 포함:
-  > "참고로, 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."
-
-### 6. 띄어쓰기 필수 준수
-- **반드시 모든 문장에 적절한 띄어쓰기를 적용하세요**
-- 띄어쓰기 없는 답변은 절대 생성하지 마세요
-- 예시:
-  * ❌ "민사법상계약해지의요건" (잘못된 예)
-  * ✅ "민사법에서 계약 해지의 요건" (올바른 예)
-  * ❌ "당사자일방이계약을해지하면" (잘못된 예)
-  * ✅ "당사자 일방이 계약을 해지하면" (올바른 예)
-- 조사(은, 는, 이, 가, 을, 를 등) 앞에 띄어쓰기가 필요 없지만, 명사와 조사 사이에는 띄어쓰기를 하지 마세요
-- 하지만 명사와 명사 사이, 동사와 조사 사이에는 적절한 띄어쓰기를 적용하세요
-- 모든 문장에서 자연스러운 띄어쓰기를 반드시 적용하세요
-
-### 7. 윤리적 경계
-- 명백히 불법적이거나 비윤리적인 행위에 대한 조력 거부
-- 소송 사기, 증거 조작 등 불법 행위 관련 질문에는 답변 거부
-- 범죄 행위 방법이나 법망 회피 방법은 절대 제공하지 않음
-
-## 답변 프레임워크
-
-### 일반 법률 질문
-```
-말씀하신 [질문 내용]에 대해 설명드리겠습니다.
-
-[관련 법률 및 조항을 자연스럽게 언급하며 설명]
-
-[법적 해설을 논리적으로 연결된 문단으로 설명]
-
-[실무적 조언을 자연스러운 문장으로 제시]
-
-[주의사항 및 참고사항]
-
-[면책 문구를 자연스럽게 포함]
-```
-
-**중요**: "[질문 요약]", "[관련 법률]" 등 명시적 섹션 제목은 사용하지 말고, 자연스러운 문단 전환으로 내용을 연결하세요.
-
-### 분쟁/소송 관련 질문
+### 3. 분쟁/소송 관련 질문
 ```
 말씀하신 상황을 정리하면... 이 사안의 핵심 쟁점은... 관련 법리와 판례에 따르면...
 
@@ -3010,12 +3065,11 @@ class UnifiedPromptManager:
 
 - **자연스러운 대화형 어조**: 존댓말을 사용하되 딱딱하지 않게, 친근하면서도 전문적으로
 - **문단 구분 명확히**: 자연스러운 문단 전환으로 내용을 연결
-- **중요 내용은 **강조**: 핵심 법적 정보는 강조 표시
-- **출처 표기**: 법원명과 판결일을 직접 언급하여 자연스럽게 표기 (예: "서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...")
+- **중요 내용은 강조**: 핵심 법적 정보는 강조 표시
+- **출처 표기**: 법원명과 판결일을 직접 언급하여 자연스럽게 표기 (예: "[문서 1] 서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...")
 - **번호 매기기 제한**: 3개 이상의 연속 항목일 때만 사용, 그 외에는 자연스러운 문장으로 연결
 - **표 사용 최소화**: 과도한 표는 지양하고, 필요시 답변 말미에만 간략히 포함
-- **띄어쓰기 필수**: 모든 문장에 자연스러운 띄어쓰기를 반드시 적용하세요
----"""
+- **띄어쓰기 필수**: 모든 문장에 자연스러운 띄어쓰기를 반드시 적용하세요"""
 
     def _get_natural_consultant_prompt(self) -> str:
         """자연스러운 상담사 프롬프트"""
@@ -3741,6 +3795,436 @@ class UnifiedPromptManager:
         
         return "unknown"
     
+    def _enhanced_deduplicate_before_prompt(
+        self,
+        documents: List[Dict[str, Any]],
+        query: str = "",
+        similarity_threshold: float = 0.85,
+        mmr_lambda: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        프롬프트 실행 전 강화된 중복 제거 (참고: RAG 중복 문서 제거 방법)
+        
+        다층 중복 제거 전략:
+        1. Document-level distinct selection (같은 document_id의 chunk 중 최고 점수만)
+        2. Exact duplicate 제거 (MD5 해시)
+        3. Near-duplicate 제거 (텍스트 유사도 ≥ threshold)
+        4. MMR 적용 (다양성 확보 + 중복 제거)
+        
+        Args:
+            documents: 중복 제거할 문서 리스트
+            query: 검색 쿼리 (MMR 계산용)
+            similarity_threshold: Near-duplicate 판단 임계값 (기본 0.85)
+            mmr_lambda: MMR 람다 파라미터 (0.0=다양성만, 1.0=관련성만, 기본 0.7)
+        
+        Returns:
+            중복 제거된 문서 리스트
+        """
+        if not documents:
+            return []
+        
+        # 환경 변수로 임계값 조정 가능
+        similarity_threshold = float(os.getenv("DEDUP_SIMILARITY_THRESHOLD", str(similarity_threshold)))
+        mmr_lambda = float(os.getenv("MMR_LAMBDA", str(mmr_lambda)))
+        enable_enhanced_dedup = os.getenv("ENABLE_ENHANCED_DEDUP", "true").lower() == "true"
+        
+        if not enable_enhanced_dedup:
+            # 기본 중복 제거만 수행
+            return self._basic_deduplicate(documents)
+        
+        logger.info(f"🔍 [ENHANCED DEDUP] Starting enhanced deduplication: {len(documents)} documents")
+        
+        # 1단계: Document-level distinct selection
+        # 같은 document_id/source_id의 chunk 중 가장 점수 높은 것만 선택
+        deduplicated = self._document_level_distinct_selection(documents)
+        logger.info(f"✅ [ENHANCED DEDUP] Step 1 (Document-level distinct): {len(documents)} → {len(deduplicated)}")
+        
+        # 2단계: Exact duplicate 제거 (MD5 해시)
+        deduplicated = self._remove_exact_duplicates(deduplicated)
+        logger.info(f"✅ [ENHANCED DEDUP] Step 2 (Exact duplicates): {len(deduplicated)} documents")
+        
+        # 3단계: Near-duplicate 제거 (텍스트 유사도 기반)
+        deduplicated = self._remove_near_duplicates(deduplicated, similarity_threshold)
+        logger.info(f"✅ [ENHANCED DEDUP] Step 3 (Near-duplicates): {len(deduplicated)} documents")
+        
+        # 4단계: MMR 적용 (다양성 확보 + 최종 중복 제거)
+        deduplicated = self._apply_mmr_deduplication(deduplicated, query, mmr_lambda)
+        logger.info(f"✅ [ENHANCED DEDUP] Step 4 (MMR): {len(deduplicated)} documents")
+        
+        removed_count = len(documents) - len(deduplicated)
+        if removed_count > 0:
+            logger.info(
+                f"🎯 [ENHANCED DEDUP] Final result: {len(documents)} → {len(deduplicated)} "
+                f"({removed_count} duplicates removed, {removed_count/len(documents)*100:.1f}%)"
+            )
+        else:
+            logger.info(
+                f"✅ [ENHANCED DEDUP] Final result: {len(documents)} → {len(deduplicated)} "
+                f"(no duplicates found, all documents are unique)"
+            )
+        
+        return deduplicated
+    
+    def _document_level_distinct_selection(
+        self,
+        documents: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Document-level distinct selection
+        같은 document_id/source_id의 chunk 중 가장 점수 높은 것만 선택
+        (참고: PostgreSQL DISTINCT ON 방식)
+        """
+        if not documents:
+            return []
+        
+        # 문서 그룹별로 최고 점수 문서만 선택
+        doc_groups = {}  # {doc_key: best_doc}
+        
+        for doc in documents:
+            # 문서 식별 키 생성
+            doc_key = self._get_document_group_key(doc)
+            if not doc_key:
+                # 키를 생성할 수 없으면 그대로 추가 (나중에 처리)
+                continue
+            
+            # 관련성 점수 추출 (여러 점수 중 최고값 사용)
+            score = self._get_document_score(doc)
+            
+            # 같은 문서 그룹이 없거나 현재 문서가 더 높은 점수면 교체
+            if doc_key not in doc_groups or score > self._get_document_score(doc_groups[doc_key]):
+                doc_groups[doc_key] = doc
+        
+        # 그룹화되지 않은 문서들도 추가
+        result = list(doc_groups.values())
+        for doc in documents:
+            doc_key = self._get_document_group_key(doc)
+            if not doc_key:
+                # 키를 생성할 수 없는 문서는 그대로 추가
+                result.append(doc)
+        
+        return result
+    
+    def _get_document_group_key(self, doc: Dict[str, Any]) -> Optional[str]:
+        """문서 그룹 키 생성 (document_id 또는 source_id 기반)"""
+        # 우선순위 1: source_id + source_type
+        source_id = doc.get("source_id") or doc.get("metadata", {}).get("source_id")
+        source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("type")
+        
+        if source_id and source_type:
+            return f"{source_type}_{source_id}"
+        
+        # 우선순위 2: doc_id
+        doc_id = doc.get("doc_id") or doc.get("id") or doc.get("metadata", {}).get("doc_id")
+        if doc_id and source_type:
+            return f"{source_type}_doc_{doc_id}"
+        
+        # 우선순위 3: 법령 조문 (law_name + article_no)
+        law_name = doc.get("law_name") or doc.get("metadata", {}).get("law_name")
+        article_no = doc.get("article_no") or doc.get("metadata", {}).get("article_no")
+        if law_name and article_no:
+            return f"law_{law_name}_{article_no}"
+        
+        # 우선순위 4: 판례 (case_number 또는 case_name)
+        case_number = doc.get("case_number") or doc.get("metadata", {}).get("case_number")
+        case_name = doc.get("case_name") or doc.get("metadata", {}).get("case_name")
+        if case_number:
+            court = doc.get("court") or doc.get("metadata", {}).get("court", "")
+            return f"case_{court}_{case_number}" if court else f"case_{case_number}"
+        elif case_name:
+            court = doc.get("court") or doc.get("metadata", {}).get("court", "")
+            return f"case_{court}_{case_name}" if court else f"case_{case_name}"
+        
+        return None
+    
+    def _get_document_score(self, doc: Dict[str, Any]) -> float:
+        """문서의 관련성 점수 추출 (여러 점수 중 최고값)"""
+        scores = [
+            doc.get("combined_relevance_score", 0.0),
+            doc.get("cross_encoder_score", 0.0),
+            doc.get("relevance_score", 0.0),
+            doc.get("final_weighted_score", 0.0),
+            doc.get("score", 0.0)
+        ]
+        return max([s for s in scores if s and isinstance(s, (int, float))], default=0.0)
+    
+    def _remove_exact_duplicates(
+        self,
+        documents: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Exact duplicate 제거 (MD5 해시 기반)"""
+        if not documents:
+            return []
+        
+        import hashlib
+        seen_hashes = set()
+        deduplicated = []
+        
+        for doc in documents:
+            content = doc.get("content", "") or doc.get("text", "")
+            if not content:
+                deduplicated.append(doc)
+                continue
+            
+            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            if content_hash not in seen_hashes:
+                seen_hashes.add(content_hash)
+                deduplicated.append(doc)
+            else:
+                logger.debug(f"⚠️ [EXACT DEDUP] Removed exact duplicate: {content_hash[:16]}...")
+        
+        return deduplicated
+    
+    def _remove_near_duplicates(
+        self,
+        documents: List[Dict[str, Any]],
+        similarity_threshold: float = 0.85
+    ) -> List[Dict[str, Any]]:
+        """
+        Near-duplicate 제거 (텍스트 유사도 기반)
+        cosine similarity ≥ threshold인 문서 중 하나만 유지
+        """
+        if not documents or len(documents) <= 1:
+            return documents
+        
+        deduplicated = []
+        seen_docs = []  # 이미 선택된 문서들
+        
+        # 점수 순으로 정렬 (높은 점수 우선)
+        sorted_docs = sorted(
+            documents,
+            key=lambda x: self._get_document_score(x),
+            reverse=True
+        )
+        
+        for doc in sorted_docs:
+            content = doc.get("content", "") or doc.get("text", "")
+            if not content:
+                deduplicated.append(doc)
+                continue
+            
+            # 이미 선택된 문서들과 유사도 계산
+            is_near_duplicate = False
+            for seen_doc in seen_docs:
+                similarity = self._calculate_text_similarity_fast(doc, seen_doc)
+                if similarity >= similarity_threshold:
+                    # 유사도가 높은 경우, 점수 비교
+                    current_score = self._get_document_score(doc)
+                    seen_score = self._get_document_score(seen_doc)
+                    
+                    if current_score > seen_score:
+                        # 현재 문서가 더 높은 점수면 기존 문서 제거하고 현재 문서 추가
+                        logger.debug(
+                            f"🔄 [NEAR DEDUP] Replaced similar document "
+                            f"(similarity={similarity:.2f}, score: {seen_score:.2f} → {current_score:.2f})"
+                        )
+                        deduplicated.remove(seen_doc)
+                        seen_docs.remove(seen_doc)
+                        is_near_duplicate = False
+                        break
+                    else:
+                        # 기존 문서가 더 높은 점수면 현재 문서 스킵
+                        logger.debug(
+                            f"⚠️ [NEAR DEDUP] Removed similar document "
+                            f"(similarity={similarity:.2f}, score: {current_score:.2f} <= {seen_score:.2f})"
+                        )
+                        is_near_duplicate = True
+                        break
+            
+            if not is_near_duplicate:
+                deduplicated.append(doc)
+                seen_docs.append(doc)
+        
+        return deduplicated
+    
+    def _calculate_text_similarity_fast(
+        self,
+        doc1: Dict[str, Any],
+        doc2: Dict[str, Any]
+    ) -> float:
+        """
+        빠른 텍스트 유사도 계산 (Jaccard similarity + 키워드 유사도)
+        프롬프트 실행 전 단계에서 사용 (성능 최적화)
+        """
+        content1 = doc1.get("content", "") or doc1.get("text", "") or ""
+        content2 = doc2.get("content", "") or doc2.get("text", "") or ""
+        
+        if not content1 or not content2:
+            return 0.0
+        
+        # 1. Jaccard 유사도 (단어 기반)
+        words1 = set(content1.lower().split())
+        words2 = set(content2.lower().split())
+        
+        if words1 and words2:
+            intersection = len(words1.intersection(words2))
+            union = len(words1.union(words2))
+            jaccard_sim = intersection / union if union > 0 else 0.0
+        else:
+            jaccard_sim = 0.0
+        
+        # 2. 법률 용어 키워드 유사도 (법률 도메인 특화)
+        keywords1 = self._extract_legal_keywords_fast(content1)
+        keywords2 = self._extract_legal_keywords_fast(content2)
+        
+        if keywords1 or keywords2:
+            keyword_intersection = len(keywords1.intersection(keywords2))
+            keyword_union = len(keywords1.union(keywords2))
+            keyword_sim = keyword_intersection / keyword_union if keyword_union > 0 else 0.0
+        else:
+            keyword_sim = 0.0
+        
+        # 3. 문서 타입 유사도
+        type1 = doc1.get("type", "").lower() if doc1.get("type") else ""
+        type2 = doc2.get("type", "").lower() if doc2.get("type") else ""
+        type_sim = 1.0 if type1 == type2 and type1 else 0.0
+        
+        # 가중 평균 (법률 키워드에 더 높은 가중치)
+        combined_sim = (
+            0.3 * jaccard_sim +      # 단어 유사도
+            0.5 * keyword_sim +       # 법률 키워드 유사도 (높은 가중치)
+            0.2 * type_sim            # 타입 유사도
+        )
+        
+        return min(1.0, combined_sim)
+    
+    def _extract_legal_keywords_fast(self, text: str, max_keywords: int = 10) -> set:
+        """법률 문서에서 핵심 키워드 빠르게 추출"""
+        if not text:
+            return set()
+        
+        import re
+        
+        keywords = set()
+        
+        # 법률 용어 패턴 추출
+        legal_patterns = [
+            r'([가-힣]+법)',  # 법률명
+            r'제\s*(\d+)\s*조',  # 조문 번호
+            r'법\s*제\s*(\d+)\s*조',  # 법 제N조
+            r'대법원\s*(\d{4}\.\d{1,2}\.\d{1,2})',  # 판례 날짜
+            r'판결\s*(\d+[가-힣]+\d+)',  # 판결 번호
+        ]
+        
+        for pattern in legal_patterns:
+            matches = re.findall(pattern, text[:1000])  # 처음 1000자만 검색 (성능 최적화)
+            for match in matches[:3]:  # 각 패턴당 최대 3개
+                if isinstance(match, tuple):
+                    keywords.update([m for m in match if m])
+                else:
+                    keywords.add(match)
+        
+        # 2글자 이상 한글 단어 추출 (법률 용어 중심)
+        words = re.findall(r'[가-힣]{2,}', text[:500])  # 처음 500자만
+        word_freq = {}
+        for word in words:
+            if len(word) >= 2:
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # 빈도순 정렬하여 상위 키워드 추가
+        sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+        keywords.update([word for word, _ in sorted_words[:max_keywords - len(keywords)]])
+        
+        return keywords
+    
+    def _apply_mmr_deduplication(
+        self,
+        documents: List[Dict[str, Any]],
+        query: str = "",
+        mmr_lambda: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        MMR (Maximal Marginal Relevance) 적용
+        중복 제거 + 다양성 확보
+        """
+        if not documents or len(documents) <= 1:
+            return documents
+        
+        # 점수 순으로 정렬
+        sorted_docs = sorted(
+            documents,
+            key=lambda x: self._get_document_score(x),
+            reverse=True
+        )
+        
+        selected = []
+        remaining = sorted_docs.copy()
+        
+        # 첫 번째 문서는 가장 관련성 높은 것으로 선택
+        if remaining:
+            selected.append(remaining.pop(0))
+        
+        # MMR 알고리즘 적용
+        while remaining and len(selected) < len(documents):  # 모든 문서를 검토하되 중복 제거
+            best_doc = None
+            best_mmr_score = -float('inf')
+            
+            for candidate in remaining:
+                # 관련성 점수
+                relevance = self._get_document_score(candidate)
+                
+                # 다양성 점수 (이미 선택된 문서와의 최대 유사도)
+                max_similarity = 0.0
+                for selected_doc in selected:
+                    similarity = self._calculate_text_similarity_fast(candidate, selected_doc)
+                    max_similarity = max(max_similarity, similarity)
+                
+                diversity = 1.0 - max_similarity
+                
+                # MMR 점수
+                mmr_score = mmr_lambda * relevance + (1 - mmr_lambda) * diversity
+                
+                if mmr_score > best_mmr_score:
+                    best_mmr_score = mmr_score
+                    best_doc = candidate
+            
+            if best_doc:
+                # 유사도가 너무 높으면 제거 (중복으로 간주)
+                max_sim_with_selected = max([
+                    self._calculate_text_similarity_fast(best_doc, sel_doc)
+                    for sel_doc in selected
+                ]) if selected else 0.0
+                
+                if max_sim_with_selected >= 0.9:  # 매우 유사한 문서는 제거
+                    logger.debug(
+                        f"⚠️ [MMR DEDUP] Removed highly similar document "
+                        f"(similarity={max_sim_with_selected:.2f}, mmr_score={best_mmr_score:.2f})"
+                    )
+                    remaining.remove(best_doc)
+                else:
+                    selected.append(best_doc)
+                    remaining.remove(best_doc)
+            else:
+                break
+        
+        return selected
+    
+    def _basic_deduplicate(
+        self,
+        documents: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """기본 중복 제거 (강화된 중복 제거 비활성화 시 사용)"""
+        import hashlib
+        seen_hashes = set()
+        seen_doc_ids = set()
+        deduplicated = []
+        
+        for doc in documents:
+            # MD5 해시 기반 중복 제거
+            content = doc.get("content", "") or doc.get("text", "")
+            if content:
+                content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+                if content_hash in seen_hashes:
+                    continue
+                seen_hashes.add(content_hash)
+            
+            # 문서 ID 기반 중복 제거
+            doc_id = self._generate_document_id(doc)
+            if doc_id not in seen_doc_ids:
+                seen_doc_ids.add(doc_id)
+                deduplicated.append(doc)
+        
+        return deduplicated
+    
     def _get_summary_agent(self):
         """요약 에이전트 가져오기 (지연 초기화)"""
         if self._summary_agent is None:
@@ -3867,7 +4351,7 @@ class UnifiedPromptManager:
     def _build_documents_section(self, sorted_docs: List[Dict[str, Any]], query: str) -> str:
         """문서 섹션 생성 - 문서 ID 기반 일관된 번호 부여"""
         if not sorted_docs:
-            return "\n\n## 검색된 법률 문서\n\n검색된 문서가 없습니다.\n"
+            return "\n\n## 검색된 참고 문서\n\n검색된 문서가 없습니다.\n"
         
         # 🔥 개선: 문서 ID 기반 번호 매핑 생성
         doc_id_to_number = {}
@@ -3886,8 +4370,6 @@ class UnifiedPromptManager:
         # 🔥 개선: 통합된 단일 문서 섹션 생성 (중복 제거)
         documents_section = "\n\n## 검색된 참고 문서\n\n"
         documents_section += f"다음 {len(sorted_docs)}개의 문서를 반드시 참고하여 답변하세요. 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
-        # 🔥 개선: documents_section의 중복 지시 제거 (instruction_section에 이미 포함)
-        documents_section += "**⚠️ 문서 번호 사용**: 답변에서 문서를 언급할 때는 `[문서 1]`, `[문서 2]` 형식을 사용하세요.\n\n"
         
         # 질문-문서 불일치 경고 추가
         if mismatch_warning:
@@ -3913,8 +4395,29 @@ class UnifiedPromptManager:
                 0.0
             )
             
-            # 문서 내용 추출
-            content = doc.get("content", "") or doc.get("text", "")
+            # 문서 내용 추출 (필요한 필드만 포함)
+            content = self._extract_document_content_for_prompt(doc)
+            
+            # 🔥 개선: 문서 내용 잘림 방지 (기본값을 크게 설정, 환경 변수로 조정 가능)
+            # 토큰 제한을 고려하여 기본값을 5000자로 설정 (기존 500자에서 증가)
+            MAX_DOC_CONTENT_LENGTH = int(os.getenv("PROMPT_MAX_DOC_CONTENT_LENGTH", "5000"))
+            
+            original_content_length = len(content) if content else 0
+            if content and len(content) > MAX_DOC_CONTENT_LENGTH:
+                # 질문과 관련된 부분 우선 추출 (스마트 트렁케이션)
+                content = self._smart_truncate_document(content, MAX_DOC_CONTENT_LENGTH, query)
+                if len(content) > MAX_DOC_CONTENT_LENGTH:
+                    # 문장 단위로 자르기 (문장 중간에서 자르지 않음)
+                    sentences = content.split('。') if '。' in content else content.split('.')
+                    truncated = ""
+                    for sentence in sentences:
+                        if len(truncated) + len(sentence) > MAX_DOC_CONTENT_LENGTH:
+                            break
+                        truncated += sentence + ("。" if '。' in content else ".")
+                    content = truncated + "..." if truncated else content[:MAX_DOC_CONTENT_LENGTH] + "..."
+                logger.debug(f"⚡ [DOC CONTENT] 문서 {doc_number} 내용 축약: {original_content_length}자 → {len(content)}자")
+            elif content:
+                logger.debug(f"✅ [DOC CONTENT] 문서 {doc_number} 전체 내용 포함: {original_content_length}자")
             
             # 요약 정보가 있으면 사용
             summary_data = doc.get("summary_data")
@@ -3931,22 +4434,18 @@ class UnifiedPromptManager:
             # 요약이 있으면 요약 표시, 없으면 전체 내용 표시
             if has_summary:
                 if summary_text:
-                    documents_section += f"**요약**: {summary_text}\n\n"
+                    # 🔥 개선: 요약도 길이 제한 완화 (전체 요약 포함)
+                    # 요약은 일반적으로 짧으므로 전체 포함
+                    documents_section += f"**핵심 내용**: {summary_text}\n\n"
                 if key_points and isinstance(key_points, list):
-                    key_points_str = "\n".join([f"- {kp}" for kp in key_points[:3]])
+                    # 🔥 개선: 핵심 쟁점도 더 많이 포함 (3개 → 5개)
+                    key_points_str = "\n".join([f"- {kp}" for kp in key_points[:5]])
                     if key_points_str:
                         documents_section += f"**핵심 쟁점**:\n{key_points_str}\n\n"
             
-            # 전체 내용 표시 (요약이 있어도 핵심 내용 포함)
+            # 전체 내용 표시 (필요한 필드만 포함, 길이 제한 완화)
             if content:
-                # 내용이 너무 길면 축약 (요약이 있으면 더 짧게)
-                max_length = 2000 if has_summary else 3000
-                if len(content) > max_length:
-                    # 질문과 관련된 부분 우선 추출 시도
-                    content_preview = self._smart_truncate_document(content, max_length, query)
-                    documents_section += f"**내용**:\n{content_preview}\n\n"
-                else:
-                    documents_section += f"**내용**:\n{content}\n\n"
+                documents_section += f"**내용**:\n{content}\n\n"
             else:
                 documents_section += "**내용**: (내용 없음)\n\n"
             
@@ -3991,6 +4490,60 @@ class UnifiedPromptManager:
             max_length = self.MAX_DOC_LENGTH_COMMENTARY
         
         return doc_title, max_length
+    
+    def _extract_document_content_for_prompt(self, doc: Dict[str, Any]) -> str:
+        """
+        프롬프트에 필요한 문서 내용만 추출 (필요한 필드만 포함)
+        
+        Args:
+            doc: 원본 문서 딕셔너리
+        
+        Returns:
+            필터링된 문서 내용 문자열
+        """
+        if not doc or not isinstance(doc, dict):
+            return ""
+        
+        # 1. content 필드 추출 (우선순위: content > text)
+        content = doc.get("content", "") or doc.get("text", "")
+        
+        if not content:
+            return ""
+        
+        # 2. 불필요한 HTML 태그 및 특수 문자 정리
+        content = self._clean_content(content)
+        
+        # 3. 문서 타입별 추가 정보 포함 (필요한 경우)
+        doc_type = doc.get("type") or doc.get("source_type", "")
+        
+        # 법령 조문인 경우: 법률명과 조문 번호 정보 포함
+        if doc_type in ["statute_article", "statute"]:
+            law_name = doc.get("law_name") or doc.get("statute_name", "")
+            article_no = doc.get("article_no") or doc.get("article_number", "")
+            if law_name and article_no and f"{law_name} 제{article_no}조" not in content:
+                # 법률 정보가 content에 없으면 앞에 추가
+                content = f"{law_name} 제{article_no}조\n\n{content}"
+        
+        # 판례인 경우: 판례 정보 포함
+        elif doc_type in ["precedent_content", "case", "precedent"]:
+            case_name = doc.get("case_name", "")
+            court = doc.get("court", "")
+            case_number = doc.get("case_number", "")
+            
+            case_info_parts = []
+            if court:
+                case_info_parts.append(court)
+            if case_name:
+                case_info_parts.append(case_name)
+            if case_number:
+                case_info_parts.append(f"({case_number})")
+            
+            if case_info_parts and " ".join(case_info_parts) not in content[:200]:
+                # 판례 정보가 content 앞부분에 없으면 추가
+                case_info = " ".join(case_info_parts)
+                content = f"{case_info}\n\n{content}"
+        
+        return content.strip()
     
     def _format_documents_for_context(
         self, 

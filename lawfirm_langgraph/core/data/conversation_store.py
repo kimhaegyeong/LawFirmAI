@@ -27,6 +27,28 @@ class ConversationStore:
         self.logger = get_logger(__name__)
         self.db_path = db_path
         
+        # 연결 풀 초기화 (필수)
+        try:
+            from core.data.connection_pool import get_connection_pool
+            self._connection_pool = get_connection_pool(self.db_path)
+            self.logger.debug("Using connection pool for conversation database")
+        except ImportError:
+            try:
+                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+                self._connection_pool = get_connection_pool(self.db_path)
+                self.logger.debug("Using connection pool for conversation database")
+            except ImportError:
+                raise RuntimeError(
+                    "Connection pool is required. "
+                    "Please ensure connection_pool module is available. "
+                    "Direct SQLite connections are not allowed per project rules."
+                )
+        if not self._connection_pool:
+            raise RuntimeError(
+                "Connection pool initialization failed. "
+                "Direct SQLite connections are not allowed per project rules."
+            )
+        
         # 데이터베이스 초기화
         self._create_tables()
     
@@ -184,12 +206,16 @@ class ConversationStore:
     @contextmanager
     def get_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
-        conn = sqlite3.connect(self.db_path)
+        # 연결 풀 필수 사용
+        if not self._connection_pool:
+            raise RuntimeError("Connection pool is required")
+        conn = self._connection_pool.get_connection()
         conn.row_factory = sqlite3.Row
         try:
             yield conn
         finally:
-            conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
+            pass
     
     def save_session(self, session_data: Dict[str, Any]) -> bool:
         """세션 저장"""

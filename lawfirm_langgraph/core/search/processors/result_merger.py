@@ -19,6 +19,15 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
+# ModelCacheManager import
+try:
+    from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager
+except ImportError:
+    try:
+        from core.shared.utils.model_cache_manager import get_model_cache_manager
+    except ImportError:
+        get_model_cache_manager = None
+
 logger = get_logger(__name__)
 
 
@@ -216,9 +225,27 @@ class ResultRanker:
                         model_name = config.embedding_model
                     cls._semantic_model_name = model_name
                 
-                cls._semantic_model = SentenceTransformer(cls._semantic_model_name)
-                logger = logging.getLogger(__name__)
-                logger.debug(f"Semantic model loaded and cached: {cls._semantic_model_name}")
+                # ModelCacheManager 사용 (중복 로딩 방지)
+                if get_model_cache_manager:
+                    try:
+                        model_cache = get_model_cache_manager()
+                        cls._semantic_model = model_cache.get_model(cls._semantic_model_name)
+                        if cls._semantic_model:
+                            logger = logging.getLogger(__name__)
+                            logger.debug(f"Semantic model loaded via cache manager: {cls._semantic_model_name}")
+                        else:
+                            raise ValueError(f"Failed to load model {cls._semantic_model_name} via cache manager")
+                    except Exception as e:
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Failed to load model via cache manager: {e}, falling back to direct load")
+                        # 폴백: 직접 로드
+                        cls._semantic_model = SentenceTransformer(cls._semantic_model_name)
+                        logger.debug(f"Semantic model loaded and cached (direct): {cls._semantic_model_name}")
+                else:
+                    # ModelCacheManager가 없으면 직접 로드
+                    cls._semantic_model = SentenceTransformer(cls._semantic_model_name)
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"Semantic model loaded and cached: {cls._semantic_model_name}")
             except Exception as e:
                 logger = logging.getLogger(__name__)
                 logger.debug(f"Failed to load semantic model: {e}")
@@ -372,18 +399,38 @@ class ResultRanker:
             self.logger.warning("No query provided for Cross-Encoder reranking, using standard ranking")
             return results[:top_k]
         
+        # 🔥 성능 최적화 1: 문서 수가 적으면 스킵
+        if len(results) <= 3:
+            self.logger.debug("⏭️ [CROSS-ENCODER SKIP] 문서 수가 적음 (<=3), reranking 스킵")
+            return results[:top_k]
+        
+        # 🔥 성능 최적화 2: 상위 문서의 평균 점수가 이미 높으면 스킵
+        top_results = results[:min(5, len(results))]
+        avg_score = sum(r.score for r in top_results) / len(top_results)
+        if avg_score >= 0.8:
+            self.logger.debug(f"⏭️ [CROSS-ENCODER SKIP] 평균 점수가 이미 높음 (avg={avg_score:.3f} >= 0.8), reranking 스킵")
+            return results[:top_k]
+        
+        # 🔥 성능 최적화 3: 상위 문서만 reranking (최대 10개)
+        max_rerank_docs = min(10, len(results))
+        pre_filtered_results = results[:max_rerank_docs]
+        remaining_results = results[max_rerank_docs:]
+        
+        if len(results) > max_rerank_docs:
+            self.logger.debug(f"⚡ [CROSS-ENCODER] 상위 {max_rerank_docs}개 문서만 reranking (전체 {len(results)}개 중)")
+        
         # extracted_keywords 추출 (metadata에서)
         if extracted_keywords is None:
-            for result in results:
+            for result in pre_filtered_results:
                 if isinstance(result.metadata, dict):
                     extracted_keywords = result.metadata.get("extracted_keywords", [])
                     if extracted_keywords:
                         break
         
         try:
-            # query-document 쌍 생성
+            # query-document 쌍 생성 (상위 문서만)
             pairs = []
-            for result in results:
+            for result in pre_filtered_results:
                 text = result.text[:500]  # 길이 제한
                 pairs.append([extracted_query, text])
             
@@ -414,9 +461,9 @@ class ResultRanker:
                     normalized_scores = scores_array
                 scores = normalized_scores.tolist()
             
-            # 점수 반영 및 정렬
+            # 점수 반영 및 정렬 (상위 문서만)
             reranked_results = []
-            for result, score in zip(results, scores):
+            for result, score in zip(pre_filtered_results, scores):
                 # 기존 점수와 Cross-Encoder 점수 결합
                 original_score = result.score
                 cross_encoder_score = float(score)  # 정규화된 점수 사용
@@ -479,8 +526,12 @@ class ResultRanker:
             # 점수순 정렬
             reranked_results.sort(key=lambda x: x.score, reverse=True)
             
+            # 나머지 문서 추가 (reranking하지 않은 문서)
+            if remaining_results:
+                reranked_results.extend(remaining_results)
+            
             self.logger.info(
-                f"Cross-Encoder reranking: {len(results)} documents reranked, "
+                f"Cross-Encoder reranking: {len(pre_filtered_results)} documents reranked (전체 {len(results)}개 중), "
                 f"top score: {reranked_results[0].score:.3f}" if reranked_results else "no results"
             )
             

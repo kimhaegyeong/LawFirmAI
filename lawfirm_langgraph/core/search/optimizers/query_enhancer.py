@@ -87,8 +87,7 @@ class QueryEnhancer:
         self.stopword_processor = None
         if KoreanStopwordProcessor:
             try:
-                self.stopword_processor = KoreanStopwordProcessor()
-                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+                self.stopword_processor = KoreanStopwordProcessor.get_instance()
             except Exception as e:
                 self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
@@ -139,7 +138,8 @@ class QueryEnhancer:
         query: str,
         query_type: str,
         extracted_keywords: List[str],
-        legal_field: str
+        legal_field: str,
+        extracted_terms_from_docs: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         검색 쿼리 최적화 (LLM 강화 포함, 폴백 지원)
@@ -199,7 +199,12 @@ class QueryEnhancer:
         normalized_terms = self.normalize_legal_terms(base_query, extracted_keywords)
 
         # 2. 동의어 및 관련 용어 확장 (LLM 실패 시에도 강화)
-        expanded_terms = self.expand_legal_terms(normalized_terms, legal_field)
+        # 이전 검색에서 추출된 용어 활용 (재검색 시)
+        expanded_terms = self.expand_legal_terms(
+            normalized_terms, 
+            legal_field,
+            extracted_terms_from_docs=extracted_terms_from_docs
+        )
         
         # 법률 용어 가중치 계산 및 우선순위 적용
         term_weights = self.calculate_legal_term_weights(expanded_terms, query_type)
@@ -1160,9 +1165,16 @@ class QueryEnhancer:
     def expand_legal_terms(
         self,
         terms: List[str],
-        legal_field: str
+        legal_field: str,
+        extracted_terms_from_docs: Optional[List[str]] = None
     ) -> List[str]:
-        """법률 용어 확장 (동의어, 관련 용어)"""
+        """법률 용어 확장 (동의어, 관련 용어)
+        
+        Args:
+            terms: 확장할 용어 리스트
+            legal_field: 법률 분야
+            extracted_terms_from_docs: 이전 검색에서 추출된 용어 (재검색 시 활용)
+        """
         expanded = list(terms)
 
         # 지원되는 법률 분야별 관련 용어 매핑 (민사법, 지식재산권법, 행정법, 형사법만)
@@ -1199,6 +1211,15 @@ class QueryEnhancer:
         for term in terms:
             if isinstance(term, str) and term in synonym_mapping:
                 expanded.extend(synonym_mapping[term])
+        
+        # 이전 검색에서 추출된 용어 추가 (재검색 시 활용)
+        if extracted_terms_from_docs:
+            # 추출된 용어 중 상위 10개만 추가 (너무 많으면 노이즈 증가)
+            top_extracted = extracted_terms_from_docs[:10]
+            expanded.extend(top_extracted)
+            self.logger.debug(
+                f"✅ [KEYWORD EXPANSION] Added {len(top_extracted)} extracted terms from previous search"
+            )
 
         return list(set(expanded))[:15]  # 최대 15개로 제한
 

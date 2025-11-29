@@ -1384,7 +1384,20 @@ class LangGraphWorkflowService:
                     # 5. Global cache에서 확인 (classify_complexity에서 저장한 값)
                     if not query_complexity_found:
                         try:
-                            from core.agents import node_wrappers
+                            # 여러 import 방법 시도 (모듈 경로 오류 방지)
+                            try:
+                                from lawfirm_langgraph.core.agents import node_wrappers
+                            except ImportError:
+                                try:
+                                    from core.agents import node_wrappers
+                                except ImportError:
+                                    import sys
+                                    from pathlib import Path
+                                    # 상대 경로로 직접 import
+                                    agents_dir = Path(__file__).parent.parent / "agents"
+                                    if str(agents_dir.parent) not in sys.path:
+                                        sys.path.insert(0, str(agents_dir.parent))
+                                    from core.agents import node_wrappers
                             global_cache = getattr(node_wrappers, '_global_search_results_cache', None)
                             self.logger.debug(f"[5] Global cache 확인 - exists={global_cache is not None}, type={type(global_cache).__name__ if global_cache else 'None'}")
                             if global_cache and isinstance(global_cache, dict):

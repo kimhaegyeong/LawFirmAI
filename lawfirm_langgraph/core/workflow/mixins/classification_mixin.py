@@ -225,7 +225,20 @@ class ClassificationMixin:
         state["metadata"]["needs_search"] = needs_search
         
         try:
-            from core.agents import node_wrappers
+            # 여러 import 방법 시도 (모듈 경로 오류 방지)
+            try:
+                from lawfirm_langgraph.core.agents import node_wrappers
+            except ImportError:
+                try:
+                    from core.agents import node_wrappers
+                except ImportError:
+                    import sys
+                    from pathlib import Path
+                    # 상대 경로로 직접 import
+                    agents_dir = Path(__file__).parent.parent.parent / "agents"
+                    if str(agents_dir.parent) not in sys.path:
+                        sys.path.insert(0, str(agents_dir.parent))
+                    from core.agents import node_wrappers
             if not hasattr(node_wrappers, '_global_search_results_cache') or node_wrappers._global_search_results_cache is None:
                 node_wrappers._global_search_results_cache = {}
             node_wrappers._global_search_results_cache["query_complexity"] = complexity.value
