@@ -167,6 +167,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
   const tokenBufferRef = useRef<Map<string, string>>(new Map());
   const tokenBufferTimeoutRef = useRef<Map<string, number>>(new Map());
   const sourcesWaitTimeoutRef = useRef<Map<string, number>>(new Map());
+  const doneEventTimeoutRef = useRef<Map<string, number>>(new Map());
 
   const handleStreamingMessage = useCallback(
     async (
@@ -215,15 +216,57 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
       let isFirstChunk = true;
       let isFinalReceived = false;
       let fullContent = '';
+      const streamStartTime = Date.now();
+      let lastEventTime = Date.now();
 
       try {
         setCurrentProgress(null);
         setProgressHistory([]);
 
+        // done 이벤트 타임아웃 설정 (90초 = 90000ms)
+        const DONE_EVENT_TIMEOUT = 90000;
+        const timeoutId = setTimeout(() => {
+          const elapsed = Date.now() - streamStartTime;
+          const timeSinceLastEvent = Date.now() - lastEventTime;
+          
+          if (import.meta.env.DEV) {
+            logger.warn('[Stream] Done event timeout:', {
+              assistantMessageId,
+              elapsed,
+              timeSinceLastEvent,
+            });
+          }
+
+          // 타임아웃 에러 표시
+          addError(assistantMessageId, {
+            type: ErrorType.TIMEOUT,
+            message: '응답 생성이 90초 이상 지연되고 있습니다. 네트워크 연결을 확인하거나 다시 시도해주세요.',
+          });
+
+          showToast({
+            message: '응답 생성이 지연되고 있습니다. 네트워크 연결을 확인해주세요.',
+            type: 'error',
+          });
+
+          // 스트리밍 상태 해제
+          if (streamingMessageId === assistantMessageId) {
+            setStreamingId(null);
+          }
+
+          // 타임아웃 ref 정리
+          doneEventTimeoutRef.current.delete(assistantMessageId);
+        }, DONE_EVENT_TIMEOUT);
+
+        // 타임아웃 ID 저장
+        doneEventTimeoutRef.current.set(assistantMessageId, timeoutId);
+
         await sendStreamingMessage(
           message,
           sessionId,
           (chunk) => {
+            // 마지막 이벤트 시간 업데이트
+            lastEventTime = Date.now();
+
             if (import.meta.env.DEV) {
               logger.debug('[Stream] Chunk received:', JSON.stringify(chunk));
             }
@@ -661,6 +704,16 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                 }
               }
             } else if (parsed.type === 'done') {
+              // done 이벤트 수신 시 타임아웃 취소
+              if (doneEventTimeoutRef.current.has(assistantMessageId)) {
+                clearTimeout(doneEventTimeoutRef.current.get(assistantMessageId)!);
+                doneEventTimeoutRef.current.delete(assistantMessageId);
+                
+                if (import.meta.env.DEV) {
+                  logger.debug('[Stream] Done event timeout cancelled');
+                }
+              }
+
               const finalContent = parsed.content && parsed.content.trim() ? parsed.content : fullContent;
 
               if (import.meta.env.DEV) {
@@ -703,10 +756,9 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                           relatedQuestionsCount: parsedSources.relatedQuestions.length,
                           sourcesByTypeKeys: Object.keys(parsedSources.sourcesByType),
                           sourcesByTypeCounts: {
-                            statute: parsedSources.sourcesByType.statute_article.length,
-                            case: parsedSources.sourcesByType.case_paragraph.length,
-                            decision: parsedSources.sourcesByType.decision_paragraph.length,
-                            interpretation: parsedSources.sourcesByType.interpretation_paragraph.length,
+                            statutes_articles: parsedSources.sourcesByType?.statutes_articles?.length ?? 0,
+                            precedent_contents: parsedSources.sourcesByType?.precedent_contents?.length ?? 0,
+                            precedent_chunks: parsedSources.sourcesByType?.precedent_chunks?.length ?? 0,
                           },
                           parsedSources,
                         });
@@ -769,10 +821,9 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                         legalReferences: [],
                         sourcesDetail: [],
                         sourcesByType: {
-                          statute_article: [],
-                          case_paragraph: [],
-                          decision_paragraph: [],
-                          interpretation_paragraph: [],
+                          statutes_articles: [],
+                          precedent_contents: [],
+                          precedent_chunks: [],
                         },
                         relatedQuestions: [],
                         messageId: undefined,
@@ -1041,10 +1092,9 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                     legalReferences: [],
                     sourcesDetail: [],
                     sourcesByType: {
-                      statute_article: [],
-                      case_paragraph: [],
-                      decision_paragraph: [],
-                      interpretation_paragraph: [],
+                      statutes_articles: [],
+                      precedent_contents: [],
+                      precedent_chunks: [],
                     },
                     relatedQuestions: [],
                     messageId: undefined,
@@ -1184,11 +1234,23 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
           filename
         );
 
+        // 스트림 완료 후 타임아웃 정리 (done 이벤트가 이미 왔을 수도 있음)
+        if (doneEventTimeoutRef.current.has(assistantMessageId)) {
+          clearTimeout(doneEventTimeoutRef.current.get(assistantMessageId)!);
+          doneEventTimeoutRef.current.delete(assistantMessageId);
+        }
+
         setCurrentProgress(null);
         if (import.meta.env.DEV) {
           logger.debug('[Stream] Streaming completed. Final content length:', fullContent.length);
         }
       } catch (error) {
+        // 에러 발생 시 타임아웃 정리
+        if (doneEventTimeoutRef.current.has(assistantMessageId)) {
+          clearTimeout(doneEventTimeoutRef.current.get(assistantMessageId)!);
+          doneEventTimeoutRef.current.delete(assistantMessageId);
+        }
+
         logger.error('[Stream] Streaming error:', error);
 
         if (streamingMessageId === assistantMessageId || streamingMessageId !== null) {
@@ -1261,12 +1323,18 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
 
         let errorMessage = error instanceof Error ? error.message : String(error);
 
+        // fetch API 에러인 경우 (chatService.ts에서 이미 detail 추출됨)
+        // 또는 AxiosError인 경우 detail 추출
         if (error && typeof error === 'object' && 'response' in error) {
           const axiosError = error as AxiosError<{ detail?: string }>;
           if (axiosError.response?.data?.detail) {
             errorMessage = axiosError.response.data.detail;
           }
         }
+
+        // Error 메시지에서 이미 detail이 추출되었을 수 있음
+        // chatService.ts에서 detail을 추출하여 Error 메시지에 포함시켰으므로
+        // errorMessage에 이미 detail이 포함되어 있을 수 있음
 
         if (isAuthenticated && (
           errorMessage.includes('무료 질의 3회를 모두 사용하셨습니다') ||
@@ -1276,11 +1344,15 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
         }
 
         const streamError = toStreamError(error, isAuthenticated);
+        
+        // errorMessage가 있으면 우선 사용 (detail이 포함되어 있을 수 있음)
+        const finalErrorMessage = errorMessage || streamError.message;
 
         if (fullContent || error) {
           updateMessages((prev) => {
             const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-            const errorContent = fullContent || streamError.message;
+            // fullContent가 있으면 사용, 없으면 에러 메시지 사용
+            const errorContent = fullContent || finalErrorMessage;
 
             if (messageIndex === -1) {
               const errorMessage: ChatMessage = {
@@ -1311,11 +1383,16 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
           });
         }
 
-        addError(assistantMessageId, streamError);
+        // streamError의 message를 finalErrorMessage로 업데이트
+        const updatedStreamError = {
+          ...streamError,
+          message: finalErrorMessage,
+        };
+        addError(assistantMessageId, updatedStreamError);
 
-        if (!isAuthenticated || !streamError.message.includes('무료 질의 3회를 모두 사용하셨습니다')) {
+        if (!isAuthenticated || !finalErrorMessage.includes('무료 질의 3회를 모두 사용하셨습니다')) {
           showToast({
-            message: streamError.message,
+            message: finalErrorMessage,
             type: 'error',
             action: streamError.canRetry ? {
               label: '다시 시도',

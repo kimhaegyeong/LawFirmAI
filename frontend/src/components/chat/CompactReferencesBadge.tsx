@@ -334,7 +334,15 @@ export function CompactReferencesBadge({
             {previewReferences.map((ref) => (
               <div
                 key={ref.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => handleReferenceClick(ref)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleReferenceClick(ref);
+                  }
+                }}
                 className="text-xs p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <div className="flex items-start gap-2">
@@ -365,7 +373,15 @@ export function CompactReferencesBadge({
             {parsedReferences.slice(3).map((ref) => (
               <div
                 key={ref.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => handleReferenceClick(ref)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleReferenceClick(ref);
+                  }
+                }}
                 className="text-xs p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <div className="flex items-start gap-2">
