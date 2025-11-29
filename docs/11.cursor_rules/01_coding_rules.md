@@ -351,3 +351,34 @@ def safe_operation(self, data: str) -> Optional[str]:
    - **black**: 코드 포맷터
    - **isort**: import 정렬 도구
 
+## 6. 프론트엔드 ESLint / TypeScript / npm audit 규칙 (CRITICAL)
+
+**`.github/workflows/security-check.yml`에서 실행되는 `npm run lint`, `npm run type-check`, `npm audit --audit-level=moderate` 기준으로, 프론트엔드 코드 변경 시 항상 이 검사를 통과하도록 코드를 작성해야 합니다.**
+
+1. **ESLint 규칙 준수**
+   - 프론트엔드 코드 작성/수정 시 `npm run lint` 기준으로 경고/오류가 발생하지 않도록 작성합니다.
+   - 불가피하게 규칙을 무시해야 할 경우:
+     - 왜 필요한지 코드 근처에 아주 짧게 주석으로 남깁니다.
+     - `eslint-disable` 류의 주석은 최소 범위(한 줄)로만 사용합니다.
+     - PR 단위에서 팀과 상의 없이 전역/파일 단위 disable은 금지합니다.
+
+2. **TypeScript 타입 체크 통과**
+   - `npm run type-check`를 기준으로 모든 새로운/수정된 컴포넌트에 타입 오류가 없어야 합니다.
+   - `any` 사용은 마지막 수단으로만 허용하며, 가능한 구체적인 타입 또는 제네릭 사용을 우선합니다.
+   - 외부 라이브러리 타입이 애매한 경우:
+     - 우선 `@types/*` 패키지 존재 여부를 확인합니다.
+     - 불가피하게 `any`를 사용할 때는 타입 보완 계획을 간단히 주석으로 남깁니다.
+
+3. **npm audit (보안 점검) 고려**
+   - 의존성 추가/업데이트 전후로 `npm audit --audit-level=moderate` 결과를 확인합니다.
+   - 새로운 취약점이 발견되면:
+     - 가능한 경우 `npm update` / 패치 버전 업데이트로 해결을 우선 시도합니다.
+     - 해결이 어렵거나 상위 의존성 문제인 경우, 이슈/PR 설명에 취약점 ID와 상황을 간단히 기록합니다.
+   - 불필요한 패키지(사용하지 않는 라이브러리)는 즉시 제거하여 공격 면을 최소화합니다.
+
+4. **로컬 검증 체크리스트 (프론트엔드 작업 후)**
+   - [ ] `cd frontend` 후 `npm run lint`를 실행했고, 오류가 없는가?
+   - [ ] `npm run type-check`를 실행했고, 타입 오류가 없는가?
+   - [ ] 의존성을 변경했다면 `npm audit --audit-level=moderate` 결과를 확인했는가?
+   - [ ] ESLint 규칙 무시 주석(`eslint-disable`)을 새로 추가했다면, 정말 필요한 최소 범위인가?
+

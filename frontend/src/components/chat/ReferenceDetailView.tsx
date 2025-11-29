@@ -3,7 +3,7 @@
  * DocumentSidebar와 동일한 디자인으로 참고자료 상세 정보를 표시합니다.
  */
 import { FileText, Scale, Bookmark, ExternalLink, ArrowLeft, Copy, Check } from 'lucide-react';
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, type ReactNode } from 'react';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
 import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
 import { copyToClipboardWithFeedback } from '../../utils/copyToClipboard';
@@ -33,7 +33,7 @@ export function ReferenceDetailView({
   }, [copiedField]);
   
   // 문서 타입 결정
-  const documentType = reference.type;
+  const documentType: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' = reference.type;
 
   // 문서 제목/이름
   const documentName = 
@@ -329,37 +329,44 @@ export function ReferenceDetailView({
             </div>
           )}
 
-          {/* 해석례 정보 */}
-          {documentType === 'interpretation' && (
-            <div className="space-y-3">
-              <InfoField
-                label="제목"
-                value={reference.title || sourceDetail?.title || docMetadata.title}
-                fieldName="title"
-              />
-              <InfoField
-                label="기관"
-                value={reference.org || sourceDetail?.org || docMetadata.org}
-                fieldName="org"
-              />
-              <InfoField
-                label="일련번호"
-                value={reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
-                fieldName="interpretation_number"
-              />
-              <InfoField
-                label="법령해석례일련번호"
-                value={getMetadataValue(docMetadata.interpretation_serial_number) || getMetadataValue(docMetadata.법령해석례일련번호) || getMetadataValue(docMetadata.해석ID) || getMetadataValue(docMetadata.expcId)}
-                fieldName="interpretation_serial_number"
-                isMonospace
-              />
-              <InfoField
-                label="회신일"
-                value={sourceDetail?.response_date || getMetadataValue(docMetadata.response_date)}
-                fieldName="response_date"
-              />
-            </div>
-          )}
+          {(
+            documentType === 'interpretation' &&
+            (
+              <div className="space-y-3">
+                <InfoField
+                  label="제목"
+                  value={reference.title || sourceDetail?.title || docMetadata.title}
+                  fieldName="title"
+                />
+                <InfoField
+                  label="기관"
+                  value={reference.org || sourceDetail?.org || docMetadata.org}
+                  fieldName="org"
+                />
+                <InfoField
+                  label="일련번호"
+                  value={reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
+                  fieldName="interpretation_number"
+                />
+                <InfoField
+                  label="법령해석례일련번호"
+                  value={
+                    getMetadataValue(docMetadata.interpretation_serial_number) ||
+                    getMetadataValue(docMetadata.법령해석례일련번호) ||
+                    getMetadataValue(docMetadata.해석ID) ||
+                    getMetadataValue(docMetadata.expcId)
+                  }
+                  fieldName="interpretation_serial_number"
+                  isMonospace
+                />
+                <InfoField
+                  label="회신일"
+                  value={sourceDetail?.response_date || getMetadataValue(docMetadata.response_date)}
+                  fieldName="response_date"
+                />
+              </div>
+            )
+          ) as ReactNode}
 
           {/* 기타 정보 */}
           {documentType === 'regulation' && (reference.org || sourceDetail?.org || docMetadata.org) && (
@@ -439,6 +446,57 @@ export function ReferenceDetailView({
               <p className="text-sm text-slate-600 mt-1 break-words">{reference.content}</p>
             </div>
           )}
+
+          {/* 원천 정보 섹션 (접을 수 있는 섹션) */}
+          {(sourceDetail?.chunk_id || sourceDetail?.source_id || sourceDetail?.original_url || 
+            sourceDetail?.metadata?.chunk_id || sourceDetail?.metadata?.source_id || sourceDetail?.metadata?.original_url) && (
+            <details className="border-t border-slate-200 pt-3 mt-3">
+              <summary className="text-sm font-medium text-slate-600 cursor-pointer hover:text-slate-800">
+                원천 정보
+              </summary>
+              <div className="mt-2 space-y-2 text-xs">
+                <InfoField
+                  label="Source ID"
+                  value={(sourceDetail?.source_id ? String(sourceDetail.source_id) : undefined) || (sourceDetail?.metadata?.source_id ? String(sourceDetail.metadata.source_id) : undefined)}
+                  fieldName="source_id"
+                  isMonospace
+                />
+                <InfoField
+                  label="Chunk ID"
+                  value={(sourceDetail?.chunk_id ? String(sourceDetail.chunk_id) : undefined) || (sourceDetail?.metadata?.chunk_id ? String(sourceDetail.metadata.chunk_id) : undefined)}
+                  fieldName="chunk_id"
+                  isMonospace
+                />
+                {sourceDetail?.original_url || sourceDetail?.metadata?.original_url ? (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-slate-500">Original URL</span>
+                      <button
+                        onClick={() => {
+                          const url = sourceDetail?.original_url || sourceDetail?.metadata?.original_url;
+                          if (url && typeof url === 'string') {
+                            window.open(url, '_blank', 'noopener,noreferrer');
+                          }
+                        }}
+                        className="p-1 hover:bg-slate-100 rounded transition-colors text-slate-400 hover:text-slate-600"
+                        title="새 창에서 열기"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <a
+                      href={String(sourceDetail?.original_url || sourceDetail?.metadata?.original_url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-600 hover:underline break-all"
+                    >
+                      {String(sourceDetail?.original_url || sourceDetail?.metadata?.original_url)}
+                    </a>
+                  </div>
+                    ) : null}
+                  </div>
+                </details>
+              )}
         </div>
       </div>
     </div>
