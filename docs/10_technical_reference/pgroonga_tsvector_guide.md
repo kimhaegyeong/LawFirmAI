@@ -4,10 +4,10 @@
 
 LawFirmAI 프로젝트에서 PostgreSQL의 한국어 전문 검색을 위해 **PGroonga**와 **tsvector**를 사용합니다. PGroonga는 한국어 형태소 분석을 지원하여 더 정확한 한국어 텍스트 검색이 가능합니다.
 
-**⚠️ PostgreSQL 18 주의사항**: PostgreSQL 18은 최신 버전이므로, PGroonga는 GitHub main 브랜치에서 소스 빌드됩니다. 공식 패키지가 아직 PostgreSQL 18을 완전히 지원하지 않을 수 있습니다.
+**✅ PostgreSQL 18 지원**: [PGroonga 4.0.4](https://github.com/pgroonga/pgroonga/releases/tag/4.0.4) (2025-10-02 릴리즈)부터 PostgreSQL 18을 공식 지원합니다. PostgreSQL 18의 `index_beginscan` API 변경사항과 ordered index scan 기능을 지원합니다.
 
 **검토 일자**: 2025-01-XX  
-**적용 버전**: PostgreSQL 18+ with PGroonga 3.1.8+
+**적용 버전**: PostgreSQL 18+ with PGroonga 4.0.4+
 
 ---
 
@@ -48,9 +48,10 @@ docker-compose -f deployment/docker-compose.dev.yml up -d postgres
 **Dockerfile 위치**: `deployment/postgres/Dockerfile`
 
 **PostgreSQL 18 사용 시**: 
-- PGroonga는 GitHub main 브랜치에서 소스 빌드됩니다
-- PostgreSQL 18의 최신 API 변경사항을 지원하기 위함
-- 빌드 시간이 다소 소요될 수 있습니다
+- [PGroonga 4.0.4](https://github.com/pgroonga/pgroonga/releases/tag/4.0.4) 이상 버전을 사용합니다 (PostgreSQL 18 공식 지원)
+- PostgreSQL 18의 `index_beginscan` API 변경사항을 지원합니다
+- Ordered index scan 기능 지원으로 `WHERE ... ORDER BY ... LIMIT` 쿼리 성능 향상
+- 4.0.4가 없으면 최신 릴리스를 자동으로 사용합니다
 
 ### 수동 설치
 

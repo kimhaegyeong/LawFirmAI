@@ -2,6 +2,9 @@ version: '3.8'
 
 services:
   postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: lawfirmai-postgres:18-pgvector
     container_name: lawfirmai-postgres-local
     restart: unless-stopped
