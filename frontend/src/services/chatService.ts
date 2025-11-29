@@ -98,7 +98,21 @@ export async function* sendStreamingChatMessage(
           statusText: response.statusText,
           error: errorText,
         });
-        throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+        
+        // JSON 응답인 경우 detail 필드 추출 시도
+        let errorMessage = errorText;
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.detail && typeof errorJson.detail === 'string') {
+            errorMessage = errorJson.detail;
+          }
+        } catch (e) {
+          // JSON 파싱 실패 시 원본 텍스트 사용
+        }
+        
+        // detail이 있으면 detail만 사용, 없으면 전체 에러 메시지 사용
+        const finalErrorMessage = errorMessage || `HTTP ${response.status}: ${response.statusText}`;
+        throw new Error(finalErrorMessage);
       }
     } catch (fetchError) {
       // fetch 자체에서 발생하는 오류 처리
@@ -108,7 +122,7 @@ export async function* sendStreamingChatMessage(
       // 하지만 fetch 단계에서 발생하면 response 객체가 없으므로 처리 불가
       if (fetchError instanceof TypeError) {
         const errorMessage = fetchError.message || '';
-        const errorName = (fetchError as any).name || '';
+        const errorName = fetchError.name || '';
         
         // ERR_INCOMPLETE_CHUNKED_ENCODING 오류는 스트림이 완전히 종료되지 않았다고 브라우저가 판단할 때 발생
         // 서버에서 done 이벤트를 보내지 않았거나 연결이 중간에 끊겼을 때 발생할 수 있음

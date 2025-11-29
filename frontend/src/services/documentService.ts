@@ -2,10 +2,11 @@
  * 원본 문서 조회 서비스
  */
 import axios from 'axios';
+import { getEnvironmentDefaults } from '../utils/environment';
 
 // API 기본 URL (api.ts와 동일한 설정 사용)
-const isDev = import.meta.env.DEV;
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (isDev ? 'http://localhost:8000' : 'http://localhost:8000');
+const envDefaults = getEnvironmentDefaults();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || envDefaults.apiBaseUrl;
 
 // documents API는 /api/v1 prefix 없이 직접 사용
 const documentsApi = axios.create({
@@ -21,7 +22,7 @@ export interface OriginalDocument {
   title: string;
   text: string;
   source_type: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ChunkInfo {

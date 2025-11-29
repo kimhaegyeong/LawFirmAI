@@ -54,13 +54,29 @@ export async function createSession(data: SessionCreate): Promise<Session> {
 
 /**
  * 세션 조회
+ * 404 오류 발생 시 null을 반환하여 호출자가 새 세션을 생성할 수 있도록 함
  */
-export async function getSession(sessionId: string): Promise<Session> {
+export async function getSession(sessionId: string): Promise<Session | null> {
   try {
     const response = await api.get<Session>(`/sessions/${sessionId}`);
     return response.data;
   } catch (error) {
-    throw extractApiError(error);
+    // 404 오류인 경우 null 반환 (호출자가 새 세션을 생성할 수 있도록)
+    // axios 에러에서 직접 status 확인 (extractApiError 호출 전에 확인)
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { status?: number } };
+      if (axiosError.response?.status === 404) {
+        // 404는 정상적인 상황 (세션이 존재하지 않음)이므로 조용히 처리
+        return null;
+      }
+    }
+    
+    // 404가 아닌 다른 오류는 그대로 throw
+    const apiError = extractApiError(error) as Error & { status?: number };
+    if (apiError.status === 404) {
+      return null;
+    }
+    throw apiError;
   }
 }
 
