@@ -115,6 +115,7 @@ LawFirmAI/
 - **`docs/11.cursor_rules/06_testing_rules.md`**: 테스트 규칙
   - 단위 테스트
   - 통합 테스트
+  - LangGraph 질의 테스트 실행 규칙 (CRITICAL)
 
 **기존 파일**: `docs/11.cursor_rules/run_query_test_logging.md` - 테스트 로그 파일 저장 규칙 (상세 내용은 본 문서 하단 참조)
 

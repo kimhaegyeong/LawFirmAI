@@ -5,9 +5,12 @@
 import inspect
 import logging
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Set
 
 logger = logging.getLogger(__name__)
+
+# 환경 변수 로드 상태 추적 (캐싱)
+_loaded_project_roots: Set[Path] = set()
 
 
 def _find_caller_env_file(project_root: Path) -> Optional[Path]:
@@ -127,7 +130,13 @@ def load_all_env_files(project_root: Optional[Path] = None) -> List[str]:
         logger.debug(f"⚠️  Not found: {langgraph_env}")
     
     if loaded_files:
-        logger.info(f"✅ Loaded {len(loaded_files)} .env file(s): {', '.join([Path(f).name for f in loaded_files])}")
+        # 중복 방지: 파일명만 표시 (전체 경로는 DEBUG 레벨에서만)
+        file_names = [Path(f).name for f in loaded_files]
+        # 중복 제거 (같은 파일명이 여러 번 나타나는 경우)
+        unique_file_names = list(dict.fromkeys(file_names))
+        if len(unique_file_names) != len(file_names):
+            logger.debug(f"Some .env files were skipped (duplicates): {', '.join(file_names)}")
+        logger.info(f"✅ Loaded {len(loaded_files)} .env file(s): {', '.join(unique_file_names)}")
     else:
         logger.warning("⚠️  No .env files found. Using environment variables only.")
     
@@ -139,12 +148,25 @@ def ensure_env_loaded(project_root: Optional[Path] = None) -> None:
     환경 변수가 로드되었는지 확인하고, 로드되지 않았다면 로드
     
     이 함수는 여러 번 호출되어도 안전합니다.
-    나중에 로드되는 .env 파일은 이전에 로드된 환경변수를 덮어쓸 수 있습니다.
+    같은 project_root에 대해서는 한 번만 로드하여 중복 로드를 방지합니다.
     
     Args:
         project_root: 프로젝트 루트 경로 (None이면 자동 감지)
     """
-    # 이미 로드되었는지 확인 (간단한 체크)
-    # 나중에 로드되는 .env 파일은 override=True로 로드되어 이전 설정을 덮어쓸 수 있음
+    # project_root 결정
+    if project_root is None:
+        project_root = Path(__file__).parent.parent
+    else:
+        project_root = Path(project_root).resolve()
+    
+    # 이미 로드된 project_root인지 확인
+    if project_root in _loaded_project_roots:
+        logger.debug(f"⏭️  Environment variables already loaded for: {project_root}")
+        return
+    
+    # 환경 변수 로드
     load_all_env_files(project_root)
+    
+    # 로드 완료 표시
+    _loaded_project_roots.add(project_root)
 

@@ -153,9 +153,12 @@ chroma_db/
 .cursor/
 
 # personal data
-data/
+# Ignore root data/ directory only (not subdirectories)
+/data/
+# Allow specific data directories in lawfirm_langgraph
 !lawfirm_langgraph/langgraph_core/data/  # Allow langgraph_core/data module (source code)
 !lawfirm_langgraph/core/data/  # Allow core/data directory
+!lawfirm_langgraph/core/data/**  # Allow all files in core/data directory
 reports/
 results/
 debug/
