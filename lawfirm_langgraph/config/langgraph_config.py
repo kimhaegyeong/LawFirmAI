@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -31,10 +31,10 @@ try:
             sys.path.insert(0, str(_project_root))
         from utils.env_loader import ensure_env_loaded, load_all_env_files
         
-        # 프로젝트 루트 .env 파일 명시적으로 로드
+        # 프로젝트 루트 .env 파일 명시적으로 로드 (중복 방지)
         ensure_env_loaded(_project_root)
-        loaded_files = load_all_env_files(_project_root)
-        # 환경 변수 로드 완료 메시지는 출력하지 않음 (run_query_test.py에서 불필요한 메시지 방지)
+        # load_all_env_files는 ensure_env_loaded 내부에서 호출되므로 중복 호출 방지
+        # loaded_files = load_all_env_files(_project_root)  # 중복 호출 제거
     except ImportError:
         # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
         root_env = _project_root / ".env"
@@ -69,6 +69,9 @@ except Exception as e:
             pass
 
 logger = get_logger(__name__)
+
+# 설정 캐시 (싱글톤)
+_cached_config: Optional['LangGraphConfig'] = None
 
 
 class CheckpointStorageType(Enum):
@@ -153,8 +156,26 @@ class LangGraphConfig:
     use_agentic_mode: bool = False  # Agentic AI 모드 활성화 (Tool Use/Function Calling)
 
     @classmethod
-    def from_env(cls) -> 'LangGraphConfig':
-        """환경 변수에서 설정 로드"""
+    def from_env(cls, force_reload: bool = False) -> 'LangGraphConfig':
+        """
+        환경 변수에서 설정 로드 (캐싱 적용)
+        
+        Args:
+            force_reload: True이면 캐시 무시하고 새로 로드 (기본값: False)
+            
+        Returns:
+            LangGraphConfig 인스턴스
+        """
+        # global 선언을 먼저 해야 함
+        global _cached_config
+        
+        if not force_reload and _cached_config is not None:
+            # 캐시에서 재사용 시 DEBUG 레벨로만 로그 출력 (중복 방지)
+            logger.debug("LangGraphConfig reused from cache")
+            return _cached_config
+        
+        # 최초 로드 시에만 로그 출력
+        logger.debug("LangGraphConfig loading from environment...")
         config = cls()
 
         # LangGraph 활성화 설정
@@ -279,7 +300,13 @@ class LangGraphConfig:
             config.rerank_original_weight = 0.6
             config.rerank_cross_encoder_weight = 0.4
 
-        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}, rerank_weights: original={config.rerank_original_weight:.2f}, cross_encoder={config.rerank_cross_encoder_weight:.2f}")
+        # 중복 로그 방지: 캐시에서 반환된 경우가 아니면 로그 출력
+        if force_reload or _cached_config is None:
+            logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}, rerank_weights: original={config.rerank_original_weight:.2f}, cross_encoder={config.rerank_cross_encoder_weight:.2f}")
+        
+        # 캐시 저장 (global은 이미 함수 시작 부분에서 선언됨)
+        _cached_config = config
+        
         return config
 
     def validate(self) -> List[str]:
