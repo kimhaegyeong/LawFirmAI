@@ -15,11 +15,9 @@ export interface SourcesMetadata {
 }
 
 export interface SourcesByType {
-  statute_article: SourceInfo[];
-  case_paragraph: SourceInfo[];
-  decision_paragraph: SourceInfo[];
-  interpretation_paragraph: SourceInfo[];
-  regulation_paragraph: SourceInfo[];
+  statutes_articles: SourceInfo[];      // text_chunks.source_type = 'statute_article' 매핑
+  precedent_contents: SourceInfo[];      // text_chunks.source_type = 'case_paragraph' 매핑
+  precedent_chunks: SourceInfo[];        // 별도 벡터 저장소
 }
 
 export interface ParseSourcesOptions {
@@ -115,8 +113,24 @@ function normalizeSourceInfo(source: unknown): SourceInfo | null {
       ? src.metadata as Record<string, unknown>
       : {};
     
+    // 원천 식별자 보존 (원본 문서 추적용)
+    normalized.chunk_id = (src.chunk_id as string) || 
+                          (meta.chunk_id as string) || 
+                          undefined;
+    normalized.source_id = (src.source_id as string) || 
+                           (meta.source_id as string) || 
+                           undefined;
+    
+    // original_url 보존
+    normalized.original_url = (src.original_url as string) || 
+                              (meta.original_url as string) || 
+                              undefined;
+    
+    // 점수 정보는 프론트엔드에서 표시하지 않음 (백엔드 metadata에는 보존됨)
+    
     // 판례 정보 정규화
-    if (src.type === 'case_paragraph' || String(src.type).includes('case')) {
+    // precedent_content는 백엔드에서 normalize_document_type이 반환하는 타입
+    if (src.type === 'case_paragraph' || src.type === 'precedent_content' || String(src.type).includes('case')) {
       normalized.case_number = (src.case_number as string) || 
                                  (meta.doc_id as string) || 
                                  (meta.case_number as string) ||
@@ -256,23 +270,28 @@ function normalizeSourceInfo(source: unknown): SourceInfo | null {
 }
 
 /**
- * sources_detail을 타입별로 그룹화
+ * sources_detail을 타입별로 그룹화 (실제 테이블명 기반)
  */
 export function getSourcesByType(
   sourcesDetail: SourceInfo[]
 ): SourcesByType {
   const grouped: SourcesByType = {
-    statute_article: [],
-    case_paragraph: [],
-    decision_paragraph: [],
-    interpretation_paragraph: [],
-    regulation_paragraph: [],
+    statutes_articles: [],
+    precedent_contents: [],
+    precedent_chunks: [],
   };
   
   for (const detail of sourcesDetail) {
     const type = detail.type;
-    if (type in grouped) {
-      grouped[type as keyof SourcesByType].push(detail);
+    // source_type 값을 실제 테이블명으로 매핑
+    if (type === 'statute_article' || type === 'statutes_articles') {
+      grouped.statutes_articles.push(detail);
+    } else if (type === 'case_paragraph' || type === 'precedent_content' || type === 'precedent_contents') {
+      // precedent_content는 백엔드에서 normalize_document_type이 반환하는 타입
+      // case_paragraph는 레거시 타입, precedent_contents는 테이블명
+      grouped.precedent_contents.push(detail);
+    } else if (type === 'precedent_chunks') {
+      grouped.precedent_chunks.push(detail);
     }
   }
   
@@ -284,11 +303,9 @@ export function getSourcesByType(
  */
 export function getSourcesDetailFromSourcesByType(sourcesByType: SourcesByType): SourceInfo[] {
   return [
-    ...sourcesByType.statute_article,
-    ...sourcesByType.case_paragraph,
-    ...sourcesByType.decision_paragraph,
-    ...sourcesByType.interpretation_paragraph,
-    ...sourcesByType.regulation_paragraph,
+    ...sourcesByType.statutes_articles,
+    ...sourcesByType.precedent_contents,
+    ...sourcesByType.precedent_chunks,
   ];
 }
 
@@ -312,7 +329,8 @@ export function extractLegalReferencesFromSourcesDetail(
   const seen = new Set<string>();
   
   for (const detail of sourcesDetail) {
-    if (detail.type !== 'statute_article') {
+    // statute_article 또는 statutes_articles 모두 처리
+    if (detail.type !== 'statute_article' && detail.type !== 'statutes_articles') {
       continue;
     }
     
@@ -362,10 +380,9 @@ export function parseSourcesMetadata(
       legalReferences: [],
       sourcesDetail: [],
       sourcesByType: {
-        statute_article: [],
-        case_paragraph: [],
-        decision_paragraph: [],
-        interpretation_paragraph: [],
+        statutes_articles: [],
+        precedent_contents: [],
+        precedent_chunks: [],
       },
       relatedQuestions: [],
     };
@@ -381,31 +398,37 @@ export function parseSourcesMetadata(
   
   if (metadata.sources_by_type && typeof metadata.sources_by_type === 'object') {
     const byType = metadata.sources_by_type as Record<string, unknown>;
-    const parsedByType = {
-      statute_article: Array.isArray(byType.statute_article)
-        ? byType.statute_article.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
-        : [],
-      case_paragraph: Array.isArray(byType.case_paragraph)
-        ? byType.case_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
-        : [],
-      decision_paragraph: Array.isArray(byType.decision_paragraph)
-        ? byType.decision_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
-        : [],
-      interpretation_paragraph: Array.isArray(byType.interpretation_paragraph)
-        ? byType.interpretation_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
-        : [],
-      regulation_paragraph: Array.isArray(byType.regulation_paragraph)
-        ? byType.regulation_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
-        : [],
+    // 실제 테이블명 기반 구조로 파싱 (하위 호환성을 위해 source_type 값도 처리)
+    const parsedByType: SourcesByType = {
+      statutes_articles: [],
+      precedent_contents: [],
+      precedent_chunks: [],
     };
+    
+    // 실제 테이블명 기반 파싱
+    if (Array.isArray(byType.statutes_articles)) {
+      parsedByType.statutes_articles = byType.statutes_articles.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null);
+    }
+    if (Array.isArray(byType.precedent_contents)) {
+      parsedByType.precedent_contents = byType.precedent_contents.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null);
+    }
+    if (Array.isArray(byType.precedent_chunks)) {
+      parsedByType.precedent_chunks = byType.precedent_chunks.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null);
+    }
+    
+    // 하위 호환성: source_type 값 기반 구조도 처리
+    if (Array.isArray(byType.statute_article)) {
+      parsedByType.statutes_articles.push(...byType.statute_article.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null));
+    }
+    if (Array.isArray(byType.case_paragraph)) {
+      parsedByType.precedent_contents.push(...byType.case_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null));
+    }
     
     // sources_by_type이 유효한지 확인 (최소한 하나의 타입이라도 데이터가 있어야 함)
     const hasValidData = 
-      parsedByType.statute_article.length > 0 ||
-      parsedByType.case_paragraph.length > 0 ||
-      parsedByType.decision_paragraph.length > 0 ||
-      parsedByType.interpretation_paragraph.length > 0 ||
-      parsedByType.regulation_paragraph.length > 0;
+      parsedByType.statutes_articles.length > 0 ||
+      parsedByType.precedent_contents.length > 0 ||
+      parsedByType.precedent_chunks.length > 0;
     
     if (hasValidData) {
       sourcesByType = parsedByType;

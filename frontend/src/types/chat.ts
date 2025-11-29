@@ -43,6 +43,14 @@ export interface SourceInfo {
   // 상세본문
   content?: string;
   
+  // 원천 식별자 (원본 문서 추적용)
+  chunk_id?: string;
+  source_id?: string;
+  
+  // 점수 정보 (개발 환경에서만)
+  relevance_score?: number;
+  cross_encoder_score?: number;
+  
   // 소스 출처 정보
   source_from?: string;
   source_doc_id?: string;
@@ -100,11 +108,10 @@ export interface ChatMessage {
   attachments?: FileAttachment[];
   metadata?: {
     sources_by_type?: {
-      statute_article: SourceInfo[];
-      case_paragraph: SourceInfo[];
-      decision_paragraph: SourceInfo[];
-      interpretation_paragraph: SourceInfo[];
-    };  // 우선 사용 필드
+      statutes_articles: SourceInfo[];      // text_chunks.source_type = 'statute_article' 매핑
+      precedent_contents: SourceInfo[];      // text_chunks.source_type = 'case_paragraph' 매핑
+      precedent_chunks: SourceInfo[];        // 별도 벡터 저장소
+    };  // 실제 PostgreSQL 테이블명 기반
     sources?: string[];  // deprecated
     sources_detail?: SourceInfo[];  // deprecated, 하위 호환성
     legal_references?: string[];  // deprecated

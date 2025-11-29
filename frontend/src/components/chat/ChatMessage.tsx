@@ -619,15 +619,26 @@ export function ChatMessage({
                 sourcesByType={sourcesByType}
                 onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
                 onReferenceClick={(ref, sourceDetail) => {
-                  const referenceId = sourceDetail?.case_number || 
-                                    sourceDetail?.article_no || 
-                                    sourceDetail?.decision_number || 
-                                    sourceDetail?.interpretation_number ||
-                                    sourceDetail?.metadata?.doc_id ||
-                                    ref.metadata?.doc_id ||
-                                    ref.metadata?.case_number ||
-                                    ref.metadata?.article_no ||
-                                    ref.id;
+                  let referenceId: string | undefined = undefined;
+                  if (sourceDetail?.case_number) {
+                    referenceId = String(sourceDetail.case_number);
+                  } else if (sourceDetail?.article_no) {
+                    referenceId = String(sourceDetail.article_no);
+                  } else if (sourceDetail?.decision_number) {
+                    referenceId = String(sourceDetail.decision_number);
+                  } else if (sourceDetail?.interpretation_number) {
+                    referenceId = String(sourceDetail.interpretation_number);
+                  } else if (sourceDetail?.metadata?.doc_id) {
+                    referenceId = String(sourceDetail.metadata.doc_id);
+                  } else if (ref.metadata?.doc_id) {
+                    referenceId = String(ref.metadata.doc_id);
+                  } else if (ref.metadata?.case_number) {
+                    referenceId = String(ref.metadata.case_number);
+                  } else if (ref.metadata?.article_no) {
+                    referenceId = String(ref.metadata.article_no);
+                  } else if (ref.id && typeof ref.id === 'string') {
+                    referenceId = ref.id;
+                  }
                   onOpenReferencesSidebar?.(safeMessage, ref.type, referenceId);
                 }}
                 defaultExpanded={false}
