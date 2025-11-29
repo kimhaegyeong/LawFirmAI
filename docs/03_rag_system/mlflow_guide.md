@@ -29,8 +29,11 @@ pip install mlflow>=2.8.0
 # MLflow 인덱스 사용
 USE_MLFLOW_INDEX=true
 
-# MLflow Tracking URI (선택사항, 기본값: ./mlflow/mlruns)
-MLFLOW_TRACKING_URI=file:///D:/project/LawFirmAI/LawFirmAI/mlflow/mlruns
+# MLflow Tracking URI (선택사항, 기본값: SQLite 백엔드 사용)
+# SQLite 백엔드 사용 (권장, FutureWarning 해결)
+MLFLOW_TRACKING_URI=sqlite:///D:/project/LawFirmAI/LawFirmAI/mlflow/mlflow.db
+# 또는 파일 시스템 백엔드 (deprecated, 경고 발생)
+# MLFLOW_TRACKING_URI=file:///D:/project/LawFirmAI/LawFirmAI/mlflow/mlruns
 
 # MLflow Run ID (선택사항, None이면 프로덕션 run 자동 조회)
 MLFLOW_RUN_ID=
@@ -44,13 +47,16 @@ OPTIMIZED_SEARCH_PARAMS_PATH=data/ml_config/optimized_search_params.json
 
 ### 3. Windows 경로 설정
 
-Windows 환경에서는 절대 경로를 사용하는 것이 권장됩니다:
+Windows 환경에서는 SQLite 백엔드를 사용하는 것이 권장됩니다:
 
 ```env
-MLFLOW_TRACKING_URI=file:///D:/project/LawFirmAI/LawFirmAI/mlflow/mlruns
+# SQLite 백엔드 (권장)
+MLFLOW_TRACKING_URI=sqlite:///D:/project/LawFirmAI/LawFirmAI/mlflow/mlflow.db
 ```
 
-**주의**: `file:///` 뒤에 슬래시(`/`) 3개를 사용하고, 경로 구분자는 슬래시(`/`)를 사용하세요.
+**주의**: 
+- SQLite 백엔드: `sqlite:///` 뒤에 절대 경로를 사용하세요
+- 파일 시스템 백엔드 (deprecated): `file:///` 뒤에 슬래시(`/`) 3개를 사용하고, 경로 구분자는 슬래시(`/`)를 사용하세요
 
 ## FAISS 인덱스 관리
 
