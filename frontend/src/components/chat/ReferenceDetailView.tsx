@@ -3,7 +3,7 @@
  * DocumentSidebar와 동일한 디자인으로 참고자료 상세 정보를 표시합니다.
  */
 import { FileText, Scale, Bookmark, ExternalLink, ArrowLeft, Copy, Check } from 'lucide-react';
-import { useMemo, useState, useEffect, type ReactNode } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
 import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
 import { copyToClipboardWithFeedback } from '../../utils/copyToClipboard';
@@ -366,7 +366,7 @@ export function ReferenceDetailView({
                 />
               </div>
             )
-          ) as ReactNode}
+          ) as any}
 
           {/* 기타 정보 */}
           {documentType === 'regulation' && (reference.org || sourceDetail?.org || docMetadata.org) && (

@@ -37,10 +37,17 @@ export function OriginalDocumentViewer({ source, onClose }: OriginalDocumentView
         }
 
         const [, sourceType, sourceIdStr] = urlMatch;
+        if (!sourceIdStr) {
+          throw new Error('잘못된 URL 형식입니다.');
+        }
         const sourceId = parseInt(sourceIdStr, 10);
 
         if (isNaN(sourceId)) {
           throw new Error('잘못된 문서 ID입니다.');
+        }
+
+        if (!sourceType) {
+          throw new Error('잘못된 문서 타입입니다.');
         }
 
         // 원본 문서 조회
@@ -50,7 +57,7 @@ export function OriginalDocumentViewer({ source, onClose }: OriginalDocumentView
         // 하이브리드 청킹인 경우 청크 그룹 조회
         // metadata에서 chunk_group_id 확인
         const chunkGroupId = source.metadata?.chunk_group_id;
-        if (chunkGroupId) {
+        if (chunkGroupId && typeof chunkGroupId === 'string') {
           try {
             const chunksData = await fetchChunksByGroup(chunkGroupId);
             setChunks(chunksData);
@@ -152,7 +159,7 @@ export function OriginalDocumentViewer({ source, onClose }: OriginalDocumentView
           )}
 
           <div className="prose max-w-none">
-            {selectedChunkIndex !== null && chunks ? (
+            {selectedChunkIndex !== null && chunks && chunks.chunks[selectedChunkIndex] ? (
               <div>
                 <h4 className="text-md font-semibold mb-2">
                   선택된 청크 ({chunks.chunks[selectedChunkIndex].chunk_size_category || '청크'})

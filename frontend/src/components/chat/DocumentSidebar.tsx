@@ -170,7 +170,7 @@ export function DocumentSidebar({
     value: string | number | undefined; 
     fieldName: string;
     isMonospace?: boolean;
-  }) => {
+  }): JSX.Element | null => {
     if (!value) return null;
     
     const valueStr = String(value);
@@ -388,37 +388,44 @@ export function DocumentSidebar({
                 </div>
               )}
 
-              {/* 해석례 정보 */}
-              {documentType === 'interpretation' && (
-                <div className="space-y-3">
-                  <InfoField
-                    label="제목"
-                    value={sourceDetail?.title || docMetadata.title}
-                    fieldName="title"
-                  />
-                  <InfoField
-                    label="기관"
-                    value={sourceDetail?.org || docMetadata.org}
-                    fieldName="org"
-                  />
-                  <InfoField
-                    label="일련번호"
-                    value={sourceDetail?.interpretation_number || getMetadataValue(docMetadata.doc_id)}
-                    fieldName="interpretation_number"
-                  />
-                  <InfoField
-                    label="법령해석례일련번호"
-                    value={getMetadataValue(docMetadata.interpretation_serial_number) || getMetadataValue(docMetadata.법령해석례일련번호) || getMetadataValue(docMetadata.해석ID) || getMetadataValue(docMetadata.expcId)}
-                    fieldName="interpretation_serial_number"
-                    isMonospace
-                  />
-                  <InfoField
-                    label="회신일"
-                    value={sourceDetail?.response_date || docMetadata.response_date}
-                    fieldName="response_date"
-                  />
-                </div>
-              )}
+              {(
+                documentType === 'interpretation' &&
+                (
+                  <div className="space-y-3">
+                    <InfoField
+                      label="제목"
+                      value={sourceDetail?.title || docMetadata.title}
+                      fieldName="title"
+                    />
+                    <InfoField
+                      label="기관"
+                      value={sourceDetail?.org || docMetadata.org}
+                      fieldName="org"
+                    />
+                    <InfoField
+                      label="일련번호"
+                      value={sourceDetail?.interpretation_number || getMetadataValue(docMetadata.doc_id)}
+                      fieldName="interpretation_number"
+                    />
+                    <InfoField
+                      label="법령해석례일련번호"
+                      value={
+                        getMetadataValue(docMetadata.interpretation_serial_number) ||
+                        getMetadataValue(docMetadata.법령해석례일련번호) ||
+                        getMetadataValue(docMetadata.해석ID) ||
+                        getMetadataValue(docMetadata.expcId)
+                      }
+                      fieldName="interpretation_serial_number"
+                      isMonospace
+                    />
+                    <InfoField
+                      label="회신일"
+                      value={sourceDetail?.response_date || docMetadata.response_date}
+                      fieldName="response_date"
+                    />
+                  </div>
+                )
+              ) as any}
 
               {/* 기타 정보 */}
               {documentType === 'regulation' && docMetadata.org && (
@@ -488,6 +495,57 @@ export function DocumentSidebar({
                   <span className="text-xs font-medium text-slate-500">원본 참조</span>
                   <p className="text-sm text-slate-600 mt-1 break-words">{source}</p>
                 </div>
+              )}
+
+              {/* 원천 정보 섹션 (접을 수 있는 섹션) */}
+              {(sourceDetail?.chunk_id || sourceDetail?.source_id || sourceDetail?.original_url || 
+                docMetadata.chunk_id || docMetadata.source_id || docMetadata.original_url) && (
+                <details className="border-t border-slate-200 pt-3 mt-3">
+                  <summary className="text-sm font-medium text-slate-600 cursor-pointer hover:text-slate-800">
+                    원천 정보
+                  </summary>
+                  <div className="mt-2 space-y-2 text-xs">
+                    <InfoField
+                      label="Source ID"
+                      value={(sourceDetail?.source_id ? String(sourceDetail.source_id) : undefined) || (docMetadata.source_id ? String(docMetadata.source_id) : undefined)}
+                      fieldName="source_id"
+                      isMonospace
+                    />
+                    <InfoField
+                      label="Chunk ID"
+                      value={(sourceDetail?.chunk_id ? String(sourceDetail.chunk_id) : undefined) || (docMetadata.chunk_id ? String(docMetadata.chunk_id) : undefined)}
+                      fieldName="chunk_id"
+                      isMonospace
+                    />
+                    {sourceDetail?.original_url || docMetadata.original_url ? (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-medium text-slate-500">Original URL</span>
+                          <button
+                            onClick={() => {
+                              const url = sourceDetail?.original_url || docMetadata.original_url;
+                              if (url && typeof url === 'string') {
+                                window.open(url, '_blank', 'noopener,noreferrer');
+                              }
+                            }}
+                            className="p-1 hover:bg-slate-100 rounded transition-colors text-slate-400 hover:text-slate-600"
+                            title="새 창에서 열기"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <a
+                          href={String(sourceDetail?.original_url || docMetadata.original_url)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-600 hover:underline break-all"
+                        >
+                          {String(sourceDetail?.original_url || docMetadata.original_url)}
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                </details>
               )}
             </div>
           </div>
