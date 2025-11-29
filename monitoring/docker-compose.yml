@@ -26,7 +26,7 @@ services:
     image: grafana/grafana:latest
     container_name: lawfirm-grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"  # 호스트 포트를 3001로 변경 (React 개발 서버가 3000 사용)
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin123

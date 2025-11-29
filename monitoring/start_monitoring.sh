@@ -28,8 +28,8 @@ else
 fi
 
 # Grafana 상태 확인
-if curl -s http://localhost:3000/api/health > /dev/null; then
-    echo "✅ Grafana is running on http://localhost:3000"
+if curl -s http://localhost:3001/api/health > /dev/null; then
+    echo "✅ Grafana is running on http://localhost:3001"
 else
     echo "❌ Grafana failed to start"
 fi
@@ -45,7 +45,7 @@ echo ""
 echo "🎉 Monitoring stack started successfully!"
 echo ""
 echo "📊 Access URLs:"
-echo "   Grafana: http://localhost:3000 (admin/admin123)"
+echo "   Grafana: http://localhost:3001 (admin/admin123)"
 echo "   Prometheus: http://localhost:9090"
 echo "   Node Exporter: http://localhost:9100"
 echo ""
