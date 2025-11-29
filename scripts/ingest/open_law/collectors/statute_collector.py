@@ -191,6 +191,31 @@ class StatuteCollector:
         
         return article_count
     
+    def _normalize_ministry_code(self, ministry_code_raw: Any) -> Optional[int]:
+        """
+        소관부처코드를 정수로 정규화
+        쉼표로 구분된 여러 값이 있으면 첫 번째 값만 사용
+        
+        Args:
+            ministry_code_raw: 소관부처코드 원본 값
+            
+        Returns:
+            Optional[int]: 정규화된 부처코드 또는 None
+        """
+        if not ministry_code_raw:
+            return None
+        
+        # 쉼표로 구분된 경우 첫 번째 값만 사용
+        if isinstance(ministry_code_raw, str) and ',' in ministry_code_raw:
+            ministry_code_str = ministry_code_raw.split(',')[0].strip()
+        else:
+            ministry_code_str = str(ministry_code_raw).strip()
+        
+        try:
+            return int(ministry_code_str) if ministry_code_str else None
+        except (ValueError, TypeError):
+            return None
+    
     def _save_statute_metadata(
         self,
         session,
@@ -203,6 +228,9 @@ class StatuteCollector:
         # 날짜 변환
         proclamation_date = self._parse_date(statute.get('공포일자'))
         effective_date = self._parse_date(statute.get('시행일자'))
+        
+        # 소관부처코드 정규화 (쉼표로 구분된 여러 값 처리)
+        ministry_code = self._normalize_ministry_code(statute.get('소관부처코드'))
         
         # 기존 레코드 확인
         result = session.execute(
@@ -238,7 +266,7 @@ class StatuteCollector:
                     "proclamation_date": proclamation_date,
                     "proclamation_number": statute.get('공포번호'),
                     "effective_date": effective_date,
-                    "ministry_code": statute.get('소관부처코드'),
+                    "ministry_code": ministry_code,
                     "ministry_name": statute.get('소관부처명'),
                     "amendment_type": statute.get('제개정구분명'),
                     "domain": domain,
@@ -270,7 +298,7 @@ class StatuteCollector:
                     "proclamation_date": proclamation_date,
                     "proclamation_number": statute.get('공포번호'),
                     "effective_date": effective_date,
-                    "ministry_code": statute.get('소관부처코드'),
+                    "ministry_code": ministry_code,
                     "ministry_name": statute.get('소관부처명'),
                     "amendment_type": statute.get('제개정구분명'),
                     "domain": domain,

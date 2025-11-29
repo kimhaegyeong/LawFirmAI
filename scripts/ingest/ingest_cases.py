@@ -284,76 +284,10 @@ def insert_chunks_and_embeddings(
     if not chunk_results:
         return
     
-    # 기존 chunks가 있는 경우 chunk_index 충돌 방지
-    max_idx = conn.execute(
-        "SELECT COALESCE(MAX(chunk_index), -1) FROM text_chunks WHERE source_type='case_paragraph' AND source_id=?",
-        (case_id,)
-    ).fetchone()[0]
-    next_chunk_index = int(max_idx) + 1
-
-    # Chunks 배치 입력
-    chunk_ids = []
-    texts_to_embed = []
-    
-    # case 메타데이터 조회 (모든 청크에 공통으로 사용)
-    case_metadata = None
-    try:
-        import json
-        cursor_meta = conn.execute("""
-            SELECT doc_id, casenames, court
-            FROM cases
-            WHERE id = ?
-        """, (case_id,))
-        row = cursor_meta.fetchone()
-        if row:
-            case_metadata = {
-                'doc_id': row['doc_id'],
-                'casenames': row['casenames'],
-                'court': row['court']
-            }
-    except Exception as e:
-        logger.debug(f"Failed to get case metadata for case_id={case_id}: {e}")
-    
-    # 메타데이터 JSON 생성
-    meta_json = None
-    if case_metadata:
-        try:
-            meta_json = json.dumps(case_metadata, ensure_ascii=False)
-        except Exception as e:
-            logger.debug(f"Failed to serialize case metadata for case_id={case_id}: {e}")
-    
-    for i, chunk_result in enumerate(chunk_results):
-        chunk_idx = next_chunk_index + i
-        metadata = chunk_result.metadata
-        
-        cursor = conn.execute(
-            """INSERT INTO text_chunks(
-                source_type, source_id, level, chunk_index, 
-                start_char, end_char, overlap_chars, text, token_count, meta,
-                chunking_strategy, chunk_size_category, chunk_group_id, 
-                query_type, original_document_id, embedding_version_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                "case_paragraph",
-                case_id,
-                metadata.get("level", "paragraph"),
-                chunk_idx,
-                None, None, None,
-                chunk_result.text,
-                None,
-                meta_json,  # 메타데이터 JSON 저장
-                metadata.get("chunking_strategy"),
-                metadata.get("chunk_size_category"),
-                metadata.get("chunk_group_id"),
-                metadata.get("query_type"),
-                metadata.get("original_document_id"),
-                version_id
-            )
-        )
-        
-        chunk_id = cursor.lastrowid
-        chunk_ids.append(chunk_id)
-        texts_to_embed.append(chunk_result.text)
+    # 참고: text_chunks 테이블은 PostgreSQL 환경에서 사용되지 않으므로 제거됨
+    # 이 함수는 더 이상 text_chunks에 데이터를 삽입하지 않습니다.
+    logger.warning("text_chunks 테이블이 제거되어 ingest_cases의 insert_chunks_and_embeddings 함수가 비활성화되었습니다.")
+    return
 
     # Embeddings 생성 (배치 처리)
     if texts_to_embed:

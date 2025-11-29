@@ -162,15 +162,8 @@ def insert_chunks_and_embeddings(
         key_to_ids.setdefault(key, []).append(row[0])
 
     # Prepare next chunk_index per source_id to avoid UNIQUE(source_type, source_id, chunk_index) collisions
-    # Initialize with current max(chunk_index)+1 if rows already exist
+    # ??: text_chunks ???? PostgreSQL ???? ???? ???? ???
     next_index_by_source: Dict[int, int] = {}
-    if statute_article_ids:
-        placeholders = ",".join(["?"] * len(statute_article_ids))
-        for sid, max_idx in conn.execute(
-            f"SELECT source_id, COALESCE(MAX(chunk_index), -1) FROM text_chunks WHERE source_type=? AND source_id IN ({placeholders}) GROUP BY source_id",
-            ("statute_article", *statute_article_ids,),
-        ):
-            next_index_by_source[int(sid)] = int(max_idx) + 1
 
     # statute_article ????? ?? (source_id?? ??)
     statute_metadata_cache = {}

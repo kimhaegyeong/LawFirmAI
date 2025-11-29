@@ -12,7 +12,9 @@ from pathlib import Path
 
 # 프로젝트 루트를 sys.path에 추가
 _CURRENT_FILE = Path(__file__).resolve()
-_PROJECT_ROOT = _CURRENT_FILE.parents[3]
+# run_postgresql_migration.py는 scripts/migrations/scripts/init/에 있으므로
+# parents[4]가 프로젝트 루트
+_PROJECT_ROOT = _CURRENT_FILE.parents[4]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -33,7 +35,20 @@ except ImportError:
         pass
 
 # 공통 유틸리티 임포트
-from scripts.migrations.utils.database import build_database_url, execute_sql_file
+# sys.path에 프로젝트 루트가 이미 추가되어 있으므로 직접 임포트 시도
+try:
+    from scripts.migrations.utils.database import build_database_url, execute_sql_file
+except ImportError:
+    # 실패 시 직접 경로로 임포트
+    import importlib.util
+    utils_path = _PROJECT_ROOT / "scripts" / "migrations" / "utils" / "database.py"
+    if not utils_path.exists():
+        raise FileNotFoundError(f"Database utils file not found: {utils_path}")
+    spec = importlib.util.spec_from_file_location("database_utils", str(utils_path))
+    database_utils = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(database_utils)
+    build_database_url = database_utils.build_database_url
+    execute_sql_file = database_utils.execute_sql_file
 
 # 로깅 설정
 logging.basicConfig(

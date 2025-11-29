@@ -159,47 +159,10 @@ def insert_chunks_and_embeddings(
         except Exception as e:
             logger.debug(f"Failed to serialize decision metadata for decision_id={decision_id}: {e}")
     
-    rows_to_embed: List[Dict] = []
-    for chunk_result in chunk_results:
-        metadata = chunk_result.metadata
-        cur = conn.execute(
-            """
-            INSERT INTO text_chunks(
-                source_type, source_id, level, chunk_index, 
-                start_char, end_char, overlap_chars, text, token_count, meta,
-                chunking_strategy, chunk_size_category, chunk_group_id, query_type, original_document_id, embedding_version_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                "decision_paragraph",
-                decision_id,
-                "paragraph",
-                chunk_result.chunk_index,
-                None,
-                None,
-                None,
-                chunk_result.text,
-                None,
-                meta_json,  # ????? JSON ??
-                metadata.get("chunking_strategy"),
-                metadata.get("chunk_size_category"),
-                metadata.get("chunk_group_id"),
-                metadata.get("query_type"),
-                metadata.get("original_document_id"),
-                version_id
-            ),
-        )
-        rows_to_embed.append({"id": cur.lastrowid, "text": chunk_result.text})
-
-    texts = [r["text"] for r in rows_to_embed]
-    if not texts:
-        return
-    vecs = embedder.encode(texts, batch_size=batch)
-    for r, v in zip(rows_to_embed, vecs):
-        conn.execute(
-            "INSERT INTO embeddings(chunk_id, model, dim, vector, version_id) VALUES(?,?,?,?,?)",
-            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes(), version_id),
-        )
+    # ??: text_chunks ???? PostgreSQL ???? ???? ???? ???
+    # ? ??? ? ?? text_chunks? ???? ???? ????.
+    logger.warning("text_chunks ???? ???? ingest_decisions? insert_chunks_and_embeddings ??? ?????????.")
+    return
 
 
 def main():

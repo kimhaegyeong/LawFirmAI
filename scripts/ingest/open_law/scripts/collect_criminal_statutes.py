@@ -37,6 +37,9 @@ from scripts.ingest.open_law.client import OpenLawClient
 from scripts.ingest.open_law.collectors.statute_collector import StatuteCollector
 from scripts.ingest.open_law.utils import build_database_url
 
+# 로그 디렉토리 생성
+Path('logs/open_law').mkdir(parents=True, exist_ok=True)
+
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -95,32 +98,24 @@ def main():
         logger.error("--oc 인자 또는 LAW_OPEN_API_OC 환경변수가 필요합니다.")
         return
     
-    # 로그 디렉토리 생성
-    Path('logs/open_law').mkdir(parents=True, exist_ok=True)
-    
     # API 클라이언트 생성
     client = OpenLawClient(args.oc)
     client.rate_limit_delay = args.rate_limit
     
     if args.phase == 'list':
         # 목록 수집
-        logger.info("형법 법령 목록 수집 시작")
+        logger.info("전체 법령 목록 수집 시작 (검색어 없이)")
         
         collector = StatuteCollector(client, args.db or "postgresql://localhost/lawfirmai")
         
-        # 형법 관련 검색어
-        queries = ['형법', '형사소송법']
-        all_statutes = []
-        
-        for query in queries:
-            logger.info(f"검색어 '{query}' 수집 시작")
-            statutes = collector.collect_statute_list(
-                query=query,
-                domain='criminal_law',
-                max_pages=args.max_pages
-            )
-            all_statutes.extend(statutes)
-            logger.info(f"검색어 '{query}' 수집 완료: {len(statutes)}개")
+        # 검색어 없이 전체 법령 수집
+        logger.info("전체 법령 수집 시작 (query='')")
+        all_statutes = collector.collect_statute_list(
+            query='',  # 빈 검색어로 전체 법령 수집
+            domain='other',  # 형법이 아닌 법령이므로 'other' 도메인 사용
+            max_pages=args.max_pages
+        )
+        logger.info(f"전체 법령 수집 완료: {len(all_statutes)}개")
         
         # 중복 제거 (법령ID 기준)
         seen_ids = set()
@@ -133,7 +128,9 @@ def main():
         
         # 목록 저장
         collector.save_statute_list(unique_statutes, args.output)
-        logger.info(f"형법 법령 목록 수집 완료: {len(unique_statutes)}개")
+        logger.info("전체 법령 목록 수집 완료:")
+        logger.info(f"  - 수집된 법령: {len(unique_statutes)}개")
+        logger.info(f"  - 중복 제거: {len(all_statutes) - len(unique_statutes)}개")
     
     elif args.phase == 'content':
         # 본문 수집

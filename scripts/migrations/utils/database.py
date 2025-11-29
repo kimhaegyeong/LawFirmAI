@@ -169,7 +169,20 @@ def execute_sql_file(
     if not use_psql:
         try:
             import psycopg2
-            from .sql_parser import parse_sql_statements
+            # 상대 임포트 대신 절대 경로로 임포트
+            try:
+                from scripts.migrations.utils.sql_parser import parse_sql_statements
+            except ImportError:
+                # 직접 경로로 임포트 시도
+                sql_parser_path = Path(__file__).parent / "sql_parser.py"
+                if sql_parser_path.exists():
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location("sql_parser", str(sql_parser_path))
+                    sql_parser = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(sql_parser)
+                    parse_sql_statements = sql_parser.parse_sql_statements
+                else:
+                    raise ImportError(f"sql_parser.py not found at {sql_parser_path}")
             
             conn = psycopg2.connect(database_url)
             conn.autocommit = True  # 각 문장을 자동 커밋

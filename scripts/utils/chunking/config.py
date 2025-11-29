@@ -92,10 +92,13 @@ class ChunkingConfig:
             "max_chars": 1000,
             "overlap_ratio": 0.15
         },
+        # 판례는 새로운 PrecedentChunker 사용 (섹션 타입별 차등 청킹)
+        # 레거시 설정은 유지하되, PostgreSQL precedent_contents는 사용하지 않음
         "case_paragraph": {
             "min_chars": 500,
             "max_chars": 2000,
-            "overlap_ratio": 0.3
+            "overlap_ratio": 0.3,
+            "note": "레거시 설정. PostgreSQL precedent_contents는 PrecedentChunker 사용"
         },
         "decision_paragraph": {
             "min_chars": 500,
@@ -106,6 +109,23 @@ class ChunkingConfig:
             "min_chars": 500,
             "max_chars": 2000,
             "overlap_ratio": 0.3
+        },
+        # PostgreSQL 판례 섹션 타입별 설정
+        "precedent_section_판시사항": {
+            "max_length": 500,
+            "chunk_size": None,
+            "chunk_overlap": 0,
+            "note": "500자 이하면 청킹 안 함"
+        },
+        "precedent_section_판결요지": {
+            "chunk_size": 1000,
+            "chunk_overlap": 200,
+            "min_length": 100
+        },
+        "precedent_section_판례내용": {
+            "chunk_size": 800,
+            "chunk_overlap": 150,
+            "min_length": 200
         }
     }
     
