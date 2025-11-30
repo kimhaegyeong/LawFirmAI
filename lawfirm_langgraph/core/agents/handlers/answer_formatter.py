@@ -1353,8 +1353,71 @@ class AnswerFormatterHandler:
             f"answer_length={len(answer_value) if answer_value else 0}"
         )
         
+        # 🔥 개선: sources_list가 비어있으면 retrieved_docs에서 직접 추출
         if not final_sources_list or len(final_sources_list) == 0:
-            return []
+            self.logger.info("[PREPARE_FINAL_RESPONSE_PART] sources_list is empty, extracting from retrieved_docs")
+            fallback_sources_detail = []
+            
+            # 답변에서 사용된 문서 번호 추출
+            used_doc_numbers = self._extract_used_document_numbers(answer_value)
+            
+            # 사용된 문서가 있으면 해당 문서만 처리, 없으면 모든 문서 처리
+            docs_to_process = []
+            if used_doc_numbers:
+                self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Found {len(used_doc_numbers)} used documents: {sorted(used_doc_numbers)}")
+                for doc_index, doc in enumerate(retrieved_docs, 1):
+                    if doc_index in used_doc_numbers:
+                        docs_to_process.append((doc_index, doc))
+            else:
+                # 사용된 문서가 없으면 모든 문서 처리 (최대 5개)
+                self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] No document numbers found, processing all documents (max 5)")
+                docs_to_process = [(idx, doc) for idx, doc in enumerate(retrieved_docs[:5], 1)]
+            
+            # retrieved_docs에서 직접 sources_detail 생성
+            for doc_index, doc in docs_to_process:
+                if not isinstance(doc, dict):
+                    continue
+                
+                source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                
+                # source 생성 시도
+                source = self._create_source_from_doc(
+                    doc,
+                    metadata,
+                    source_type,
+                    doc.get("doc_id") or metadata.get("doc_id") or metadata.get("id")
+                )
+                
+                if not source:
+                    source = self._create_fallback_source(
+                        doc,
+                        metadata,
+                        source_type,
+                        doc.get("doc_id") or metadata.get("id"),
+                        doc_index
+                    )
+                
+                if source:
+                    source_str = str(source).strip()
+                    detail_dict = self._create_source_detail_dict(
+                        source_str,
+                        source_type,
+                        None,
+                        doc,
+                        metadata,
+                        None
+                    )
+                    if detail_dict:
+                        fallback_sources_detail.append(detail_dict)
+                        final_sources_list.append(source_str)
+            
+            if fallback_sources_detail:
+                self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Generated {len(fallback_sources_detail)} fallback sources_detail from retrieved_docs")
+                return fallback_sources_detail
+            else:
+                self.logger.warning("[PREPARE_FINAL_RESPONSE_PART] Failed to generate fallback sources_detail from retrieved_docs")
+                return []
         
         self.logger.info("[PREPARE_FINAL_RESPONSE_PART] Attempting to generate sources_detail from sources")
         fallback_sources_detail = []
@@ -1364,7 +1427,25 @@ class AnswerFormatterHandler:
                 continue
             
             matching_doc = self._find_matching_doc_for_source(source_str, retrieved_docs)
-            detail_dict = self._create_source_detail_dict(source_str, matching_doc)
+            if matching_doc:
+                source_type = matching_doc.get("type") or matching_doc.get("source_type", "")
+                metadata = matching_doc.get("metadata", {}) if isinstance(matching_doc.get("metadata"), dict) else {}
+                detail_dict = self._create_source_detail_dict(
+                    source_str,
+                    source_type,
+                    None,
+                    matching_doc,
+                    metadata,
+                    None
+                )
+            else:
+                # matching_doc이 없으면 기본 detail 생성
+                detail_dict = {
+                    "name": source_str,
+                    "type": "unknown",
+                    "url": "",
+                    "metadata": {}
+                }
             fallback_sources_detail.append(detail_dict)
         
         if fallback_sources_detail:
@@ -1906,10 +1987,27 @@ class AnswerFormatterHandler:
         total_docs = len(retrieved_docs_list)
         self.logger.info(f"[SOURCES] Processing {total_docs} retrieved_docs in prepare_final_response_part")
 
+        # 🔥 개선: 답변에서 사용된 문서 번호 추출
+        answer_value = WorkflowUtils.get_state_value(state, "answer", "")
+        used_doc_numbers = self._extract_used_document_numbers(answer_value)
+        
+        # 사용된 문서가 있으면 해당 문서만 처리, 없으면 모든 문서 처리
+        docs_to_process = []
+        if used_doc_numbers:
+            self.logger.info(f"[SOURCES] Found {len(used_doc_numbers)} used documents in answer: {sorted(used_doc_numbers)}")
+            for doc_index, doc in enumerate(retrieved_docs_list, 1):
+                if doc_index in used_doc_numbers:
+                    docs_to_process.append((doc_index, doc))
+        else:
+            # 사용된 문서가 없으면 모든 문서 처리 (fallback)
+            self.logger.info(f"[SOURCES] No document numbers found in answer, processing all {total_docs} documents")
+            docs_to_process = [(idx, doc) for idx, doc in enumerate(retrieved_docs_list, 1)]
+
         sources_created_count = 0
         sources_failed_count = 0
 
-        for doc_index, doc in enumerate(retrieved_docs_list, 1):
+        for doc_index, doc in docs_to_process:
+            total_docs_for_log = len(docs_to_process)  # 로그용 총 문서 수
             if not isinstance(doc, dict):
                 self.logger.warning(f"[SOURCES] Doc {doc_index}/{total_docs} is not a dict, skipping")
                 sources_failed_count += 1
@@ -2546,6 +2644,35 @@ class AnswerFormatterHandler:
 
         return normalized_sources_clean, final_sources_detail_clean, legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
 
+    def _extract_used_document_numbers(self, answer: str) -> set:
+        """답변에서 사용된 문서 번호 추출"""
+        if not answer:
+            return set()
+        
+        import re
+        used_doc_numbers = set()
+        
+        # 문서 인용 패턴들
+        document_citation_patterns = [
+            r'\[문서\s*(\d+)\]',  # [문서 1], [문서 2] 형식
+            r'\[문서:\s*[^\]]*(\d+)[^\]]*\]',  # [문서: ... 1 ...] 형식
+            r'문서\s*\[\s*(\d+)\s*\]',  # 문서[1], 문서[2] 형식
+            r'문서\s*(\d+)',  # 문서1, 문서2 형식
+            r'\(문서\s*(\d+)\)',  # (문서 1), (문서 2) 형식
+        ]
+        
+        for pattern in document_citation_patterns:
+            matches = re.findall(pattern, answer, re.IGNORECASE)
+            for match in matches:
+                try:
+                    doc_num = int(match)
+                    if doc_num > 0:  # 0보다 큰 번호만 유효
+                        used_doc_numbers.add(doc_num)
+                except (ValueError, TypeError):
+                    pass
+        
+        return used_doc_numbers
+    
     def _log_table_documents_tracking(
         self,
         answer: str,
@@ -2972,12 +3099,10 @@ class AnswerFormatterHandler:
                 self.logger.warning("Config or Connector not initialized, cannot get full text")
                 return None
             
-            conn = self._connector._get_connection()
-            cursor = conn.cursor()
-            
-            full_text = None
-            
-            try:
+            with self._connector._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                full_text = None
                 if source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
                     doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
                     if doc_id:
@@ -3037,19 +3162,8 @@ class AnswerFormatterHandler:
                         row = cursor.fetchone()
                         if row and row[0]:
                             full_text = row[0]
-            finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if hasattr(self._connector, '_connection_pool') and self._connector._connection_pool:
-                    # 연결 풀링 사용 중이면 close() 호출하지 않음
-                    pass
-                else:
-                    # 직접 연결인 경우에만 close()
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-            
-            return full_text if full_text and len(full_text.strip()) > 0 else None
+                
+                return full_text if full_text and len(full_text.strip()) > 0 else None
             
         except Exception as e:
             self.logger.warning(f"Failed to get full text from database: {e}")
@@ -3085,12 +3199,10 @@ class AnswerFormatterHandler:
                 self.logger.warning("Config or Connector not initialized, cannot get full texts")
                 return {}
             
-            conn = self._connector._get_connection()
-            cursor = conn.cursor()
-            
-            full_texts = {}
-            
-            try:
+            with self._connector._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                full_texts = {}
                 cases = []
                 decisions = []
                 interpretations = []
@@ -3175,19 +3287,8 @@ class AnswerFormatterHandler:
                         if row and row[0]:
                             key = f"{statute_id}_{article_no}"
                             full_texts[key] = row[0]
-            finally:
-                # 연결 풀링 사용 시 close() 호출하지 않음
-                if hasattr(self._connector, '_connection_pool') and self._connector._connection_pool:
-                    # 연결 풀링 사용 중이면 close() 호출하지 않음
-                    pass
-                else:
-                    # 직접 연결인 경우에만 close()
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-            
-            return full_texts
+                
+                return full_texts
             
         except Exception as e:
             self.logger.warning(f"Failed to get full texts in batch: {e}")

@@ -252,7 +252,11 @@ def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowStat
     Flat 구조가 필요하면 create_flat_legal_state()를 사용하세요.
     """
     # modular_states의 create_initial_legal_state 사용
-    from .modular_states import create_initial_legal_state as create_modular_state
+    # modular_states는 core/workflow/state/에 있으므로 올바른 경로로 import
+    try:
+        from lawfirm_langgraph.core.workflow.state.modular_states import create_initial_legal_state as create_modular_state
+    except ImportError:
+        from core.workflow.state.modular_states import create_initial_legal_state as create_modular_state
     return create_modular_state(query, session_id)
 
 

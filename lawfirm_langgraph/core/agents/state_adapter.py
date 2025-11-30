@@ -14,7 +14,11 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
-from .modular_states import LegalWorkflowState
+# modular_states는 core/workflow/state/에 있으므로 올바른 경로로 import
+try:
+    from lawfirm_langgraph.core.workflow.state.modular_states import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.modular_states import LegalWorkflowState
 try:
     from core.workflow.node_input_output_spec import validate_node_input
 except ImportError:
