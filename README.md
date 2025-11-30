@@ -20,9 +20,6 @@ PostgreSQL 기반 법률 데이터에 대해 **pgvector**와 **FAISS** 두 가�
 - **법령 데이터**: `statutes_articles` 테이블 (법령 조문)
 - **판례 데이터**: `precedent_chunks` 테이블 (판례 청크)
 - **임베딩 모델**: `woong0322/ko-legal-sbert-finetuned` (768차원)
-- **데이터 규모**: 소규모(1K), 중규모(10K), 대규모(100K) 테스트 지원
-
-자세한 내용은 [비교 테스트 계획](docs/07_api/open_law/ingestion/EMBEDDING_COMPARISON_PLAN.md)을 참조하세요.
 
 ## 🛠️ 기술 스택
 
@@ -49,3 +46,7 @@ PostgreSQL 기반 법률 데이터에 대해 **pgvector**와 **FAISS** 두 가�
 - **React 18+ with TypeScript**: 비교 결과 시각화
 - **Vite**: 빠른 빌드 도구
 - **Tailwind CSS**: 유틸리티 기반 스타일링
+
+## 📚 세부 기술 문서
+
+세부 기술 및 구현 내용은 [docs 폴더](docs/README.md)의 문서를 참조하세요.
