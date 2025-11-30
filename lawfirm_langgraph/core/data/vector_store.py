@@ -38,13 +38,17 @@ except ImportError:
 os.environ['SAFETENSORS_FAST_GPU'] = '1'
 os.environ['HF_HUB_DISABLE_SAFETENSORS_WARNING'] = '1'
 
-# FAISS 관련 import
-try:
-    import faiss
-    FAISS_AVAILABLE = True
-except ImportError:
+# FAISS 관련 import (only when VECTOR_SEARCH_METHOD=faiss)
+VECTOR_SEARCH_METHOD = os.getenv("VECTOR_SEARCH_METHOD", "pgvector").lower()
+if VECTOR_SEARCH_METHOD == "faiss":
+    try:
+        import faiss
+        FAISS_AVAILABLE = True
+    except ImportError:
+        FAISS_AVAILABLE = False
+        logging.warning("FAISS not available. Please install faiss-cpu or faiss-gpu")
+else:
     FAISS_AVAILABLE = False
-    logging.warning("FAISS not available. Please install faiss-cpu or faiss-gpu")
 
 # Sentence-BERT 관련 import
 try:

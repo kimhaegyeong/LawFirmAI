@@ -26,6 +26,57 @@ logger = get_logger(__name__)
 _database_adapter_cache: Dict[str, 'DatabaseAdapter'] = {}
 
 
+class ConnectionStats:
+    """연결 횟수 통계 추적"""
+    
+    def __init__(self):
+        self._stats = {
+            'total_getconn': 0,
+            'total_putconn': 0,
+            'getconn_by_method': {},
+            'putconn_by_method': {}
+        }
+        self._lock = threading.Lock()
+    
+    def record_getconn(self, method_name: str):
+        """연결 획득 기록"""
+        with self._lock:
+            self._stats['total_getconn'] += 1
+            self._stats['getconn_by_method'][method_name] = \
+                self._stats['getconn_by_method'].get(method_name, 0) + 1
+    
+    def record_putconn(self, method_name: str):
+        """연결 반환 기록"""
+        with self._lock:
+            self._stats['total_putconn'] += 1
+            self._stats['putconn_by_method'][method_name] = \
+                self._stats['putconn_by_method'].get(method_name, 0) + 1
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """통계 조회"""
+        with self._lock:
+            return self._stats.copy()
+    
+    def log_stats(self, logger_instance):
+        """통계 로깅"""
+        stats = self.get_stats()
+        logger_instance.info(f"Connection stats: total_getconn={stats['total_getconn']}, total_putconn={stats['total_putconn']}")
+        if stats['getconn_by_method']:
+            logger_instance.debug(f"getconn by method: {stats['getconn_by_method']}")
+        if stats['putconn_by_method']:
+            logger_instance.debug(f"putconn by method: {stats['putconn_by_method']}")
+    
+    def reset(self):
+        """통계 초기화"""
+        with self._lock:
+            self._stats = {
+                'total_getconn': 0,
+                'total_putconn': 0,
+                'getconn_by_method': {},
+                'putconn_by_method': {}
+            }
+
+
 # PostgreSQL 지원
 try:
     import psycopg2
@@ -139,6 +190,81 @@ class PostgreSQLConnection(DatabaseConnection):
             else:
                 raise
     
+    def get_transaction_status(self) -> Optional[str]:
+        """
+        트랜잭션 상태 확인
+        
+        Returns:
+            'idle': 트랜잭션이 없거나 커밋됨
+            'in_transaction': 트랜잭션이 열려있음
+            'in_failed_transaction': 트랜잭션이 실패 상태
+            None: 확인 불가 (연결이 닫혀있거나 오류)
+        """
+        if self._is_closed():
+            return None
+        
+        try:
+            # psycopg2 연결의 status 속성 확인 (가장 안정적인 방법)
+            # status는 정수: 0=idle, 1=in_transaction, 2=in_failed_transaction
+            if hasattr(self.conn, 'status'):
+                status = self.conn.status
+                if status == 0:
+                    return 'idle'
+                elif status == 1:
+                    return 'in_transaction'
+                elif status == 2:
+                    return 'in_failed_transaction'
+            
+            # status 속성이 없는 경우 (구버전 psycopg2) 쿼리로 확인
+            cursor = self.conn.cursor()
+            try:
+                # 간단한 쿼리로 트랜잭션 상태 확인
+                cursor.execute("SELECT 1")
+                # 쿼리가 성공하면 트랜잭션이 정상 상태
+                return 'in_transaction'
+            except psycopg2.InternalError:
+                # 실패한 트랜잭션에서는 쿼리 실행 불가
+                return 'in_failed_transaction'
+            except Exception:
+                # 기타 오류는 idle로 간주
+                return 'idle'
+            finally:
+                cursor.close()
+        except (psycopg2.InterfaceError, psycopg2.OperationalError, AttributeError) as e:
+            logger.debug(f"Failed to get transaction status: {e}")
+            return None
+    
+    def ensure_transaction_closed(self) -> bool:
+        """
+        트랜잭션이 닫혀있는지 확인하고, 열려있으면 rollback
+        
+        Returns:
+            True: 트랜잭션이 안전하게 닫혔거나 없음
+            False: 트랜잭션 상태 확인/처리 실패
+        """
+        if self._is_closed():
+            return True
+        
+        status = self.get_transaction_status()
+        if status is None:
+            # 상태 확인 불가 (연결이 닫혀있을 수 있음)
+            return True
+        
+        if status == 'idle':
+            # 트랜잭션이 없거나 이미 커밋됨
+            return True
+        elif status in ('in_transaction', 'in_failed_transaction'):
+            # 트랜잭션이 열려있거나 실패 상태 - rollback 필요
+            try:
+                self.rollback()
+                logger.debug(f"Transaction rolled back before returning connection (status was: {status})")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to rollback transaction before returning connection: {e}")
+                return False
+        
+        return True
+    
     def close(self):
         if not self._is_closed():
             self.conn.close()
@@ -166,6 +292,27 @@ class DatabaseAdapter:
             self.database_url = existing.database_url
             self.db_type = existing.db_type
             self.connection_pool = existing.connection_pool
+            # 통계 관련 속성도 복사 (누락 방지)
+            if hasattr(existing, '_pool_stats'):
+                self._pool_stats = existing._pool_stats
+            else:
+                # 속성이 없으면 초기화 (하위 호환성)
+                self._pool_stats = {
+                    'total_connections': 0,
+                    'active_connections': 0,
+                    'failed_connections': 0,
+                    'returned_connections': 0
+                }
+            if hasattr(existing, '_pool_stats_lock'):
+                self._pool_stats_lock = existing._pool_stats_lock
+            else:
+                # 속성이 없으면 초기화 (하위 호환성)
+                self._pool_stats_lock = threading.Lock()
+            if hasattr(existing, '_connection_stats'):
+                self._connection_stats = existing._connection_stats
+            else:
+                # 속성이 없으면 초기화 (하위 호환성)
+                self._connection_stats = ConnectionStats()
             # 캐시 재사용 시 DEBUG 레벨로 변경 (이미 INFO 레벨로 로그가 출력되었으므로)
             logger.debug(f"DatabaseAdapter reused from cache: type={self.db_type}, url={self._mask_url(database_url)}")
             return
@@ -181,6 +328,8 @@ class DatabaseAdapter:
             'returned_connections': 0
         }
         self._pool_stats_lock = threading.Lock()
+        # 연결 횟수 통계 추적 (최적화 방안 4)
+        self._connection_stats = ConnectionStats()
         
         # 초기화 시간 측정
         init_start = time.time()
@@ -267,13 +416,23 @@ class DatabaseAdapter:
         Returns:
             DatabaseConnection: 데이터베이스 연결 객체
         """
+        # 호출 스택에서 메서드 이름 추출 (통계 추적용)
+        import inspect
+        frame = inspect.currentframe().f_back
+        method_name = frame.f_code.co_name if frame else "unknown"
+        
         if self.db_type == 'postgresql':
             if not self.connection_pool:
                 raise RuntimeError("PostgreSQL connection pool not initialized")
             conn = self.connection_pool.getconn()
-            with self._pool_stats_lock:
-                self._pool_stats['total_connections'] += 1
-                self._pool_stats['active_connections'] += 1
+            # 통계 업데이트 (속성이 있는 경우에만)
+            if hasattr(self, '_pool_stats_lock') and hasattr(self, '_pool_stats'):
+                with self._pool_stats_lock:
+                    self._pool_stats['total_connections'] += 1
+                    self._pool_stats['active_connections'] += 1
+            # 연결 횟수 통계 기록 (속성이 있는 경우에만)
+            if hasattr(self, '_connection_stats'):
+                self._connection_stats.record_getconn(method_name)
             return PostgreSQLConnection(conn)
         else:
             raise ValueError(f"Unsupported database type: {self.db_type}. Only PostgreSQL is supported.")
@@ -325,6 +484,37 @@ class DatabaseAdapter:
                         # 상태 확인 실패 시 바로 연결 시도
                     
                     conn = self.connection_pool.getconn()
+                    
+                    # 연결이 유효한지 즉시 확인 (닫힌 연결 감지)
+                    try:
+                        # psycopg2 연결의 closed 속성 확인
+                        if hasattr(conn, 'closed') and conn.closed != 0:
+                            # 연결이 이미 닫혀있으면 풀에 반환하지 않고 새 연결 가져오기
+                            logger.debug("Connection from pool is already closed, getting new connection...")
+                            try:
+                                # 닫힌 연결을 풀에 반환하지 않음 (풀에서 제거됨)
+                                self.connection_pool.putconn(conn, close=True)
+                            except Exception:
+                                pass  # 반환 실패해도 계속 진행
+                            
+                            # 재시도 (최대 3회)
+                            retry_inner_count = 0
+                            while retry_inner_count < 3:
+                                conn = self.connection_pool.getconn()
+                                if not (hasattr(conn, 'closed') and conn.closed != 0):
+                                    break  # 유효한 연결 획득
+                                retry_inner_count += 1
+                                time.sleep(0.1)
+                            
+                            # 여전히 닫혀있으면 예외 발생
+                            if hasattr(conn, 'closed') and conn.closed != 0:
+                                raise psycopg2.InterfaceError("All connections from pool are closed")
+                    except psycopg2.InterfaceError:
+                        raise  # InterfaceError는 그대로 전파
+                    except Exception as conn_check_error:
+                        # 기타 예외는 로깅만 하고 계속 진행 (연결이 유효할 수 있음)
+                        logger.debug(f"Connection check failed (continuing anyway): {conn_check_error}")
+                    
                     # 통계 업데이트 (에러 발생해도 연결은 반환)
                     try:
                         if hasattr(self, '_pool_stats_lock') and hasattr(self, '_pool_stats'):
@@ -345,6 +535,9 @@ class DatabaseAdapter:
                             with self._pool_stats_lock:
                                 self._pool_stats['total_connections'] += 1
                                 self._pool_stats['active_connections'] += 1
+                        # 연결 횟수 통계 기록 (속성이 있는 경우에만)
+                        if hasattr(self, '_connection_stats'):
+                            self._connection_stats.record_getconn('_get_connection_with_timeout')
                     except Exception as stats_error:
                         logger.debug(f"Failed to update pool stats (connection still returned): {stats_error}")
                     return PostgreSQLConnection(conn)
@@ -369,23 +562,45 @@ class DatabaseAdapter:
                 time.sleep(wait_time)
     
     def _validate_connection(self, conn: DatabaseConnection):
-        """연결 상태 검증"""
+        """연결 상태 검증 (닫힌 연결 자동 감지 및 재연결)"""
+        if not conn:
+            raise psycopg2.InterfaceError("Connection is None")
+        
+        # 연결이 닫혀있는지 확인
         if hasattr(conn, '_is_closed') and conn._is_closed():
             raise psycopg2.InterfaceError("Connection is closed")
         
         # 간단한 쿼리로 연결 상태 확인
         try:
             if hasattr(conn, 'conn'):
+                # 연결 객체가 None인지 확인
+                if conn.conn is None:
+                    raise psycopg2.InterfaceError("Connection object is None")
+                
+                # psycopg2 연결의 closed 속성 확인 (psycopg2 2.0.0+)
+                if hasattr(conn.conn, 'closed') and conn.conn.closed != 0:
+                    raise psycopg2.InterfaceError("Connection is closed")
+                
+                # 실제 쿼리로 연결 상태 확인
                 cursor = conn.conn.cursor()
                 cursor.execute("SELECT 1")
                 cursor.close()
+        except (psycopg2.InterfaceError, psycopg2.OperationalError) as e:
+            # 연결이 닫혔거나 유효하지 않은 경우
+            raise psycopg2.InterfaceError(f"Connection validation failed: {e}") from e
         except Exception as e:
+            # 기타 예외는 그대로 전파
             raise psycopg2.InterfaceError(f"Connection validation failed: {e}") from e
     
     def _safe_return_connection(self, conn_wrapper: DatabaseConnection):
         """안전하게 연결 반환 (에러 발생해도 연결은 반환)"""
         if not conn_wrapper:
             return
+        
+        # 호출 스택에서 메서드 이름 추출 (통계 추적용)
+        import inspect
+        frame = inspect.currentframe().f_back
+        method_name = frame.f_code.co_name if frame else "unknown"
         
         if self.db_type == 'postgresql' and self.connection_pool:
             if hasattr(conn_wrapper, 'conn'):
@@ -394,6 +609,9 @@ class DatabaseAdapter:
                     if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
                         # 연결이 유효한 경우에만 풀에 반환
                         self.connection_pool.putconn(conn_wrapper.conn)
+                        # 연결 횟수 통계 기록 (속성이 있는 경우에만)
+                        if hasattr(self, '_connection_stats'):
+                            self._connection_stats.record_putconn(method_name)
                         # 통계 업데이트 (에러 발생해도 연결은 이미 반환됨)
                         try:
                             if hasattr(self, '_pool_stats_lock') and hasattr(self, '_pool_stats'):
@@ -472,8 +690,46 @@ class DatabaseAdapter:
             # 타임아웃이 설정된 경우 연결 대기 시간 제한
             conn_wrapper = self._get_connection_with_timeout(timeout)
             
-            # 연결 상태 검증
-            self._validate_connection(conn_wrapper)
+            # 연결 상태 검증 (연결이 닫혀있으면 재시도)
+            max_validation_retries = 5  # 재시도 횟수 증가 (3 -> 5)
+            validation_retry_count = 0
+            while validation_retry_count < max_validation_retries:
+                try:
+                    self._validate_connection(conn_wrapper)
+                    break  # 검증 성공
+                except psycopg2.InterfaceError as validation_error:
+                    error_msg = str(validation_error).lower()
+                    is_closed_error = (
+                        "connection is closed" in error_msg or
+                        "connection validation failed" in error_msg or
+                        "connection object is none" in error_msg
+                    )
+                    
+                    if is_closed_error and validation_retry_count < max_validation_retries - 1:
+                        # 연결이 닫혀있으면 안전하게 반환하고 새 연결 가져오기
+                        logger.debug(
+                            f"Connection validation failed (closed/invalid), "
+                            f"retrying ({validation_retry_count + 1}/{max_validation_retries})... "
+                            f"Error: {validation_error}"
+                        )
+                        try:
+                            self._safe_return_connection(conn_wrapper)
+                        except Exception as return_error:
+                            logger.debug(f"Failed to return connection to pool: {return_error}")
+                            # 반환 실패해도 계속 진행 (연결이 이미 닫혀있을 수 있음)
+                        
+                        # 짧은 대기 후 새 연결 가져오기 (연결 풀 안정화 시간)
+                        if validation_retry_count > 0:
+                            time.sleep(0.1 * validation_retry_count)  # 지수 백오프
+                        
+                        conn_wrapper = self._get_connection_with_timeout(timeout)
+                        validation_retry_count += 1
+                    else:
+                        # 재시도 횟수 초과 또는 다른 오류
+                        logger.error(
+                            f"Connection validation failed after {validation_retry_count + 1} attempts: {validation_error}"
+                        )
+                        raise
             
             # 쿼리 실행 추적을 위한 cursor 래퍼 추가
             if isinstance(conn_wrapper, PostgreSQLConnection):
@@ -525,11 +781,22 @@ class DatabaseAdapter:
             yield conn_wrapper
             
             # 정상 종료 시 commit (트랜잭션이 있는 경우)
+            commit_success = False
             try:
                 if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
                     conn_wrapper.commit()
+                    commit_success = True
             except (psycopg2.InterfaceError, AttributeError) as commit_error:
                 logger.debug(f"Commit skipped (connection may be closed): {commit_error}")
+            except Exception as commit_error:
+                # commit 실패 시 rollback 시도
+                logger.warning(f"Commit failed: {commit_error}, attempting rollback...")
+                try:
+                    if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
+                        conn_wrapper.rollback()
+                        logger.debug("Rollback successful after commit failure")
+                except Exception as rollback_error:
+                    logger.error(f"Rollback also failed after commit failure: {rollback_error}")
                 
         except psycopg2.pool.PoolError as e:
             # 연결 풀 고갈 시 재시도
@@ -539,11 +806,21 @@ class DatabaseAdapter:
                 self._validate_connection(conn_wrapper)
                 yield conn_wrapper
                 # 정상 종료 시 commit
+                commit_success = False
                 try:
                     if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
                         conn_wrapper.commit()
+                        commit_success = True
                 except (psycopg2.InterfaceError, AttributeError):
                     pass
+                except Exception as commit_error:
+                    # commit 실패 시 rollback 시도
+                    logger.warning(f"Commit failed in retry: {commit_error}, attempting rollback...")
+                    try:
+                        if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
+                            conn_wrapper.rollback()
+                    except Exception:
+                        pass
             except Exception as retry_error:
                 # 재시도 실패 시 원래 예외 발생
                 raise e from retry_error
@@ -578,7 +855,15 @@ class DatabaseAdapter:
             
         finally:
             # 항상 연결 반환 (예외 발생 여부와 무관)
+            # 단, 트랜잭션이 열린 상태로 남아있으면 rollback 후 반환
             if conn_wrapper:
+                # 트랜잭션 상태 확인 및 안전하게 닫기
+                try:
+                    if hasattr(conn_wrapper, 'ensure_transaction_closed'):
+                        conn_wrapper.ensure_transaction_closed()
+                except Exception as tx_error:
+                    logger.debug(f"Transaction cleanup failed (continuing anyway): {tx_error}")
+                
                 self._safe_return_connection(conn_wrapper)
             
             # 실행 시간 로깅
@@ -590,8 +875,9 @@ class DatabaseAdapter:
                 max_query_time = max(query_times) if query_times else 0
                 total_query_time = sum(query_times)
                 
-                # 연결 유지 시간이 1초 이상이거나 쿼리가 여러 개인 경우 상세 로깅
-                if elapsed > 1.0 or query_count > 1:
+                # 연결 유지 시간이 2초 이상이거나 쿼리가 여러 개인 경우 상세 로깅 (임계값 상향 조정)
+                connection_warning_threshold = float(os.getenv("DB_CONNECTION_WARNING_THRESHOLD", "2.0"))
+                if elapsed > connection_warning_threshold or (query_count > 1 and elapsed > 1.0):
                     logger.warning(
                         f"🔗 Connection held for {elapsed:.2f}s "
                         f"(queries: {query_count}, "
@@ -603,7 +889,7 @@ class DatabaseAdapter:
                     logger.debug(
                         f"Connection held for {elapsed:.2f}s (queries: {query_count})"
                     )
-            elif elapsed > 1.0:  # 쿼리 없이 1초 이상 유지
+            elif elapsed > 2.0:  # 쿼리 없이 2초 이상 유지 (임계값 상향 조정)
                 logger.warning(f"Connection held for {elapsed:.2f}s without queries (longer than expected)")
     
     def execute_query(
@@ -756,6 +1042,9 @@ class DatabaseAdapter:
             
             utilization = active / maxconn if maxconn > 0 else 0
             
+            # 연결 횟수 통계 추가
+            connection_stats = self._connection_stats.get_stats() if hasattr(self, '_connection_stats') else {}
+            
             return {
                 "status": "active",
                 "minconn": minconn,
@@ -765,7 +1054,8 @@ class DatabaseAdapter:
                 "utilization": utilization,
                 "total_connections": stats.get('total_connections', 0),
                 "returned_connections": stats.get('returned_connections', 0),
-                "failed_connections": stats.get('failed_connections', 0)
+                "failed_connections": stats.get('failed_connections', 0),
+                "connection_stats": connection_stats
             }
         except Exception as e:
             logger.debug(f"Failed to get pool status: {e}")
@@ -782,6 +1072,11 @@ class DatabaseAdapter:
                 }
             except Exception:
                 return {"status": "error", "error": str(e), "available_connections": 50}  # 기본값
+    
+    def log_connection_stats(self):
+        """연결 통계 로깅"""
+        if hasattr(self, '_connection_stats'):
+            self._connection_stats.log_stats(logger)
     
     def close(self):
         """연결 풀 닫기"""
