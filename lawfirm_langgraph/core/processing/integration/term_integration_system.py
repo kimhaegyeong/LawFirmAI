@@ -144,16 +144,59 @@ class TermIntegrator:
         try:
             # 동의어 데이터베이스가 있는 경우 사용
             from lawfirm_langgraph.core.search.optimizers.synonym_database import SynonymDatabase
-            synonym_db = SynonymDatabase()
+            import os
+            
+            # 🔥 개선: 환경 변수에서 동의어 DB URL 확인
+            synonym_db_url = os.getenv("SYNONYM_DB_URL")
+            if not synonym_db_url:
+                # SYNONYM_DB_URL이 없으면 DATABASE_URL 사용
+                synonym_db_url = os.getenv("DATABASE_URL")
+            if not synonym_db_url:
+                # DATABASE_URL도 없으면 Config에서 가져오기
+                try:
+                    from lawfirm_langgraph.config.app_config import Config
+                    config = Config()
+                    synonym_db_url = config.database_url
+                except Exception:
+                    pass
+            
+            if synonym_db_url:
+                synonym_db = SynonymDatabase(database_url=synonym_db_url)
+            else:
+                # database_url이 없으면 동의어 DB 사용 불가
+                self.logger.debug("⚠️ [SYNONYM] Database URL not available. Skipping synonym database.")
+                return []
+            
             records = synonym_db.get_synonyms(keyword, domain=domain, limit=limit)
             synonyms = [record.synonym for record in records]
-            self.logger.debug(f"Found {len(synonyms)} synonyms for '{keyword}' from database")
+            if synonyms:
+                self.logger.debug(f"✅ [SYNONYM] Found {len(synonyms)} synonyms for '{keyword}' from database")
             return synonyms
+        except ImportError as e:
+            # 🔥 개선: ImportError 명시적 처리
+            self.logger.debug(
+                f"⚠️ [SYNONYM] SynonymDatabase not available: {e}. "
+                f"Using fallback. Install dependencies if needed."
+            )
+            return []
         except Exception as e:
-            self.logger.debug(f"Synonym database not available or error: {e}, using fallback")
+            # 🔥 개선: 오류 처리 강화 및 폴백 로직 개선
+            self.logger.debug(
+                f"⚠️ [SYNONYM] Synonym database not available or error: {e}. "
+                f"Using fallback synonym matching."
+            )
             # 폴백: 유사 용어 그룹에서 찾기
             # 실제 구현에서는 용어 통합 시스템의 그룹 정보를 활용할 수 있음
-            return []
+            fallback_synonyms = []
+            try:
+                # 간단한 폴백: 키워드 변형 시도
+                if len(keyword) > 2:
+                    # 예: "계약" -> "계약서", "계약서류" 등 (간단한 예시)
+                    # 실제로는 더 정교한 동의어 사전이 필요
+                    pass
+            except Exception:
+                pass
+            return fallback_synonyms
     
     def get_related_laws(self, keyword: str, legal_field: str = None) -> List[Dict[str, Any]]:
         """

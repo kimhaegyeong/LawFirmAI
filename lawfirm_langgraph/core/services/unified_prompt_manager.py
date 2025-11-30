@@ -447,11 +447,15 @@ class UnifiedPromptManager:
                     # 검증 상세 정보 로깅
                     validation_details = validation_result.get("validation_details", [])
                     if validation_details:
-                        logger.debug(
-                            f"📋 [PROMPT VALIDATION] Details: "
-                            f"{sum(1 for d in validation_details if d.get('found_in_prompt'))}/{len(validation_details)} "
-                            f"documents found in prompt"
-                        )
+                        try:
+                            found_count = sum(1 for d in validation_details if d and isinstance(d, dict) and d.get('found_in_prompt'))
+                            logger.debug(
+                                f"📋 [PROMPT VALIDATION] Details: "
+                                f"{found_count}/{len(validation_details)} "
+                                f"documents found in prompt"
+                            )
+                        except Exception as e:
+                            logger.warning(f"⚠️ [PROMPT VALIDATION] Error processing validation details: {e}")
                 else:
                     logger.info(
                         f"ℹ️ [PROMPT VALIDATION] No documents in context "
@@ -629,7 +633,7 @@ class UnifiedPromptManager:
                 normalized_docs = []
                 for doc in documents[:8]:
                     normalized = self._normalize_document_fields(doc)
-                    if normalized.get("content"):
+                    if normalized and normalized.get("content"):
                         normalized_docs.append(normalized)
 
                 if normalized_docs:
@@ -1203,6 +1207,9 @@ class UnifiedPromptManager:
                             
                             logger.debug(f"✅ [DOC TYPE RESTORE] retrieved_docs에서 type 및 법률 정보 복원: {orig_type} (source_type={orig_doc.get('source_type', 'N/A')}, statute_name={orig_doc.get('statute_name', 'N/A')}, law_name={orig_doc.get('law_name', 'N/A')}, article_no={orig_doc.get('article_no', 'N/A')})")
             
+            # 🔥 개선: statute_id로 법령명 배치 조회 (성능 최적화)
+            law_name_cache = self._batch_fetch_law_names(raw_documents)
+            
             # 문서 정규화
             normalized_count = 0
             skipped_count = 0
@@ -1215,7 +1222,7 @@ class UnifiedPromptManager:
                     skipped_count += 1
                     logger.warning(f"⚠️ [DEBUG] Doc {idx+1} is not a valid dict, skipping")
                     continue
-                normalized = self._normalize_document_fields(doc)
+                normalized = self._normalize_document_fields(doc, law_name_cache=law_name_cache)
                 if normalized and isinstance(normalized, dict):
                     normalized_docs_temp.append(normalized)
                     normalized_count += 1
@@ -1904,26 +1911,112 @@ class UnifiedPromptManager:
                 if documents_section:
                     logger.info(f"✅ [FALLBACK] Created fallback documents section ({len(fallback_docs)} docs)")
         
-        final_prompt = simplified_base + (documents_section if documents_section else "") + f"\n\n## 질문\n{query}\n\n"
+        # 🔥 개선: 프롬프트 구조 재구성 (문서 인용 지시 최상단, Few-shot 예시 추가)
+        # 1. 핵심 지시사항 (최상단)
+        # 2. Few-shot 예시
+        # 3. 문서 목록
+        # 4. 질문
         
-        # 최종 토큰 수 검증
-        final_tokens = self._estimate_tokens(final_prompt)
-        if final_tokens > max_safe_tokens:
-            logger.warning(
-                f"⚠️ [TOKEN LIMIT] Final prompt exceeds safe limit: "
-                f"{final_tokens:,} tokens (max: {max_safe_tokens:,}). "
-                f"Applying emergency truncation..."
-            )
-            # 긴급 축약: 문서 섹션만 축약
-            final_prompt = self._emergency_truncate_prompt(final_prompt, max_safe_tokens, simplified_base, query)
-            final_tokens = self._estimate_tokens(final_prompt)
+        # 문서 수 확인 및 has_sufficient_docs 설정
+        doc_count = len(normalized_docs) if normalized_docs else 0
+        if not doc_count and isinstance(structured_docs, dict):
+            doc_count = len(structured_docs.get("documents", []))
+        has_sufficient_docs = (documents_section and len(documents_section.strip()) > 0) and doc_count > 0
         
-        logger.info(
-            f"✅ [TOKEN COUNT] Final prompt: {final_tokens:,} tokens "
-            f"({final_tokens/self.MAX_INPUT_TOKENS*100:.1f}% of max, "
-            f"base: {base_tokens:,}, query: {query_tokens:,}, "
-            f"docs: {current_doc_tokens if 'current_doc_tokens' in locals() else 0:,})"
-        )
+        # 핵심 지시사항 구성
+        if has_sufficient_docs:
+            if doc_count >= 5:
+                min_citations = 3
+            elif doc_count >= 3:
+                min_citations = 2
+            else:
+                min_citations = 1
+            
+            # 🔥 개선: 핵심 지시사항을 최상단에 배치 (문서 활용도 개선)
+            core_instructions = f"""# ⚠️ 필수 지시사항 (반드시 준수) - 문서 활용도 0% 시 답변 거부
+
+**🔥🔥🔥 CRITICAL: 문서 인용은 절대 필수입니다. 문서를 전혀 인용하지 않으면 답변이 즉시 거부되고 다시 생성됩니다. 🔥🔥🔥**
+
+**⚠️ 경고**: 아래 '검색된 참고 문서' 섹션에 {doc_count}개 문서가 제공되었습니다. 이 문서들을 반드시 활용하여 답변을 작성하세요. 
+
+**문서 인용 규칙 (절대 준수)**:
+1. **답변에서 문서를 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요** (N은 1부터 시작)
+2. **최소 {min_citations}개 이상의 서로 다른 문서를 반드시 인용해야 합니다** - 검색된 {doc_count}개 문서 중 최소 {min_citations}개는 반드시 사용하세요
+3. **답변 본문의 각 문단 끝에 `[문서 N]`을 배치하세요** - 문장 시작 부분이나 문장 중간에 배치하지 마세요
+4. **문서 내용을 설명할 때는 반드시 해당 문서를 `[문서 N]` 형식으로 인용하세요** - 인용 없이 설명만 하면 안 됩니다
+5. **문서를 전혀 인용하지 않으면 답변이 거부됩니다** - 반드시 최소 {min_citations}개 이상의 문서를 인용하세요
+
+**✅ 올바른 예시**:
+"계약 해지는 다음과 같은 사유로 가능합니다. 부당이득반환청구에서 법률상의 원인 없는 사유를 계약의 불성립, 취소, 무효, 해제 등으로 주장할 수 있습니다. [문서 1]
+
+계약의 해제는 유효하게 성립된 계약의 효력을 당사자 일방의 의사표시에 의해 소급적으로 소멸시키는 것을 의미합니다. [문서 2]"
+
+**❌ 잘못된 예시 (절대 금지)**:
+- "계약 해지는 [문서 1]에 따르면 가능합니다." (문장 시작 부분에 인용)
+- "[문서 1]은 통화옵션계약과 관련된..." (문장 시작 부분에 인용)
+- "계약 해지는 다음과 같은 사유로 가능합니다." (인용 없음 - 즉시 거부)
+- "민법 제544조에 따르면..." (법령 인용만 있고 문서 인용 없음 - 거부)
+
+**⚠️ 최종 경고**: 아래 '검색된 참고 문서' 섹션에 {doc_count}개 문서가 제공되었습니다. 이 문서들을 반드시 활용하여 답변을 작성하세요. 문서를 전혀 인용하지 않으면 답변이 거부되고 다시 생성됩니다.
+
+---
+"""
+            
+            # 🔥 개선: Few-shot 예시 추가 (문단 끝 인용 방식)
+            few_shot_example = f"""## 📋 답변 형식 예시 (반드시 이 형식을 정확히 따르세요)
+
+**질문**: 계약 해지 사유에 대해 알려주세요
+
+**검색된 문서**:
+- [문서 1] 대법원 부당이득금 (2020다231928): 계약의 불성립, 취소, 무효, 해제 등이 법률상의 원인 없는 사유로 주장 가능
+- [문서 2] 대법원 부당이득금 (2020다231928): 계약 해제는 유효하게 성립된 계약의 효력을 소급적으로 소멸
+- [문서 3] 수원지방법원 건물인도 (2021다257255): 임대차계약 종료 사례
+
+**답변** (반드시 이 형식을 따르세요):
+계약 해지는 다음과 같은 사유로 가능합니다.
+
+부당이득반환청구에서 법률상의 원인 없는 사유를 계약의 불성립, 취소, 무효, 해제 등으로 주장할 수 있습니다. [문서 1]
+
+계약의 해제는 유효하게 성립된 계약의 효력을 당사자 일방의 의사표시에 의해 소급적으로 소멸시키는 것을 의미합니다. [문서 2]
+
+임대차계약 사례에서도 확인할 수 있듯이, 계약 종료는 다양한 방식으로 이루어질 수 있습니다. [문서 3]
+
+| 문서 번호 | 출처 | 핵심 근거 |
+|-----------|------|----------|
+| [문서 1] | 대법원 부당이득금 (2020다231928) | 계약의 불성립, 취소, 무효, 해제 등이 법률상의 원인 없는 사유로 주장 가능 |
+| [문서 2] | 대법원 부당이득금 (2020다231928) | 계약 해제는 유효하게 성립된 계약의 효력을 소급적으로 소멸 |
+| [문서 3] | 수원지방법원 건물인도 (2021다257255) | 임대차계약 종료 사례 |
+
+**⚠️ 중요**: 위 예시처럼:
+1. 문서 내용을 먼저 설명하고
+2. 문단 끝에 `[문서 N]`을 배치하세요
+3. 문장 시작 부분에 `[문서 N]`을 배치하지 마세요
+4. 최소 {min_citations}개 이상의 문서를 반드시 인용하세요
+
+---
+"""
+        else:
+            core_instructions = """# ⚠️ 필수 지시사항
+
+답변에서 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.
+
+---
+"""
+            few_shot_example = ""
+        
+        # 🔥 개선: 단순화된 base_prompt 사용 (핵심 역할만)
+        simplified_role = """# Role: 대한민국 법률 전문가 AI 어시스턴트
+
+당신은 대한민국 법률 전문 상담 AI입니다. 법학 석사 이상의 전문 지식을 보유하고 있으며, 다양한 법률 분야에 대한 실무 경험을 갖춘 것처럼 행동합니다.
+
+## 답변 원칙
+- 정확한 법률 정보 제공
+- 관련 판례와 법령 인용
+- 실무적 관점 반영
+- 자연스러운 대화형 어조
+
+---
+"""
 
         # 답변 생성 지시사항 섹션 생성 (개선: 질문 유형, 답변 생성 규칙)
         # 🔥 개선: answer_generation_instructions 최소화 (citation_requirement와 base_prompt에 이미 포함)
@@ -1934,63 +2027,294 @@ class UnifiedPromptManager:
         doc_count = len(normalized_docs) if normalized_docs else 0
         has_sufficient_docs = documents_section and normalized_docs and doc_count >= 3
         
+        # document_citation_section 초기화 (조건문에서 정의되므로)
+        document_citation_section = ""
+        
         # 🔥 개선: 문서 인용 규칙 및 중요 사항 섹션 생성 (표 작성 지침 포함)
-        if has_sufficient_docs:
+        # 문서 활용도 개선: 최소 인용 수를 동적으로 설정
+        # 🔥 CRITICAL: 문서가 1개 이상이면 무조건 인용 규칙 추가 (has_sufficient_docs 조건 제거)
+        if normalized_docs and doc_count >= 1:
+            # 문서 수에 따라 최소 인용 수 결정
+            if doc_count >= 5:
+                min_citations = 3
+            elif doc_count >= 3:
+                min_citations = 2
+            else:
+                min_citations = 1  # 문서가 1개여도 최소 1개는 인용 필수
+            
             # 문서 인용 규칙 및 중요 사항 섹션 (표 작성 지침 포함)
-            document_citation_section = """
+            document_citation_section = f"""
 ## 문서 인용 규칙 및 중요 사항
 
-### 문서 인용 방법
-- 답변에서 문서를 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요
-- 각 문서의 출처를 명확히 표시하세요
-- 판례 인용 시에는 법원명과 판결일을 함께 언급하세요
+### ⚠️ 필수 사항 (반드시 준수해야 합니다)
+- **답변에서 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요**
+- **최소 {min_citations}개 이상의 서로 다른 문서를 인용**해야 합니다
+- **문서를 전혀 인용하지 않으면 답변이 거부됩니다**
+- **🔥 CRITICAL: 답변 본문에 반드시 `[문서 N]` 형식으로 문서를 인용하세요** - 답변 본문에 인용이 없으면 답변이 거부됩니다
+- **🔥 중요: 각 문서는 답변 본문에서 정확히 한 번만 인용하세요** - 같은 문서를 여러 번 인용하면 신뢰도가 떨어집니다
+- **🔥 CRITICAL: 인용은 반드시 문단 끝에 배치하세요** - 문장 시작 부분(`[문서 1]은...`, `[문서 1]에 따르면...`)이나 문장 중간에 배치하지 마세요
+- **표의 문서 번호 열에 반드시 `[문서 N]` 형식을 포함하세요** - 빈 셀은 절대 허용되지 않습니다
 
-### 문서 활용 원칙
+### 문서 인용 방법 (자연스러운 인용)
+- **🔥 CRITICAL: 답변 본문에 반드시 `[문서 N]` 형식으로 문서를 인용하세요** - 답변 본문에 인용이 없으면 답변이 거부됩니다
+- **각 문서는 답변 본문에서 한 번만 인용하세요** - 같은 문서 번호를 반복 사용하지 마세요
+- **인용은 반드시 문단 끝에 배치하세요** - 문장 중간이나 문장 끝에 끼워 넣지 마세요
+- 문서의 핵심 내용을 먼저 설명하고, 해당 내용이 나온 문서를 문단 끝에 자연스럽게 인용하세요
+- 여러 문서의 내용을 통합하여 설명한 경우, 관련 문서들을 문단 끝에 나란히 인용할 수 있습니다 (예: [문서 1] [문서 2])
+- **인용 없이 문서 내용만 설명하면 안 됩니다** - 반드시 `[문서 N]` 형식으로 인용해야 합니다
+
+**올바른 인용 예시 (가독성 높음 - 문단 끝 배치)**:
+
+**예시 1: 각 문단 끝에 단일 문서 인용**
+```
+임차인은 선량한 관리자의 주의를 다하여 임대차 목적물을 보존하고, 임대차 종료 시에 임대차 목적물을 원상에 회복하여 반환할 의무를 부담합니다. [문서 1]
+
+임대인은 목적물을 임차인에게 인도하고 임대차계약 존속 중에 그 사용, 수익에 필요한 상태를 유지하게 할 의무를 부담합니다. [문서 2]
+```
+
+**예시 1-1: 계약 해지 관련 (실제 사용 예시)**
+```
+계약 해지 사유에 대해 문의하셨군요. 옵션계약의 효력 정지에 관한 가처분 신청 사건을 다루고 있으며, 계약 해지 사유를 직접적으로 명시하고 있지는 않습니다. 다만, 해당 문서에서 신청인은 계약 체결 이후 환율 상승으로 인해 큰 손실을 입었음을 주장하며, 계약의 효력 정지를 신청했습니다. [문서 1]
+
+일반적으로 계약 해지 사유는 계약서에 명시된 경우, 법률에 규정된 경우, 또는 당사자 간의 합의에 의해 결정될 수 있습니다. [문서 2]
+```
+
+**예시 2: 여러 문서를 통합 설명 후 함께 인용**
+```
+임대차 분쟁 시 내용증명 발송과 관련하여 몇 가지 주의사항이 있습니다. 우선, 임차인은 선량한 관리자의 주의 의무를 다하여 임대차 목적물을 보존해야 하며, 임대인은 목적물을 사용·수익하기에 필요한 상태로 유지할 의무가 있습니다. 또한 임대차 목적물이 화재 등으로 소멸된 경우, 임차인은 그 이행불능이 자신의 책임 없는 사유로 인한 것임을 증명하지 못하면 손해를 배상할 책임을 집니다. [문서 1] [문서 2]
+```
+
+**예시 3: 각 문서의 내용을 설명한 후 개별 인용**
+```
+계약 해지는 다음과 같은 사유로 가능합니다. 부당이득반환청구에서 법률상의 원인 없는 사유를 계약의 불성립, 취소, 무효, 해제 등으로 주장할 수 있습니다. [문서 1]
+
+계약의 해제는 유효하게 성립된 계약의 효력을 당사자 일방의 의사표시에 의해 소급적으로 소멸시키는 것을 의미합니다. [문서 2]
+
+임대차계약 사례에서도 확인할 수 있듯이, 계약 종료는 다양한 방식으로 이루어질 수 있습니다. [문서 3]
+```
+
+**잘못된 인용 예시 (가독성 낮음 - 절대 금지)**:
+- "계약 해지는 [문서 1]에 따르면 다음과 같은 사유로 가능합니다."  ← 문장 중간에 인용이 끼어있어 가독성 낮음
+- "임차인은 선량한 관리자의 주의 의무를 다해야 하며[문서 1], 임대인은 목적물을 사용·수익하기에 필요한 상태로 유지할 의무가 있습니다[문서 2]."  ← 문장 중간에 인용이 끼어있어 가독성 낮음
+- "임차인은 [문서 1]에 따르면 선량한 관리자의 주의 의무를 [문서 1]에 따라 다해야 하며..."  ← 같은 문서를 여러 번 인용하고 문장 중간에 끼어있음
+- "계약 해지 사유에 대해 문의하셨군요. [문서 1]은 옵션계약의 효력 정지에 관한 가처분 신청 사건을 다루고 있습니다."  ← 문장 중간에 인용이 끼어있음 (절대 금지)
+- "계약 해지 사유에 대해 문의하셨군요. [문서 1]에 따르면..."  ← 문장 중간에 인용이 끼어있음 (절대 금지)
+
+**올바른 수정 예시**:
+- ❌ "계약 해지 사유에 대해 문의하셨군요. [문서 1]은 옵션계약의 효력 정지에 관한 가처분 신청 사건을 다루고 있습니다."
+- ✅ "계약 해지 사유에 대해 문의하셨군요. 옵션계약의 효력 정지에 관한 가처분 신청 사건을 다루고 있으며, 계약 해지 사유를 직접적으로 명시하고 있지는 않습니다. [문서 1]"
+
+**인용 위치 가이드 (반드시 준수)**:
+- ✅ **문단의 마지막에 인용 배치** (문단 끝, 문장 끝이 아닌 문단 끝)
+- ✅ 각 문서의 내용을 설명한 후, 해당 설명이 끝나는 문단 끝에 인용 배치
+- ✅ 여러 문서의 내용을 통합 설명한 경우, 관련 문서들을 문단 끝에 나란히 인용 (예: [문서 1] [문서 2])
+- ✅ 각 문서는 한 번만 인용
+- ❌ **문장 중간에 인용 끼워 넣기 (절대 금지)** - 예: "...해야 하며[문서 1], ..." 또는 "[문서 1]은 ..." 또는 "[문서 1]에 따르면 ..."
+- ❌ **문장 시작 부분에 인용 배치 (절대 금지)** - 예: "[문서 1]은 옵션계약의..." 또는 "[문서 1]에 따르면 계약 해지는..."
+- ❌ 문장 끝에 인용 배치 (문단 끝이 아닌)
+- ❌ 같은 문서를 여러 번 인용하기
+
+**인용 위치 체크 방법**:
+1. 문서 내용을 먼저 설명하세요
+2. 설명이 끝나는 문단의 마지막에 `[문서 N]`을 배치하세요
+3. 문장 중간이나 문장 시작 부분에 `[문서 N]`을 배치하지 마세요
+
+### 문서 활용 원칙 (🔥 중요)
+- **🔥 CRITICAL: 답변 본문에 반드시 `[문서 N]` 형식으로 최소 {min_citations}개 이상의 서로 다른 문서를 인용하세요**
+- 검색된 {doc_count}개 문서 중 가능하면 {min(doc_count, 5)}개 이상을 활용하는 것이 좋습니다
 - 위 문서의 내용을 바탕으로 답변을 생성하세요
 - 문서에서 추론하거나 추측하지 말고, 문서에 명시된 내용만 사용하세요
 - 문서에 없는 정보는 포함하지 마세요
 - 여러 문서의 내용을 종합하여 일관된 답변을 구성하세요
+- **각 문서는 한 번만 인용하여 신뢰도 높은 답변을 작성하세요**
+- **문서 내용을 설명할 때는 반드시 해당 문서를 `[문서 N]` 형식으로 인용하세요** - 인용 없이 설명만 하면 안 됩니다
 
-### 문서별 근거 비교 표 작성 (필수)
-- 표의 첫 번째 열('문서 번호' 열)에 반드시 [문서 1], [문서 2] 형식으로 번호 포함
-- 빈 셀 절대 금지 (문서 번호 열이 비어있으면 답변이 거부됩니다)
-- 아래 '검색된 참고 문서' 섹션에 표시된 문서 번호를 그대로 사용
+### 법령 및 판례 인용 원칙 (🔥 중요)
+- 문서에 법령 조문(예: 민법 제750조)이 포함되어 있으면 **해당 조문을 인용**하세요
+- 문서에 판례가 포함되어 있으면 **해당 판례를 인용**하세요
+- 법령 조문 인용 시 정확한 형식으로 표기하세요 (예: "민법 제750조", "제750조")
+- 판례 인용 시 법원명과 판결일을 함께 언급하세요 (예: "대법원 2020다12345")
+- **검색된 법령 조문을 적절히 인용**하세요 (최소 {min_citations}개 이상)
+- **각 법령/판례 문서는 한 번만 인용하세요**
+
+### 문서별 근거 비교 표 작성 (필수 - 절대 금지 사항)
+- **🔥 CRITICAL: 표의 첫 번째 열('문서 번호' 열)에 반드시 [문서 1], [문서 2] 형식으로 번호를 포함하세요**
+- **빈 셀 절대 금지** - 문서 번호 열이 비어있으면 답변이 즉시 거부됩니다
+- 아래 '검색된 참고 문서' 섹션에 표시된 문서 번호를 그대로 사용하세요
 - 표의 각 행은 반드시 [문서 N] 형식으로 시작해야 합니다
+- **최소 {min_citations}개 이상의 문서를 표에 포함**해야 합니다
+- **표 작성 전 체크리스트**:
+  - ✅ 각 행의 첫 번째 열에 [문서 N] 형식이 있는가?
+  - ✅ 빈 셀이 없는가?
+  - ✅ 최소 {min_citations}개 이상의 문서가 포함되어 있는가?
 
-**올바른 예시**:
+**올바른 표 작성 예시**:
 | 문서 번호 | 출처 | 핵심 근거 |
 |-----------|------|----------|
 | [문서 1] | 민법 제750조 | 고의 또는 과실로 인한 위법행위로 타인에게 손해를 가한 자는 그 손해를 배상할 책임이 있다. |
 | [문서 2] | 민법 제537조 | 쌍무계약의 당사자 일방의 채무가 당사자쌍방의 책임없는 사유로 이행할 수 없게 된 때에는 채무자는 상대방의 이행을 청구하지 못한다. |
 | [문서 3] | 민법 제526조 | 계약의 해석은 당사자의 진의를 명확히 하여야 한다. |
 
-**잘못된 예시 (절대 금지)**:
+**잘못된 표 작성 예시 (절대 금지 - 답변 거부됨)**:
 | 문서 번호 | 출처 | 핵심 근거 |
 |-----------|------|----------|
-|  | 민법 제750조 | ... |  ← 문서 번호가 비어있음 (절대 금지)
-| [문서 2] | 민법 제537조 | ... |  ← 첫 번째 행이 비어있으면 안 됨
+|  | 민법 제750조 | ... |  ← 문서 번호가 비어있음 (절대 금지, 답변 거부)
+| [문서 2] | 민법 제537조 | ... |  ← 첫 번째 행이 비어있으면 안 됨 (답변 거부)
+|  | 서울중앙지방법원 옵션계약효력정지가처분 | ... |  ← 문서 번호가 비어있음 (절대 금지, 답변 거부)
 
-**중요**: 표를 작성할 때 반드시 각 행의 첫 번째 열에 [문서 N] 형식을 포함하세요. 빈 셀은 절대 허용되지 않습니다.
+**표 작성 체크리스트 (작성 후 반드시 확인)**:
+- ✅ 표의 각 행 첫 번째 열에 `[문서 1]`, `[문서 2]` 형식이 있는가?
+- ✅ 빈 셀이 없는가? (빈 셀이 있으면 답변이 즉시 거부됩니다)
+- ✅ 최소 {min_citations}개 이상의 문서가 포함되어 있는가?
+
+**최종 체크리스트 (답변 작성 후 반드시 확인)**:
+1. ✅ **답변 본문에 `[문서 N]` 형식의 인용이 최소 {min_citations}개 이상 있는가?** - 없으면 답변이 거부됩니다
+2. ✅ **표의 각 행 첫 번째 열에 [문서 N] 형식이 있는가?** - 빈 셀이 있으면 답변이 거부됩니다
+3. ✅ **각 문서가 답변 본문에서 정확히 한 번만 인용되었는가?** - 중복 인용은 신뢰도를 떨어뜨립니다
+4. ✅ **인용이 문단 끝에 배치되었는가?** - 문장 중간에 끼워 넣지 않았는가?
+5. ✅ **최소 {min_citations}개 이상의 서로 다른 문서를 인용했는가?**
+
+**⚠️ 경고**: 위 체크리스트를 모두 통과하지 못하면 답변이 거부되고 재생성됩니다.
+
+### 출력 형식 (메타데이터)
+
+답변을 작성한 후, 다음 형식으로 메타데이터를 추가하세요:
+
+```
+<답변 본문>
+
+---
+
+<metadata>
+{{
+    "document_usage": [
+        {{
+            "document_number": 1,
+            "source": "민법 제750조",
+            "source_type": "statute_article",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [150],
+            "usage_rationale": "손해배상 책임에 대한 법적 근거로 사용"
+        }},
+        {{
+            "document_number": 2,
+            "source": "대법원 2020다12345",
+            "source_type": "precedent_content",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [300],
+            "usage_rationale": "계약 해지 관련 판례 인용"
+        }}
+    ],
+    "coverage": {{
+        "keyword_coverage": 0.85,
+        "keyword_total": 20,
+        "keyword_matched": 17,
+        "citation_coverage": 0.75,
+        "citation_count": 2,
+        "citation_expected": 3,
+        "document_usage_rate": 0.67,
+        "documents_used": 2,
+        "documents_total": 3,
+        "documents_min_required": 2,
+        "overall_coverage": 0.80
+    }}
+}}
+</metadata>
+```
+
+**중요 사항**:
+- 답변 본문은 자연스러운 텍스트로 작성하세요
+- 메타데이터는 반드시 `<metadata>` 태그 안에 JSON 형식으로 작성하세요
+- `document_usage`에는 검색된 모든 문서를 포함하세요 (사용 여부와 관계없이)
+- `used_in_answer`는 답변 본문에서 실제로 인용되었는지 여부를 나타냅니다
+- `citation_positions`는 답변 본문에서 인용이 나타난 문자 위치(인덱스)입니다
+- `usage_rationale`는 해당 문서를 사용한 이유를 간단히 설명하세요
 """
             instruction_section = ""
         else:
-            # 🔥 개선: 문서가 부족한 경우 문서 인용 규칙 섹션만 생성
+            # 🔥 개선: 문서가 부족한 경우에도 메타데이터 출력 형식 포함
             if doc_count > 0 and doc_count < 3:
+                min_citations = 1  # 최소 1개 인용
                 document_citation_section = f"""
 ## 문서 인용 규칙 및 중요 사항
 
-### 문서 인용 방법
-- 답변에서 문서를 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요
-- 각 문서의 출처를 명확히 표시하세요
-- 판례 인용 시에는 법원명과 판결일을 함께 언급하세요
+### ⚠️ 필수 사항 (반드시 준수해야 합니다)
+- **답변에서 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요**
+- **최소 {min_citations}개 이상의 문서를 인용**해야 합니다
+- **🔥 중요: 각 문서는 답변 본문에서 정확히 한 번만 인용하세요** - 같은 문서를 여러 번 인용하면 신뢰도가 떨어집니다
+- **🔥 CRITICAL: 인용은 반드시 문단 끝에 배치하세요** - 문장 시작 부분이나 문장 중간에 배치하지 마세요
+
+### 문서 인용 방법 (자연스러운 인용)
+- **각 문서는 답변 본문에서 한 번만 인용하세요** - 같은 문서 번호를 반복 사용하지 마세요
+- **인용은 반드시 문단 끝에 배치하세요** - 문장 중간이나 문장 끝에 끼워 넣지 마세요
+- 문서의 핵심 내용을 먼저 설명하고, 해당 내용이 나온 문서를 문단 끝에 자연스럽게 인용하세요
+
+**올바른 인용 예시**:
+```
+계약 해지와 관련하여 법원에서는 다양한 사안을 다루고 있습니다. 예를 들어, 통화옵션계약의 경우, 약관규제법 위반을 이유로 계약의 효력 정지를 신청하는 사례가 있었습니다. [문서 1]
+```
+
+**잘못된 인용 예시 (절대 금지)**:
+- "계약 해지와 관련하여... [문서 1] 이 사건에서는... [문서 1]"  ← 같은 문서를 여러 번 인용 (절대 금지)
+- "계약 해지는 [문서 1]에 따르면 가능합니다."  ← 문장 중간에 인용 (절대 금지)
 
 ### 문서 활용 원칙
 - 위 문서의 내용을 바탕으로 답변을 생성하세요
 - 문서에서 추론하거나 추측하지 말고, 문서에 명시된 내용만 사용하세요
 - 문서에 없는 정보는 포함하지 마세요
 - 여러 문서의 내용을 종합하여 일관된 답변을 구성하세요
+- **각 문서는 한 번만 인용하여 신뢰도 높은 답변을 작성하세요**
 
 ⚠️ **중요**: 문서가 {doc_count}개로 부족하므로 **문서별 근거 비교 표를 생성하지 마세요**.
+
+### 출력 형식 (메타데이터)
+
+답변을 작성한 후, 다음 형식으로 메타데이터를 추가하세요:
+
+```
+<답변 본문>
+
+---
+
+<metadata>
+{{
+    "document_usage": [
+        {{
+            "document_number": 1,
+            "source": "서울중앙지방법원 옵션계약효력정지가처분 (2009카합393)",
+            "source_type": "precedent_content",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [150],
+            "usage_rationale": "계약 해지 관련 판례 인용"
+        }}
+    ],
+    "coverage": {{
+        "keyword_coverage": 0.85,
+        "keyword_total": 20,
+        "keyword_matched": 17,
+        "citation_coverage": 0.75,
+        "citation_count": 1,
+        "citation_expected": 1,
+        "document_usage_rate": 1.0,
+        "documents_used": 1,
+        "documents_total": {doc_count},
+        "documents_min_required": 1,
+        "overall_coverage": 0.80
+    }}
+}}
+</metadata>
+```
+
+**중요 사항**:
+- 답변 본문은 자연스러운 텍스트로 작성하세요
+- 메타데이터는 반드시 `<metadata>` 태그 안에 JSON 형식으로 작성하세요
+- `document_usage`에는 검색된 모든 문서를 포함하세요 (사용 여부와 관계없이)
+- `used_in_answer`는 답변 본문에서 실제로 인용되었는지 여부를 나타냅니다
+- `citation_positions`는 답변 본문에서 인용이 나타난 문자 위치(인덱스)입니다
+- `usage_rationale`는 해당 문서를 사용한 이유를 간단히 설명하세요
 """
             else:
                 document_citation_section = """
@@ -2003,82 +2327,59 @@ class UnifiedPromptManager:
 """
             instruction_section = ""
 
-        # Citation 요구사항을 프롬프트 상단에 배치 (법률 RAG 핵심 원칙 통합 - 간소화)
-        # 🔥 CRITICAL: 문서 수에 따라 요구사항 조정
-        # TASK 13: 관련 없는 문서 인용 방지 강화
-        if has_sufficient_docs:
-            citation_requirement = """
-⚠️ **핵심 원칙**: 문서 기반 답변만 허용, 모든 인용에 [문서 N] 형식 사용, 문서 외 추론 금지, 최소 2개 문서 인용 필수
-⚠️ **중요**: 질문과 직접 관련된 문서만 인용하세요. 관련 없는 문서는 인용하지 마세요.
----
-"""
-        elif doc_count > 0:
-            citation_requirement = f"""
-⚠️ **핵심 원칙**: 문서 기반 답변만 허용, 모든 인용에 [문서 N] 형식 사용, 문서 외 추론 금지
-⚠️ **중요**: 문서가 {doc_count}개로 부족하므로 **문서별 근거 비교 표를 생성하지 마세요**
----
-"""
-        else:
-            citation_requirement = """
-⚠️ **핵심 원칙**: 일반 법적 원칙 기반 답변, 실무적 조언 중심
-⚠️ **중요**: 문서가 없으므로 **문서별 근거 비교 표를 생성하지 마세요**
----
-"""
-        
-        # 🔥 개선: 질문-문서 불일치 경고를 최상단에 추가
+        # 🔥 개선: 질문-문서 불일치 경고 추가
         mismatch_warning = ""
-        if normalized_docs:
-            mismatch_warning = self._check_query_document_mismatch(query, normalized_docs)
+        if normalized_docs and len(normalized_docs) > 0:
+            try:
+                mismatch_warning = self._check_query_document_mismatch(query, normalized_docs)
+            except Exception as e:
+                logger.warning(f"⚠️ [MISMATCH CHECK] Error checking query-document mismatch: {e}")
+                mismatch_warning = ""
         
         # 🔥 개선: documents_section 포함 확인 로깅
         documents_section_length = len(documents_section) if documents_section else 0
         logger.info(
             f"📋 [FINAL PROMPT BUILD] documents_section length: {documents_section_length}, "
+            f"document_citation_section length: {len(document_citation_section) if document_citation_section else 0}, "
             f"mismatch_warning length: {len(mismatch_warning) if mismatch_warning else 0}, "
-            f"simplified_base length: {len(simplified_base) if simplified_base else 0}"
+            f"simplified_role length: {len(simplified_role) if simplified_role else 0}"
         )
         
-        # 최종 프롬프트 구성 (개선: 사용자 프롬프트 순서에 맞춰 조정)
-        # 순서: 필수 요구사항 → 질문-문서 불일치 경고 → Role → 답변 원칙 → 특별 지침 → 금지 사항 → 출력 스타일 → 구분선 → 문서 인용 규칙 및 중요 사항 → 검색된 참고 문서 → 사용자 질문 → 답변 시작
-        # 🔥 개선: answer_generation_instructions 제거 (중복), 표 작성 지침을 문서 인용 규칙 섹션에 통합
-        final_prompt_with_instructions = f"""{citation_requirement}
-{mismatch_warning}{simplified_base}
----
-{document_citation_section}
----
-{documents_section}
-## 사용자 질문
-{query}
-
-답변을 시작하세요:
-"""
+        # 🔥 개선: 불일치 경고를 핵심 지시사항에 통합
+        if mismatch_warning:
+            core_instructions = mismatch_warning + "\n" + core_instructions
         
-        # 최종 토큰 수 재검증 (지침 추가 후)
-        final_tokens_after_instructions = self._estimate_tokens(final_prompt_with_instructions)
-        if final_tokens_after_instructions > max_safe_tokens:
+        # 최종 프롬프트 구성: 핵심 지시 → Few-shot → 역할 정의 → 문서 인용 규칙 → 문서 → 질문
+        # 🔥 중요: document_citation_section을 생성한 후에 최종 프롬프트 구성
+            final_prompt = (
+                core_instructions +
+                few_shot_example +
+                simplified_role +
+            (document_citation_section if document_citation_section else "") +
+                (documents_section if documents_section else "") +
+                f"\n\n## 사용자 질문\n{query}\n\n답변을 시작하세요:\n"
+            )
+        
+        # 최종 토큰 수 검증
+        final_tokens = self._estimate_tokens(final_prompt)
+        if final_tokens > max_safe_tokens:
             logger.warning(
-                f"⚠️ [TOKEN LIMIT] Final prompt with instructions exceeds limit: "
-                f"{final_tokens_after_instructions:,} tokens (max: {max_safe_tokens:,}). "
+                f"⚠️ [TOKEN LIMIT] Final prompt exceeds safe limit: "
+                f"{final_tokens:,} tokens (max: {max_safe_tokens:,}). "
                 f"Applying emergency truncation..."
             )
             # 긴급 축약: 문서 섹션만 축약
-            final_prompt_with_instructions = self._emergency_truncate_prompt(
-                final_prompt_with_instructions, 
-                max_safe_tokens, 
-                simplified_base, 
-                query
-            )
-            final_tokens_after_instructions = self._estimate_tokens(final_prompt_with_instructions)
-            logger.warning(
-                f"⚠️ [EMERGENCY TRUNCATION] Prompt truncated to {final_tokens_after_instructions:,} tokens"
-            )
+            final_prompt = self._emergency_truncate_prompt(final_prompt, max_safe_tokens, simplified_role, query)
+            final_tokens = self._estimate_tokens(final_prompt)
         
         logger.info(
-            f"✅ [FINAL TOKEN COUNT] Final prompt with instructions: {final_tokens_after_instructions:,} tokens "
-            f"({final_tokens_after_instructions/self.MAX_INPUT_TOKENS*100:.1f}% of max)"
+            f"✅ [TOKEN COUNT] Final prompt: {final_tokens:,} tokens "
+            f"({final_tokens/self.MAX_INPUT_TOKENS*100:.1f}% of max, "
+            f"base: {base_tokens:,}, query: {query_tokens:,}, "
+            f"docs: {current_doc_tokens if 'current_doc_tokens' in locals() else 0:,})"
         )
         
-        return final_prompt_with_instructions
+        return final_prompt
 
     def _validate_prompt_contains_documents(self, final_prompt: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """프롬프트에 실제 문서 내용이 포함되었는지 검증 (강화된 버전)"""
@@ -2198,7 +2499,62 @@ class UnifiedPromptManager:
 
         return validation_result
 
-    def _normalize_document_fields(self, doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _batch_fetch_law_names(self, docs: List[Dict[str, Any]]) -> Dict[int, str]:
+        """statute_id로 법령명 배치 조회 (성능 최적화)"""
+        statute_ids = set()
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            # law_name이나 statute_name이 없고 statute_id가 있는 경우만 조회
+            if doc.get("law_name") or doc.get("statute_name"):
+                continue
+            statute_id = doc.get("statute_id") or (doc.get("metadata", {}).get("statute_id") if isinstance(doc.get("metadata"), dict) else None)
+            if statute_id:
+                try:
+                    statute_ids.add(int(statute_id))
+                except (ValueError, TypeError):
+                    continue
+        
+        if not statute_ids:
+            return {}
+        
+        law_name_map = {}
+        try:
+            from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+            from lawfirm_langgraph.core.utils.config import get_config
+            
+            config = get_config()
+            db_adapter = DatabaseAdapter(config.database_url)
+            
+            with db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                # 배치 조회
+                placeholders = ",".join(["%s"] * len(statute_ids))
+                cursor.execute(f"""
+                    SELECT id, law_name_kr, law_abbrv 
+                    FROM statutes 
+                    WHERE id IN ({placeholders})
+                """, list(statute_ids))
+                
+                for row in cursor.fetchall():
+                    if isinstance(row, dict):
+                        statute_id = row.get('id')
+                        law_name_kr = row.get('law_name_kr') or row.get('law_abbrv') or ""
+                    else:
+                        statute_id = row[0]
+                        law_name_kr = row[1] if len(row) > 1 else (row[2] if len(row) > 2 else "")
+                    
+                    if law_name_kr and statute_id:
+                        law_name_map[int(statute_id)] = law_name_kr
+            
+            if law_name_map:
+                logger.debug(f"✅ [BATCH FETCH] 법령명 {len(law_name_map)}개 조회 완료: {list(law_name_map.keys())}")
+        except Exception as e:
+            logger.debug(f"⚠️ [BATCH FETCH] 법령명 배치 조회 실패: {e}")
+        
+        return law_name_map
+
+    def _normalize_document_fields(self, doc: Dict[str, Any], law_name_cache: Optional[Dict[int, str]] = None) -> Optional[Dict[str, Any]]:
         """문서 필드명 정규화 - 법률명, 조문 번호 등 명시적 추출 (개선: 문서 제목 생성 및 관련성 점수 포함)"""
         if not isinstance(doc, dict):
             return None
@@ -2217,6 +2573,18 @@ class UnifiedPromptManager:
             str(doc.get("metadata", {}).get("text", "") if isinstance(doc.get("metadata"), dict) else "") or
             ""
         )
+        
+        # 🔥 개선: JSON 문자열로 저장된 content 파싱
+        if isinstance(raw_content, str) and raw_content.strip().startswith("{") and raw_content.strip().endswith("}"):
+            try:
+                import ast
+                parsed = ast.literal_eval(raw_content)
+                if isinstance(parsed, dict):
+                    # 파싱된 딕셔너리에서 실제 content 추출
+                    raw_content = parsed.get("content") or parsed.get("text") or raw_content
+            except (ValueError, SyntaxError):
+                # 파싱 실패 시 원본 사용
+                pass
         
         # 불필요한 메타데이터 제거
         content = self._clean_content(raw_content).strip()
@@ -2281,8 +2649,13 @@ class UnifiedPromptManager:
         
         if not content or len(content) < min_content_length:
             if has_law_info:
-                # 법률 정보가 있으면 content가 없어도 법률 정보만으로 문서 생성
-                logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) but has law info, creating minimal doc")
+                # 🔥 개선: 법률 정보가 있으면 원본 content가 3자 이상이면 길이 제한 없이 포함
+                if content and len(content.strip()) >= 3:
+                    # 원본 content가 있으면 그대로 사용 (길이 제한 없음)
+                    logger.debug(f"✅ [DOC NORMALIZE] Content length={len(content)} chars, has_law_info=True, keeping original content")
+                else:
+                    # content가 없거나 3자 미만일 때만 최소 content 생성
+                    logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content) if content else 0} chars) but has law info, creating minimal doc")
                 # 법률 정보로 최소 content 생성
                 law_name = doc.get("law_name") or doc.get("statute_name") or ""
                 article_no = doc.get("article_no") or doc.get("article_number") or ""
@@ -2325,6 +2698,23 @@ class UnifiedPromptManager:
         clause_no = self._extract_field(doc, metadata, ["clause_no", "clause_number"])
         item_no = self._extract_field(doc, metadata, ["item_no", "item_number"])
         heading = self._extract_field(doc, metadata, ["heading", "article_title"])
+        
+        # 🔥 개선: law_name이 없고 statute_id가 있으면 캐시에서 조회
+        if not law_name:
+            statute_id = doc.get("statute_id") or (metadata.get("statute_id") if isinstance(metadata, dict) else None)
+            if statute_id and law_name_cache:
+                try:
+                    statute_id_int = int(statute_id)
+                    if statute_id_int in law_name_cache:
+                        law_name = law_name_cache[statute_id_int]
+                        # metadata에도 저장
+                        if not isinstance(metadata, dict):
+                            metadata = {}
+                        metadata["law_name"] = law_name
+                        metadata["statute_name"] = law_name
+                        logger.debug(f"✅ [DOC NORMALIZE] 법령명 캐시에서 조회: statute_id={statute_id}, law_name={law_name}")
+                except (ValueError, TypeError):
+                    pass
         
         # 판례 정보 추출
         court = self._extract_field(doc, metadata, ["court"])
@@ -2421,9 +2811,16 @@ class UnifiedPromptManager:
         else:
             doc_title = source or doc.get("type", "법률 문서")
         
-        # content가 없거나 짧아도 법률 정보가 있으면 최소 content 생성 (개선)
+        # 🔥 개선: has_law_info=True인 경우 길이 제한 없이 원본 content 유지
         if not content or len(content) < min_content_length:
             if has_law_info:
+                # 원본 content가 3자 이상이면 길이 제한 없이 포함
+                if content and len(content.strip()) >= 3:
+                    # 원본 content 유지 (길이 제한 없음)
+                    logger.debug(f"✅ [DOC NORMALIZE] Content length={len(content)} chars, has_law_info=True, keeping original content (no length restriction)")
+                else:
+                    # content가 없거나 3자 미만일 때만 최소 content 생성
+                    logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content) if content else 0} chars) but has law info, creating minimal doc")
                 # 법률 정보만으로 최소 content 생성
                 if law_name and article_no:
                     content = f"{law_name} 제{article_no}조"
@@ -2503,17 +2900,55 @@ class UnifiedPromptManager:
         if not documents or len(documents) == 0:
             return ""
 
-        documents_section = "\n\n## 검색된 참고 문서\n\n"
-        documents_section += "다음 5개의 문서를 반드시 참고하여 답변하세요. 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
+        # 문서 수에 따라 최소 인용 수 동적 설정
+        doc_count = len(documents)
+        if doc_count >= 5:
+            min_citations = 3  # 5개 이상이면 최소 3개 인용
+            max_docs_to_show = min(10, doc_count)  # 최대 10개까지 표시
+        elif doc_count >= 3:
+            min_citations = 2  # 3-4개면 최소 2개 인용
+            max_docs_to_show = doc_count
+        else:
+            min_citations = 1  # 1-2개면 최소 1개 인용
+            max_docs_to_show = doc_count
 
-        for idx, doc in enumerate(documents, 1):
+        documents_section = "\n\n## 🔍 검색된 참고 문서 (반드시 활용하세요)\n\n"
+        documents_section += f"**⚠️ 중요**: 아래 {doc_count}개 문서를 반드시 활용하여 답변을 작성하세요. 각 문서는 `[문서 N]` 형식으로 인용해야 합니다.\n\n"
+
+        # 최대 10개까지 문서 표시 (토큰 제한 내에서)
+        for idx, doc in enumerate(documents[:max_docs_to_show], 1):
             # TASK 3: None 체크 추가
             if not doc or not isinstance(doc, dict):
                 continue
-            formatted_doc = self._format_document_for_prompt(doc, idx, is_high_priority=(idx <= 3))
-            if formatted_doc:
-                documents_section += formatted_doc
-                documents_section += "\n---\n\n"
+            
+            doc_title, _ = self._get_document_title_and_max_length(doc, idx)
+            content = (
+                doc.get("content") or
+                doc.get("text") or
+                doc.get("content_text") or
+                ""
+            )
+            
+            # 내용 길이 최적화
+            is_high_priority = (idx <= 3)
+            if is_high_priority:
+                content_preview = content[:800] if len(content) > 800 else content
+            else:
+                content_preview = content[:500] if len(content) > 500 else content
+            
+            score = doc.get("relevance_score", doc.get("final_weighted_score", 0.0))
+            
+            formatted_doc = f"""### [문서 {idx}] {doc_title}
+{content_preview}{'...' if len(content) > len(content_preview) else ''}
+
+**인용 방법**: 이 문서를 인용할 때는 반드시 `[문서 {idx}]` 형식을 사용하세요.
+**관련도**: {score:.2f}
+
+---
+"""
+            documents_section += formatted_doc
+
+        documents_section += f"\n**⚠️ 최종 경고**: 위 문서 중 최소 {min_citations}개 이상을 반드시 `[문서 N]` 형식으로 인용하세요. 인용 없이는 답변이 거부됩니다.\n\n"
 
         return documents_section
     
@@ -2522,12 +2957,25 @@ class UnifiedPromptManager:
         if not documents or len(documents) == 0:
             return ""
 
+        # 문서 수에 따라 최소 인용 수 동적 설정
+        doc_count = len(documents)
+        if doc_count >= 5:
+            min_citations = 3
+            max_docs_to_show = min(10, doc_count)
+        elif doc_count >= 3:
+            min_citations = 2
+            max_docs_to_show = doc_count
+        else:
+            min_citations = 1
+            max_docs_to_show = doc_count
+
         documents_section = "\n\n## 검색된 참고 문서\n\n"
-        documents_section += "다음 5개의 문서를 반드시 참고하여 답변하세요. 문서를 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
+        documents_section += f"다음 {doc_count}개의 문서를 반드시 참고하여 답변하세요. **문서를 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요.**\n\n"
+        documents_section += f"**⚠️ 중요**: **최소 {min_citations}개 이상의 문서를 반드시 인용**해야 합니다. 가능하면 {min(doc_count, 5)}개 이상의 문서를 활용하는 것이 좋습니다.\n\n"
 
         import re
 
-        for idx, doc in enumerate(documents[:10], 1):  # 최대 10개
+        for idx, doc in enumerate(documents[:max_docs_to_show], 1):  # 최대 10개
             # TASK 3: None 체크 추가
             if not doc or not isinstance(doc, dict):
                 continue
@@ -3832,12 +4280,21 @@ class UnifiedPromptManager:
             # 기본 중복 제거만 수행
             return self._basic_deduplicate(documents)
         
-        logger.info(f"🔍 [ENHANCED DEDUP] Starting enhanced deduplication: {len(documents)} documents")
+        original_count = len(documents)
+        logger.info(f"🔍 [ENHANCED DEDUP] Starting enhanced deduplication: {original_count} documents")
+        
+        # 🔥 개선: 최소 문서 수 계산 (문서 수에 따라 동적 설정)
+        if original_count >= 5:
+            min_docs_required = 3  # 5개 이상이면 최소 3개 보장
+        elif original_count >= 3:
+            min_docs_required = 2  # 3-4개면 최소 2개 보장
+        else:
+            min_docs_required = original_count  # 1-2개면 모두 보장
         
         # 1단계: Document-level distinct selection
         # 같은 document_id/source_id의 chunk 중 가장 점수 높은 것만 선택
         deduplicated = self._document_level_distinct_selection(documents)
-        logger.info(f"✅ [ENHANCED DEDUP] Step 1 (Document-level distinct): {len(documents)} → {len(deduplicated)}")
+        logger.info(f"✅ [ENHANCED DEDUP] Step 1 (Document-level distinct): {original_count} → {len(deduplicated)}")
         
         # 2단계: Exact duplicate 제거 (MD5 해시)
         deduplicated = self._remove_exact_duplicates(deduplicated)
@@ -3851,16 +4308,50 @@ class UnifiedPromptManager:
         deduplicated = self._apply_mmr_deduplication(deduplicated, query, mmr_lambda)
         logger.info(f"✅ [ENHANCED DEDUP] Step 4 (MMR): {len(deduplicated)} documents")
         
-        removed_count = len(documents) - len(deduplicated)
+        # 🔥 개선: 최소 문서 수 보장
+        if len(deduplicated) < min_docs_required:
+            logger.warning(
+                f"⚠️ [ENHANCED DEDUP] Deduplication removed too many documents: "
+                f"{original_count} → {len(deduplicated)} (min required: {min_docs_required}). "
+                f"Restoring documents to meet minimum requirement."
+            )
+            
+            # 점수 순으로 정렬하여 상위 문서 추가
+            all_docs_sorted = sorted(
+                documents,
+                key=lambda x: self._get_document_score(x),
+                reverse=True
+            )
+            
+            # 이미 포함된 문서의 키 수집
+            included_keys = set()
+            for doc in deduplicated:
+                doc_key = self._get_document_group_key(doc)
+                if doc_key:
+                    included_keys.add(doc_key)
+            
+            # 최소 문서 수까지 추가
+            for doc in all_docs_sorted:
+                if len(deduplicated) >= min_docs_required:
+                    break
+                
+                doc_key = self._get_document_group_key(doc)
+                if doc_key and doc_key not in included_keys:
+                    deduplicated.append(doc)
+                    included_keys.add(doc_key)
+                    logger.debug(f"✅ [ENHANCED DEDUP] Restored document to meet minimum: {doc_key}")
+        
+        removed_count = original_count - len(deduplicated)
         if removed_count > 0:
             logger.info(
-                f"🎯 [ENHANCED DEDUP] Final result: {len(documents)} → {len(deduplicated)} "
-                f"({removed_count} duplicates removed, {removed_count/len(documents)*100:.1f}%)"
+                f"🎯 [ENHANCED DEDUP] Final result: {original_count} → {len(deduplicated)} "
+                f"({removed_count} duplicates removed, {removed_count/original_count*100:.1f}%, "
+                f"min required: {min_docs_required})"
             )
         else:
             logger.info(
-                f"✅ [ENHANCED DEDUP] Final result: {len(documents)} → {len(deduplicated)} "
-                f"(no duplicates found, all documents are unique)"
+                f"✅ [ENHANCED DEDUP] Final result: {original_count} → {len(deduplicated)} "
+                f"(no duplicates found, all documents are unique, min required: {min_docs_required})"
             )
         
         return deduplicated
@@ -3906,9 +4397,52 @@ class UnifiedPromptManager:
     
     def _get_document_group_key(self, doc: Dict[str, Any]) -> Optional[str]:
         """문서 그룹 키 생성 (document_id 또는 source_id 기반)"""
+        import re
+        
+        source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("type")
+        
+        # 🔥 개선: 법령 조문의 경우 조문 번호를 정확히 추출 (우선순위 최상위)
+        if source_type == "statute_article":
+            # article_no 추출 (여러 위치에서 확인)
+            article_no = (
+                doc.get("article_no") or 
+                doc.get("metadata", {}).get("article_no") or
+                doc.get("metadata", {}).get("article_number") or
+                ""
+            )
+            
+            # article_no가 문자열인 경우 숫자만 추출
+            if article_no:
+                # "066800" -> "668", "제668조" -> "668" 형식으로 정규화
+                article_no_match = re.search(r'(\d+)', str(article_no))
+                if article_no_match:
+                    article_no = article_no_match.group(1)
+            
+            law_name = (
+                doc.get("law_name") or 
+                doc.get("metadata", {}).get("law_name") or
+                doc.get("metadata", {}).get("statute_name") or
+                ""
+            )
+            
+            # 법령명이 없으면 content에서 추출 시도
+            if not law_name:
+                content = doc.get("content", "") or doc.get("text", "")
+                if content:
+                    # "민법 제668조" 패턴 추출
+                    law_match = re.search(r'([가-힣]+법)\s*제\s*(\d+)\s*조', content)
+                    if law_match:
+                        law_name = law_match.group(1)
+                        if not article_no:
+                            article_no = law_match.group(2)
+            
+            # 조문 번호가 있으면 법령명과 조문 번호를 조합하여 고유 키 생성
+            if article_no:
+                law_name_normalized = law_name.strip() if law_name else "unknown_law"
+                return f"statute_article_{law_name_normalized}_{article_no}"
+        
         # 우선순위 1: source_id + source_type
         source_id = doc.get("source_id") or doc.get("metadata", {}).get("source_id")
-        source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("type")
         
         if source_id and source_type:
             return f"{source_type}_{source_id}"
@@ -3918,7 +4452,7 @@ class UnifiedPromptManager:
         if doc_id and source_type:
             return f"{source_type}_doc_{doc_id}"
         
-        # 우선순위 3: 법령 조문 (law_name + article_no)
+        # 우선순위 3: 법령 조문 (law_name + article_no) - 기존 로직 (fallback)
         law_name = doc.get("law_name") or doc.get("metadata", {}).get("law_name")
         article_no = doc.get("article_no") or doc.get("metadata", {}).get("article_no")
         if law_name and article_no:
@@ -3983,6 +4517,8 @@ class UnifiedPromptManager:
         Near-duplicate 제거 (텍스트 유사도 기반)
         cosine similarity ≥ threshold인 문서 중 하나만 유지
         """
+        import re
+        
         if not documents or len(documents) <= 1:
             return documents
         
@@ -4001,6 +4537,45 @@ class UnifiedPromptManager:
             if not content:
                 deduplicated.append(doc)
                 continue
+            
+            # 🔥 개선: 법령 조문의 경우 조문 번호가 다르면 중복으로 간주하지 않음
+            doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("type")
+            if doc_type == "statute_article":
+                # 조문 번호 추출
+                doc_article_no = (
+                    doc.get("article_no") or 
+                    doc.get("metadata", {}).get("article_no") or
+                    ""
+                )
+                if doc_article_no:
+                    doc_article_match = re.search(r'(\d+)', str(doc_article_no))
+                    if doc_article_match:
+                        doc_article_no = doc_article_match.group(1)
+                
+                # 이미 선택된 문서들과 조문 번호 비교
+                is_duplicate_by_article = False
+                for seen_doc in seen_docs:
+                    seen_type = seen_doc.get("type") or seen_doc.get("source_type") or seen_doc.get("metadata", {}).get("type")
+                    if seen_type == "statute_article":
+                        seen_article_no = (
+                            seen_doc.get("article_no") or 
+                            seen_doc.get("metadata", {}).get("article_no") or
+                            ""
+                        )
+                        if seen_article_no:
+                            seen_article_match = re.search(r'(\d+)', str(seen_article_no))
+                            if seen_article_match:
+                                seen_article_no = seen_article_match.group(1)
+                        
+                        # 조문 번호가 같으면 중복으로 간주 (텍스트 유사도 확인 불필요)
+                        if doc_article_no and seen_article_no and doc_article_no == seen_article_no:
+                            is_duplicate_by_article = True
+                            logger.debug(f"⚠️ [NEAR DEDUP] Removed duplicate statute article (article_no={doc_article_no})")
+                            break
+                
+                # 조문 번호가 같으면 중복으로 간주하여 스킵
+                if is_duplicate_by_article:
+                    continue
             
             # 이미 선택된 문서들과 유사도 계산
             is_near_duplicate = False
