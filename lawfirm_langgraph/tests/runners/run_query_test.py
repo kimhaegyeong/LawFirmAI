@@ -11,14 +11,25 @@ import sys
 import os
 import asyncio
 import logging
-import logging.handlers
-import queue
 import signal
 import atexit
 import time
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+
+# TRACE 레벨 추가 (DEBUG보다 낮은 레벨, 값: 5)
+if not hasattr(logging, 'TRACE'):
+    logging.TRACE = 5
+    logging.addLevelName(logging.TRACE, "TRACE")
+    
+    # Logger 클래스에 trace 메서드 추가
+    def trace(self, message, *args, **kwargs):
+        """TRACE 레벨 로그"""
+        if self.isEnabledFor(logging.TRACE):
+            self._log(logging.TRACE, message, args, **kwargs)
+    
+    logging.Logger.trace = trace
 
 # UTF-8 인코딩 설정 (Windows 호환)
 os.environ['PYTHONIOENCODING'] = 'utf-8'
@@ -30,7 +41,7 @@ script_dir = Path(__file__).parent
 runners_dir = script_dir.parent
 tests_dir = runners_dir.parent
 lawfirm_langgraph_dir = tests_dir.parent
-project_root = lawfirm_langgraph_dir.parent
+project_root = lawfirm_langgraph_dir
 
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -44,93 +55,101 @@ try:
 except ImportError:
     pass
 
-# AsyncFileHandler 클래스 정의 (QueueHandler + QueueListener 패턴)
-class AsyncFileHandler:
-    """비동기 파일 핸들러 (QueueHandler + QueueListener 패턴)
+# LineBufferedFileHandler 클래스 정의 (줄 단위로 즉시 파일에 쓰기)
+class LineBufferedFileHandler(logging.FileHandler):
+    """줄 단위로 즉시 파일에 쓰는 파일 핸들러
+    
+    buffering=1 (line buffering)을 사용하여 각 줄이 즉시 파일에 쓰여집니다.
+    이는 QueueHandler + QueueListener보다 더 안정적입니다 (백그라운드 스레드 없음).
     
     장점:
-    - 메인 스레드를 블로킹하지 않음
-    - 예외 발생 시에도 큐에 있는 로그가 처리됨
-    - 성능 우수
-    - flush 호출 불필요 (자동 처리)
+    - 예외 발생 시에도 로그가 즉시 파일에 저장됨
+    - 백그라운드 스레드 없이 직접 파일에 쓰므로 더 안정적
+    - flush 호출 불필요 (line buffering이 자동 처리)
     """
     
-    def __init__(self, filename, mode='a', encoding='utf-8', level=logging.INFO):
-        """비동기 파일 핸들러 초기화
+    def __init__(self, filename, mode='a', encoding='utf-8', delay=False, errors=None):
+        """줄 단위 버퍼링 파일 핸들러 초기화
         
         Args:
             filename: 로그 파일 경로
             mode: 파일 모드 ('a' 또는 'w')
             encoding: 파일 인코딩
-            level: 로그 레벨
+            delay: 파일 열기 지연 여부
+            errors: 인코딩 오류 처리 방식
         """
-        self.filename = filename
-        self.mode = mode
-        self.encoding = encoding
-        self.level = level
+        # 부모 클래스 초기화 (filters 등 속성 초기화를 위해 필요)
+        # delay=True로 설정하여 부모가 파일을 열지 않도록 함
+        super().__init__(filename, mode=mode, encoding=encoding, delay=True, errors=errors)
         
-        # 로그 큐 생성 (무제한 크기)
-        self.log_queue = queue.Queue(-1)
-        
-        # 실제 파일 핸들러 생성 (line buffering)
-        file_handler = logging.FileHandler(
-            filename, 
-            mode=mode, 
-            encoding=encoding,
-            delay=False
-        )
-        # line buffering 설정 (줄 단위로 즉시 쓰기)
-        if hasattr(file_handler.stream, 'reconfigure'):
-            try:
-                file_handler.stream.reconfigure(line_buffering=True)
-            except (AttributeError, OSError, ValueError):
-                pass
-        
-        file_handler.setLevel(level)
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        file_handler.setFormatter(formatter)
-        
-        # QueueHandler 생성 (큐에 로그를 넣음)
-        self.queue_handler = logging.handlers.QueueHandler(self.log_queue)
-        self.queue_handler.setLevel(level)
-        
-        # QueueListener 생성 (백그라운드에서 큐를 읽어 파일에 쓰기)
-        self.listener = logging.handlers.QueueListener(
-            self.log_queue, 
-            file_handler,
-            respect_handler_level=True
-        )
-        self.listener.start()
+        # delay가 False이면 즉시 파일 열기 (line buffering)
+        if not delay:
+            # 기존 stream이 있으면 닫기
+            if hasattr(self, 'stream') and self.stream:
+                try:
+                    self.stream.close()
+                except Exception:
+                    pass
+            
+            # line buffering (buffering=1)로 파일 열기
+            # buffering=1: 줄 단위로 즉시 쓰기 (자동 flush)
+            self.stream = open(
+                self.baseFilename, 
+                mode, 
+                buffering=1,  # line buffering
+                encoding=encoding, 
+                errors=errors
+            )
     
-    def get_handler(self):
-        """QueueHandler 반환 (로거에 추가할 핸들러)
-        
-        Returns:
-            QueueHandler: 로거에 추가할 핸들러
-        """
-        return self.queue_handler
-    
-    def stop(self):
-        """리소스 정리 (프로그램 종료 시 호출)
-        
-        큐에 남아있는 모든 로그를 처리한 후 종료합니다.
-        """
-        if self.listener:
-            try:
-                self.listener.stop()
-            except Exception:
-                pass
+    def emit(self, record):
+        """로그를 줄 단위로 즉시 파일에 쓰기"""
+        try:
+            # stream이 없으면 line buffering으로 열기
+            if self.stream is None:
+                self.stream = open(
+                    self.baseFilename, 
+                    self.mode, 
+                    buffering=1,  # line buffering
+                    encoding=self.encoding, 
+                    errors=self.errors
+                )
+            
+            # 로그 포맷팅
+            msg = self.format(record)
+            
+            # 줄 단위로 즉시 쓰기 (line buffering이므로 \n 만나면 자동 flush)
+            self.stream.write(msg + self.terminator)
+            
+            # Windows에서 추가 보장을 위해 명시적 flush
+            if sys.platform == 'win32':
+                try:
+                    self.stream.flush()
+                    # Windows에서 파일 동기화
+                    if hasattr(self.stream, 'fileno'):
+                        try:
+                            os.fsync(self.stream.fileno())
+                        except (OSError, AttributeError):
+                            pass
+                except Exception:
+                    pass
+                    
+        except Exception:
+            self.handleError(record)
     
     def flush(self):
-        """명시적 flush (선택적, 일반적으로 불필요)
-        
-        QueueListener가 자동으로 처리하므로 일반적으로 호출할 필요가 없습니다.
-        """
-        # QueueListener가 자동으로 처리하므로 별도 작업 불필요
-        pass
+        """강화된 flush 메서드"""
+        try:
+            # 부모 클래스의 flush 호출
+            super().flush()
+            
+            # Windows에서 파일 동기화 (추가 보장)
+            if self.stream and sys.platform == 'win32' and hasattr(self.stream, 'fileno'):
+                try:
+                    os.fsync(self.stream.fileno())
+                except (OSError, AttributeError):
+                    pass
+        except Exception:
+            pass
 
 
 # SafeStreamHandler 클래스 정의 (Windows 환경 호환)
@@ -214,24 +233,91 @@ class SafeStreamHandler(logging.StreamHandler):
             pass
 
 
-# 원본 stdout 저장
+# 원본 stdout/stderr 저장
 _original_stdout = sys.stdout
+_original_stderr = sys.stderr
 
 # 🔥 개선: 글로벌 로그 파일 경로 저장 (signal handler에서 사용)
 _global_log_file_path = None
-# 🔥 개선: 글로벌 AsyncFileHandler 저장 (프로그램 종료 시 stop 호출용)
-_global_async_file_handler = None
+# 🔥 개선: 글로벌 로그 파일 핸들 저장 (stdout/stderr 리다이렉트용)
+_log_file_handle = None
+
+
+# Tee 클래스 정의 (콘솔과 파일 모두에 쓰기)
+class Tee:
+    """콘솔과 파일 모두에 쓰는 클래스
+    
+    stdout/stderr를 리다이렉트하여 콘솔과 로그 파일 모두에 출력합니다.
+    """
+    
+    def __init__(self, *files):
+        """여러 파일 객체를 받아서 모두에 쓰기
+        
+        Args:
+            *files: 파일 객체들 (예: sys.stdout, log_file_handle)
+        """
+        self.files = files
+    
+    def write(self, obj):
+        """모든 파일에 쓰기"""
+        for f in self.files:
+            try:
+                f.write(obj)
+                # line buffering이므로 \n 만나면 자동 flush되지만, 명시적 flush도 수행
+                if hasattr(f, 'flush'):
+                    f.flush()
+            except Exception:
+                pass
+    
+    def flush(self):
+        """모든 파일 flush"""
+        for f in self.files:
+            try:
+                if hasattr(f, 'flush'):
+                    f.flush()
+            except Exception:
+                pass
+    
+    def isatty(self):
+        """터미널인지 확인 (일부 라이브러리에서 필요)
+        
+        Returns:
+            False: 파일이므로 터미널이 아님
+        """
+        return False
+    
+    def fileno(self):
+        """파일 디스크립터 반환 (일부 라이브러리에서 필요)
+        
+        Returns:
+            첫 번째 파일의 fileno (있는 경우)
+        """
+        if self.files:
+            try:
+                return self.files[0].fileno()
+            except (AttributeError, OSError):
+                pass
+        raise OSError("fileno not available")
 
 
 def _signal_handler(signum, frame):
-    """시그널 핸들러 (프로세스 종료 시 로그 처리)"""
+    """시그널 핸들러 (프로세스 종료 시 로그 flush)"""
     try:
-        # QueueListener가 큐에 남아있는 모든 로그를 처리하도록 stop
-        global _global_async_file_handler
-        if _global_async_file_handler:
-            _global_async_file_handler.stop()
+        # 로그 파일 핸들러 flush
+        global _log_file_handle
+        if '_log_file_handle' in globals() and _log_file_handle:
+            try:
+                _log_file_handle.flush()
+                if sys.platform == 'win32' and hasattr(_log_file_handle, 'fileno'):
+                    try:
+                        os.fsync(_log_file_handle.fileno())
+                    except (OSError, AttributeError):
+                        pass
+            except Exception:
+                pass
         
-        flush_all_log_handlers()  # StreamHandler만 flush
+        # 모든 파일 핸들러 flush
+        flush_all_log_handlers()
         if _global_log_file_path:
             print(f"\n[시그널 수신] 로그 파일: {_global_log_file_path}")
     except Exception:
@@ -243,14 +329,23 @@ def _signal_handler(signum, frame):
 
 
 def _atexit_handler():
-    """프로세스 종료 시 로그 처리 (atexit 사용)"""
+    """프로세스 종료 시 로그 flush (atexit 사용)"""
     try:
-        # QueueListener가 큐에 남아있는 모든 로그를 처리하도록 stop
-        global _global_async_file_handler
-        if _global_async_file_handler:
-            _global_async_file_handler.stop()
+        # 로그 파일 핸들러 flush
+        global _log_file_handle
+        if '_log_file_handle' in globals() and _log_file_handle:
+            try:
+                _log_file_handle.flush()
+                if sys.platform == 'win32' and hasattr(_log_file_handle, 'fileno'):
+                    try:
+                        os.fsync(_log_file_handle.fileno())
+                    except (OSError, AttributeError):
+                        pass
+            except Exception:
+                pass
         
-        flush_all_log_handlers()  # StreamHandler만 flush
+        # 모든 파일 핸들러 flush
+        flush_all_log_handlers()
     except Exception:
         pass
 
@@ -269,21 +364,62 @@ atexit.register(_atexit_handler)
 
 
 def flush_all_log_handlers():
-    """모든 로거의 StreamHandler만 flush (전역 함수)
+    """모든 로거의 모든 핸들러 flush (전역 함수)
     
-    QueueHandler + QueueListener 패턴에서는 파일 핸들러의 flush가 자동으로 처리되므로
-    StreamHandler(콘솔 출력)만 flush합니다.
+    LineBufferedFileHandler는 line buffering을 사용하지만,
+    명시적 flush를 통해 최종 로그 저장을 보장합니다.
     """
     try:
-        # StreamHandler만 flush (콘솔 출력 보장)
-        root_logger = logging.getLogger()
-        for handler in root_logger.handlers:
-            if isinstance(handler, logging.StreamHandler):
+        # 모든 로거의 모든 핸들러 flush
+        loggers_to_flush = [
+            logging.getLogger(),  # 루트 로거
+        ]
+        
+        # 모든 등록된 로거 추가
+        try:
+            for logger_name in list(logging.Logger.manager.loggerDict.keys()):
                 try:
-                    if hasattr(handler, 'stream') and handler.stream:
-                        handler.stream.flush()
-                except (ValueError, AttributeError, OSError):
+                    sub_logger = logging.getLogger(logger_name)
+                    if sub_logger not in loggers_to_flush:
+                        loggers_to_flush.append(sub_logger)
+                except (ValueError, AttributeError, RuntimeError):
                     pass
+        except (AttributeError, RuntimeError):
+            pass
+        
+        # 각 로거의 모든 핸들러 flush
+        for logger_to_flush in loggers_to_flush:
+            try:
+                for handler in logger_to_flush.handlers:
+                    try:
+                        # 모든 핸들러 타입에 대해 flush
+                        handler.flush()
+                        
+                        # FileHandler의 경우 추가 처리
+                        if isinstance(handler, logging.FileHandler):
+                            if hasattr(handler, 'stream') and handler.stream:
+                                try:
+                                    handler.stream.flush()
+                                    # Windows에서 강제 동기화
+                                    if sys.platform == 'win32' and hasattr(handler.stream, 'fileno'):
+                                        try:
+                                            os.fsync(handler.stream.fileno())
+                                        except (OSError, AttributeError):
+                                            pass
+                                except (ValueError, AttributeError, OSError):
+                                    pass
+                        
+                        # StreamHandler도 flush (콘솔 출력 보장)
+                        if isinstance(handler, logging.StreamHandler):
+                            try:
+                                if hasattr(handler, 'stream') and handler.stream:
+                                    handler.stream.flush()
+                            except (ValueError, AttributeError, OSError):
+                                pass
+                    except Exception:
+                        pass
+            except (AttributeError, RuntimeError):
+                pass
         
         # Python의 표준 출력 스트림도 flush
         try:
@@ -296,15 +432,18 @@ def flush_all_log_handlers():
 
 
 # 로깅 설정
-def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
+def setup_logging(log_level: Optional[str] = None, log_file_path: Optional[str] = None) -> logging.Logger:
     """로깅 설정
     
     Args:
         log_level: 로그 레벨 (기본값: 환경 변수 LOG_LEVEL 또는 INFO)
+        log_file_path: 로그 파일 경로 (지정하지 않으면 자동 생성)
     
     Returns:
         설정된 로거
     """
+    global _global_log_file_path, _log_file_handle, _original_stdout, _original_stderr
+    
     # 로그 레벨 결정
     if log_level is None:
         log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -320,21 +459,25 @@ def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
     }
     log_level_value = log_level_map.get(log_level, logging.INFO)
     
-    # 로그 디렉토리 생성 (환경 변수로 경로 지정 가능)
-    log_dir_env = os.getenv("TEST_LOG_DIR")
-    if log_dir_env:
-        log_dir = Path(log_dir_env)
+    # 로그 파일 경로 결정
+    if log_file_path:
+        log_file = Path(log_file_path)
     else:
-        log_dir = project_root / "logs" / "langgraph"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 로그 파일 경로 (환경 변수로 파일명 지정 가능)
-    log_file_env = os.getenv("TEST_LOG_FILE")
-    if log_file_env:
-        log_file = Path(log_file_env)
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"test_langgraph_query_{timestamp}.log"
+        # 로그 디렉토리 생성 (환경 변수로 경로 지정 가능)
+        log_dir_env = os.getenv("TEST_LOG_DIR")
+        if log_dir_env:
+            log_dir = Path(log_dir_env)
+        else:
+            log_dir = project_root / "logs" / "langgraph"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 로그 파일 경로 (환경 변수로 파일명 지정 가능)
+        log_file_env = os.getenv("TEST_LOG_FILE")
+        if log_file_env:
+            log_file = Path(log_file_env)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file = log_dir / f"test_langgraph_query_{timestamp}.log"
     
     # 루트 로거 설정
     root_logger = logging.getLogger()
@@ -344,26 +487,42 @@ def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
     for handler in list(root_logger.handlers):
         root_logger.removeHandler(handler)
     
-    # 🔥 개선: 비동기 파일 핸들러 사용 (QueueHandler + QueueListener 패턴)
-    # 장점: 메인 스레드 블로킹 없음, 예외 발생 시에도 큐에 있는 로그 처리, 성능 우수
-    global _global_async_file_handler
-    async_file_handler = AsyncFileHandler(
-        log_file, 
-        encoding='utf-8', 
-        mode='w', 
-        level=log_level_value
-    )
-    _global_async_file_handler = async_file_handler
-    
-    # QueueHandler를 로거에 추가
-    file_handler = async_file_handler.get_handler()
-    root_logger.addHandler(file_handler)
-    
-    # 포맷터 설정 (QueueListener 내부의 실제 파일 핸들러에 적용됨)
-    file_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    # 🔥 개선: 줄 단위 버퍼링 파일 핸들러 사용 (line buffering)
+    # 장점: 예외 발생 시에도 로그가 즉시 파일에 저장됨, 백그라운드 스레드 없이 더 안정적
+    # mode='a'로 설정하여 main()에서 미리 생성한 로그를 보존
+    try:
+        file_handler = LineBufferedFileHandler(
+            log_file, 
+            encoding='utf-8', 
+            mode='a',  # append 모드로 변경하여 기존 로그 보존
+            delay=False
+        )
+        file_handler.setLevel(log_level_value)
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+        
+        # 🔥 개선: 파일 핸들러가 제대로 작동하는지 즉시 테스트
+        test_record = logging.LogRecord(
+            name="lawfirm_langgraph.tests.runners.run_query_test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg="[로그 핸들러 테스트] 파일 핸들러가 정상적으로 작동합니다.",
+            args=(),
+            exc_info=None
+        )
+        file_handler.emit(test_record)
+        file_handler.flush()
+    except Exception as handler_error:
+        # 파일 핸들러 생성 실패 시 콘솔에 출력
+        print(f"\n[경고] 파일 핸들러 생성 실패: {handler_error}")
+        import traceback
+        traceback.print_exc()
+        raise
     
     # 콘솔 핸들러 추가 (SafeStreamHandler 사용)
     try:
@@ -380,12 +539,19 @@ def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
     root_logger.addHandler(safe_handler)
     
     # 🔥 개선: 모든 주요 로거가 루트 로거로 전파되도록 강제 설정
-    # 모든 기존 로거의 propagate를 True로 설정
+    # 모든 기존 로거의 propagate를 True로 설정하고, 별도 핸들러 제거
     for logger_name in list(logging.Logger.manager.loggerDict.keys()):
         try:
             existing_logger = logging.getLogger(logger_name)
             existing_logger.propagate = True
             existing_logger.disabled = False
+            
+            # 🔥 개선: 기존 로거의 파일 핸들러 제거 (우리 파일 핸들러만 사용)
+            for handler in list(existing_logger.handlers):
+                if isinstance(handler, logging.FileHandler):
+                    # 우리 파일 핸들러가 아니면 제거
+                    if handler != file_handler:
+                        existing_logger.removeHandler(handler)
         except (ValueError, AttributeError, RuntimeError):
             pass
     
@@ -425,6 +591,28 @@ def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
         few_shot_logger = logging.getLogger("lawfirm_langgraph.core.generation.formatters.answer_structure_enhancer")
         few_shot_logger.setLevel(logging.ERROR)  # WARNING 이상만 표시
     
+    # asyncio 로거는 TRACE 레벨로 설정 (proactor 로그 과다 방지)
+    try:
+        asyncio_logger = logging.getLogger("asyncio")
+        asyncio_logger.setLevel(logging.TRACE)
+        asyncio_logger.propagate = False
+    except (ValueError, AttributeError, RuntimeError):
+        pass
+    
+    # 🔥 개선: langsmith.client 로거도 우리 파일 핸들러 사용하도록 설정
+    try:
+        langsmith_logger = logging.getLogger("langsmith.client")
+        langsmith_logger.setLevel(log_level_value)
+        langsmith_logger.propagate = True  # 루트 로거로 전파
+        langsmith_logger.disabled = False
+        
+        # 기존 파일 핸들러 제거 (우리 파일 핸들러만 사용)
+        for handler in list(langsmith_logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                langsmith_logger.removeHandler(handler)
+    except (ValueError, AttributeError, RuntimeError):
+        pass
+    
     # 테스트 로거 (파일명과 일치)
     logger = logging.getLogger("lawfirm_langgraph.tests.runners.run_query_test")
     logger.setLevel(log_level_value)
@@ -432,11 +620,42 @@ def setup_logging(log_level: Optional[str] = None) -> logging.Logger:
     logger.disabled = False
     
     # 🔥 개선: 로그 파일 경로를 명시적으로 출력 (파일 생성 확인용 - 한 번만)
+    # 먼저 루트 로거로 로그 기록 (로거 설정이 제대로 되었는지 확인)
+    root_logger = logging.getLogger()
+    root_logger.info(f"로그 파일: {log_file.absolute()} | 로그 레벨: {log_level}")
+    
+    # 테스트 로거로도 로그 기록
     logger.info(f"로그 파일: {log_file.absolute()} | 로그 레벨: {log_level}")
     
+    # 🔥 개선: 로그가 제대로 기록되었는지 확인하기 위해 즉시 flush
+    flush_all_log_handlers()
+    
     # 🔥 개선: 글로벌 로그 파일 경로 저장 (signal handler에서 사용)
-    global _global_log_file_path
     _global_log_file_path = str(log_file.absolute())
+    
+    # 🔥 개선: stdout/stderr를 Tee로 감싸서 콘솔과 파일 모두에 쓰기
+    # 파일 핸들러와 동일한 파일을 사용하되, write 모드로 열어서 충돌 방지
+    try:
+        # 로그 파일을 텍스트 모드로 열기 (write, line buffering)
+        # 파일 핸들러가 이미 파일을 열었으므로, 같은 파일을 다시 열면 충돌 발생 가능
+        # 따라서 파일 핸들러의 stream을 직접 사용하거나, 별도 파일 핸들을 사용
+        # 여기서는 파일 핸들러의 stream을 직접 사용하는 대신, 별도 핸들을 사용하되
+        # 같은 파일을 append 모드로 열어서 추가 기록
+        _log_file_handle = open(log_file, 'a', encoding='utf-8', buffering=1)
+        
+        # stdout과 stderr를 Tee로 감싸기
+        sys.stdout = Tee(_original_stdout, _log_file_handle)
+        sys.stderr = Tee(_original_stderr, _log_file_handle)
+        
+        # 🔥 개선: Tee 설정 후 즉시 테스트 출력
+        print(f"[Tee 테스트] stdout/stderr 리다이렉트가 정상적으로 작동합니다.")
+        _log_file_handle.flush()
+    except Exception as tee_error:
+        # Tee 설정 실패 시 경고만 출력하고 계속 진행
+        print(f"\n[경고] stdout/stderr 리다이렉트 실패: {tee_error}")
+        import traceback
+        traceback.print_exc()
+        _log_file_handle = None
     
     # 🔥 개선: 콘솔에도 로그 파일 경로 출력 (로그 파일이 생성되지 않을 경우 대비)
     print(f"\n[로그 설정]")
@@ -589,9 +808,20 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
         try:
             from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
+            # 단계별 시간 측정
+            component_times = {}
+            
+            # 2.1. 서비스 인스턴스 생성
+            service_create_start = time.time()
             service = LangGraphWorkflowService(config)
+            component_times['service_create'] = time.time() - service_create_start
+            
             service_time = time.time() - service_start
-            logger.info(f"   서비스 초기화 완료 (초기화 시간: {service_time:.3f}초)")
+            logger.info(f"   서비스 초기화 완료 (총 시간: {service_time:.3f}초)")
+            
+            # 단계별 시간 상세 로깅
+            if component_times:
+                logger.info(f"   - 서비스 생성: {component_times.get('service_create', 0):.3f}초")
             
             # 🔥 개선: 초기화 직후 즉시 flush
             try:
@@ -922,11 +1152,30 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
             # 서비스가 cleanup 메서드를 가지고 있으면 호출
             if hasattr(service, 'cleanup'):
                 service.cleanup()
-            # 데이터베이스 연결 풀 정리
+            # 데이터베이스 연결 풀 정리 및 통계 출력
             if hasattr(service, 'legal_workflow') and service.legal_workflow:
                 if hasattr(service.legal_workflow, 'data_connector') and service.legal_workflow.data_connector:
                     if hasattr(service.legal_workflow.data_connector, '_db_adapter') and service.legal_workflow.data_connector._db_adapter:
                         db_adapter = service.legal_workflow.data_connector._db_adapter
+                        # 연결 통계 로깅 (최적화 방안 4)
+                        if hasattr(db_adapter, 'log_connection_stats'):
+                            try:
+                                logger.info("\n" + "=" * 80)
+                                logger.info("데이터베이스 연결 통계")
+                                logger.info("=" * 80)
+                                db_adapter.log_connection_stats()
+                                pool_status = db_adapter.get_pool_status()
+                                if pool_status.get('connection_stats'):
+                                    stats = pool_status['connection_stats']
+                                    logger.info(f"연결 횟수 상세:")
+                                    logger.info(f"  - 총 연결 획득: {stats.get('total_getconn', 0)}회")
+                                    logger.info(f"  - 총 연결 반환: {stats.get('total_putconn', 0)}회")
+                                    if stats.get('getconn_by_method'):
+                                        logger.debug(f"  - 메서드별 연결 획득: {stats['getconn_by_method']}")
+                                    if stats.get('putconn_by_method'):
+                                        logger.debug(f"  - 메서드별 연결 반환: {stats['putconn_by_method']}")
+                            except Exception as stats_error:
+                                logger.debug(f"연결 통계 로깅 실패 (무시): {stats_error}")
                         if hasattr(db_adapter, 'connection_pool') and db_adapter.connection_pool:
                             try:
                                 # 연결 풀의 모든 연결 닫기
@@ -1090,6 +1339,25 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
                     if hasattr(service.legal_workflow, 'data_connector') and service.legal_workflow.data_connector:
                         if hasattr(service.legal_workflow.data_connector, '_db_adapter') and service.legal_workflow.data_connector._db_adapter:
                             db_adapter = service.legal_workflow.data_connector._db_adapter
+                            # 연결 통계 로깅 (최적화 방안 4)
+                            if hasattr(db_adapter, 'log_connection_stats'):
+                                try:
+                                    logger.info("\n" + "=" * 80)
+                                    logger.info("데이터베이스 연결 통계 (오류 발생 시)")
+                                    logger.info("=" * 80)
+                                    db_adapter.log_connection_stats()
+                                    pool_status = db_adapter.get_pool_status()
+                                    if pool_status.get('connection_stats'):
+                                        logger.info(f"연결 횟수 상세:")
+                                        stats = pool_status['connection_stats']
+                                        logger.info(f"  - 총 연결 획득: {stats.get('total_getconn', 0)}회")
+                                        logger.info(f"  - 총 연결 반환: {stats.get('total_putconn', 0)}회")
+                                        if stats.get('getconn_by_method'):
+                                            logger.debug(f"  - 메서드별 연결 획득: {stats['getconn_by_method']}")
+                                        if stats.get('putconn_by_method'):
+                                            logger.debug(f"  - 메서드별 연결 반환: {stats['putconn_by_method']}")
+                                except Exception as stats_error:
+                                    logger.debug(f"연결 통계 로깅 실패 (무시): {stats_error}")
                             if hasattr(db_adapter, 'connection_pool') and db_adapter.connection_pool:
                                 try:
                                     db_adapter.connection_pool.closeall()
@@ -1109,21 +1377,86 @@ async def test_langgraph_query(query: str, logger: logging.Logger):
 
 def main():
     """메인 실행 함수"""
-    global _global_async_file_handler
+    global _global_log_file_path, _log_file_handle, _original_stdout, _original_stderr
     
     logger = None
     log_file_path = None
+    
+    try:
+        # 🔥 개선: setup_logging() 호출 전에 로그 파일 경로 미리 결정
+        # 이렇게 하면 setup_logging() 실패 시에도 로그 파일에 기록 가능
+        log_dir_env = os.getenv("TEST_LOG_DIR")
+        if log_dir_env:
+            log_dir = Path(log_dir_env)
+        else:
+            log_dir = project_root / "logs" / "langgraph"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        log_file_env = os.getenv("TEST_LOG_FILE")
+        if log_file_env:
+            log_file_path = str(Path(log_file_env))
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file_path = str(log_dir / f"test_langgraph_query_{timestamp}.log")
+        
+        # 🔥 개선: 로그 파일을 미리 생성하고 초기 로그 기록
+        # 이 로그는 setup_logging()이 실행되기 전에 기록되므로 매우 중요합니다
+        try:
+            pre_log_file = open(log_file_path, 'w', encoding='utf-8', buffering=1)
+            pre_log_file.write(f"[프로그램 시작] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            pre_log_file.write(f"[로그 파일 경로] {log_file_path}\n")
+            pre_log_file.write(f"[Python 버전] {sys.version}\n")
+            pre_log_file.write(f"[작업 디렉토리] {os.getcwd()}\n")
+            pre_log_file.write(f"[명령줄 인자] {sys.argv}\n")
+            pre_log_file.flush()
+            # Windows에서 파일 동기화
+            if sys.platform == 'win32':
+                try:
+                    os.fsync(pre_log_file.fileno())
+                except (OSError, AttributeError):
+                    pass
+            # 파일을 닫고, setup_logging()에서 append 모드로 열도록 함
+            pre_log_file.close()
+        except Exception as pre_log_error:
+            # 로그 파일 미리 생성 실패 시 경고만 출력하고 계속 진행
+            print(f"[경고] 로그 파일 미리 생성 실패: {pre_log_error}")
+            import traceback
+            traceback.print_exc()
+    except Exception as init_error:
+        # 초기화 중 오류 발생 시 콘솔에 출력
+        print(f"[초기화 오류] {init_error}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
     try:
         # 로깅 설정
-        logger = setup_logging()
-        
-        # 🔥 개선: 로그 파일 경로 저장 (예외 발생 시 출력용)
-        if logger:
-            # 로그 파일 경로 추출 (handler에서)
-            for handler in logging.getLogger().handlers:
-                if isinstance(handler, logging.FileHandler):
-                    log_file_path = handler.baseFilename
-                    break
+        try:
+            logger = setup_logging(log_file_path=log_file_path)
+            
+            # 🔥 개선: 로깅 설정 후 즉시 로그 기록 테스트
+            if logger:
+                logger.info("=" * 80)
+                logger.info("테스트 시작")
+                logger.info("=" * 80)
+                flush_all_log_handlers()
+        except Exception as setup_error:
+            # setup_logging 실패 시에도 로그 파일에 기록
+            try:
+                with open(log_file_path, 'a', encoding='utf-8', buffering=1) as f:
+                    f.write(f"\n[로그 설정 실패] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"  오류: {setup_error}\n")
+                    import traceback
+                    f.write(traceback.format_exc())
+                    f.flush()
+            except Exception:
+                pass
+            
+            print(f"\n[로그 설정 실패]")
+            print(f"  오류: {setup_error}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # 질의 가져오기
         query = get_query_from_args()
@@ -1305,13 +1638,6 @@ def main():
         return 0
         
     except KeyboardInterrupt:
-        # 🔥 개선: QueueListener가 큐에 남아있는 모든 로그를 처리하도록 stop
-        if _global_async_file_handler:
-            try:
-                _global_async_file_handler.stop()
-            except Exception:
-                pass
-        
         if logger:
             logger.warning("\n\n사용자에 의해 중단되었습니다.")
         else:
@@ -1322,7 +1648,7 @@ def main():
             print(f"\n[테스트 중단]")
             print(f"  로그 파일: {log_file_path}")
         
-        # StreamHandler만 flush
+        # 모든 핸들러 flush
         flush_all_log_handlers()
         
         return 1
@@ -1347,7 +1673,7 @@ def main():
                     flush_all_log_handlers()
                     if sys.platform == 'win32':
                         time.sleep(0.01)
-            except Exception as log_error:
+            except Exception:
                 # 로그 기록 중 오류 발생 시에도 flush 시도
                 try:
                     flush_all_log_handlers()
@@ -1364,27 +1690,45 @@ def main():
             print(f"  로그 파일: {log_file_path}")
             print(f"  로그 파일을 확인하여 오류 원인을 파악하세요.")
         
-        # 🔥 개선: QueueListener가 큐에 남아있는 모든 로그를 처리하도록 stop
-        if _global_async_file_handler:
-            try:
-                _global_async_file_handler.stop()
-            except Exception:
-                pass
-        
-        # StreamHandler만 flush
+        # 모든 핸들러 flush
         flush_all_log_handlers()
         
         return 1
     finally:
-        # 🔥 개선: finally 블록에서 QueueListener 정리 (최종 보장)
-        # QueueListener가 큐에 남아있는 모든 로그를 처리하도록 stop
-        if _global_async_file_handler:
-            try:
-                _global_async_file_handler.stop()
-            except Exception:
-                pass
+        # 🔥 개선: stdout/stderr 복원 및 로그 파일 핸들 정리
+        global _log_file_handle, _original_stdout, _original_stderr
         
-        # StreamHandler만 flush (콘솔 출력 보장)
+        # stdout/stderr 복원
+        try:
+            if '_original_stdout' in globals() and _original_stdout:
+                sys.stdout = _original_stdout
+        except Exception:
+            pass
+        
+        try:
+            if '_original_stderr' in globals() and _original_stderr:
+                sys.stderr = _original_stderr
+        except Exception:
+            pass
+        
+        # 로그 파일 핸들러 flush 및 close
+        try:
+            if '_log_file_handle' in globals() and _log_file_handle:
+                try:
+                    _log_file_handle.flush()
+                    # Windows에서 파일 동기화
+                    if sys.platform == 'win32' and hasattr(_log_file_handle, 'fileno'):
+                        try:
+                            os.fsync(_log_file_handle.fileno())
+                        except (OSError, AttributeError):
+                            pass
+                    _log_file_handle.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        # 🔥 개선: finally 블록에서 모든 핸들러 flush (최종 보장)
         flush_all_log_handlers()
 
 

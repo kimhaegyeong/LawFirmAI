@@ -683,11 +683,12 @@ class MLflowTracker:
             return
         
         try:
-            # MLflow 설정
+            # MLflow 설정 (SQLite 백엔드 사용)
             tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
             if not tracking_uri:
-                mlflow_uri = str(project_root / "mlflow" / "mlruns")
-                tracking_uri = f"file:///{mlflow_uri.replace(os.sep, '/')}"
+                mlflow_db_path = project_root / "mlflow" / "mlflow.db"
+                mlflow_db_path.parent.mkdir(parents=True, exist_ok=True)
+                tracking_uri = f"sqlite:///{str(mlflow_db_path).replace(os.sep, '/')}"
             
             mlflow.set_tracking_uri(tracking_uri)
             mlflow.set_experiment(experiment_name)
