@@ -54,6 +54,55 @@ class SearchResultProcessor:
             self.keyword_extractor = KeywordExtractor(use_morphology=True, logger_instance=self.logger)
         except Exception as e:
             self.logger.debug(f"KeywordExtractor initialization failed: {e}, will use fallback matching")
+        
+        # Ko-Legal-SBERT 임베딩 모델 초기화 (Keyword Coverage 개선용)
+        self.embedding_model = None
+        self._keyword_embedding_cache = {}  # 키워드 임베딩 캐시
+        try:
+            SENTENCE_TRANSFORMERS_AVAILABLE = False
+            try:
+                from sentence_transformers import SentenceTransformer
+                SENTENCE_TRANSFORMERS_AVAILABLE = True
+            except ImportError:
+                pass
+            
+            if SENTENCE_TRANSFORMERS_AVAILABLE:
+                # ModelCacheManager 사용 (다른 클래스와 동일한 패턴)
+                try:
+                    from lawfirm_langgraph.core.utils.model_cache_manager import get_model_cache_manager
+                    get_model_cache_manager_func = get_model_cache_manager
+                except ImportError:
+                    try:
+                        from core.utils.model_cache_manager import get_model_cache_manager
+                        get_model_cache_manager_func = get_model_cache_manager
+                    except ImportError:
+                        get_model_cache_manager_func = None
+                
+                embedding_model_name = os.getenv("EMBEDDING_MODEL", "woong0322/ko-legal-sbert-finetuned")
+                embedding_model_name = embedding_model_name.strip().strip('"').strip("'")
+                
+                if get_model_cache_manager_func:
+                    try:
+                        model_cache = get_model_cache_manager_func()
+                        self.embedding_model = model_cache.get_model(
+                            embedding_model_name,
+                            fallback_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                        )
+                        if self.embedding_model:
+                            self.logger.debug(f"✅ [KEYWORD COVERAGE] Loaded embedding model (cached): {embedding_model_name}")
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [KEYWORD COVERAGE] Failed to load via cache manager: {e}")
+                        self.embedding_model = None
+                else:
+                    # 직접 로드 (최후의 수단)
+                    try:
+                        self.embedding_model = SentenceTransformer(embedding_model_name)
+                        self.logger.debug(f"✅ [KEYWORD COVERAGE] Loaded embedding model (direct): {embedding_model_name}")
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [KEYWORD COVERAGE] Failed to load {embedding_model_name}: {e}")
+                        self.embedding_model = None
+        except Exception as e:
+            self.logger.debug(f"⚠️ [KEYWORD COVERAGE] Embedding model initialization failed: {e}, will use exact matching only")
     
     def merge_search_results(
         self,
@@ -272,7 +321,7 @@ class SearchResultProcessor:
         extracted_keywords: List[str],
         results: List[Dict[str, Any]]
     ) -> float:
-        """키워드 커버리지 계산 (강화된 버전)"""
+        """키워드 커버리지 계산 (Ko-Legal-SBERT 기반 강화 버전)"""
         
         if not extracted_keywords:
             import re
@@ -286,6 +335,7 @@ class SearchResultProcessor:
             self.logger.warning("⚠️ [KEYWORD COVERAGE] extracted_keywords가 비어있음")
             return 0.0
         
+        # 1. 직접 매칭 (빠른 필터링)
         covered_keywords = set()
         total_keyword_matches = 0
         
@@ -306,24 +356,164 @@ class SearchResultProcessor:
             
             if doc_matched_keywords:
                 self.logger.debug(
-                    f"🔍 [KEYWORD COVERAGE] 문서 매칭: "
+                    f"🔍 [KEYWORD COVERAGE] 문서 직접 매칭: "
                     f"doc_id={doc.get('id', 'unknown')[:20]}, "
                     f"matched={len(doc_matched_keywords)}/{len(extracted_keywords)}"
                 )
         
-        coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+        # 직접 매칭 커버리지 계산
+        direct_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
         
-        weighted_coverage = min(1.0, coverage * (1 + total_keyword_matches / len(extracted_keywords) / 10))
+        # 2. 의미적 매칭 (Ko-Legal-SBERT) - 직접 매칭이 부족한 경우만 수행
+        semantic_matches = {}
+        if direct_coverage < 0.6 and self.embedding_model:  # 60% 미만일 때만 의미적 매칭
+            semantic_matches = self._semantic_keyword_matching(
+                extracted_keywords, results, covered_keywords, threshold=0.7
+            )
+            if semantic_matches:
+                # 의미적으로 매칭된 키워드 추가 (가중치 0.9 적용)
+                for keyword_lower in semantic_matches.keys():
+                    if keyword_lower not in covered_keywords:
+                        covered_keywords.add(keyword_lower)
+                        total_keyword_matches += 0.9  # 의미적 매칭은 0.9 가중치
+        
+        # 최종 커버리지 계산
+        final_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+        
+        # 가중치 적용 (의미적 매칭 포함)
+        weighted_coverage = min(1.0, final_coverage * (1 + total_keyword_matches / len(extracted_keywords) / 10))
         
         self.logger.info(
             f"📊 [KEYWORD COVERAGE] 계산 완료: "
-            f"coverage={coverage:.3f}, "
+            f"direct={direct_coverage:.3f}, "
+            f"final={final_coverage:.3f}, "
             f"weighted={weighted_coverage:.3f}, "
             f"covered={len(covered_keywords)}/{len(extracted_keywords)}, "
-            f"total_matches={total_keyword_matches}"
+            f"semantic_matches={len(semantic_matches)}, "
+            f"total_matches={total_keyword_matches:.1f}"
         )
         
         return weighted_coverage
+    
+    def _semantic_keyword_matching(
+        self,
+        extracted_keywords: List[str],
+        results: List[Dict[str, Any]],
+        already_covered: set,
+        threshold: float = 0.7
+    ) -> Dict[str, float]:
+        """Ko-Legal-SBERT 기반 의미적 키워드 매칭"""
+        if not self.embedding_model or not extracted_keywords:
+            return {}
+        
+        try:
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            # 매칭되지 않은 키워드만 처리
+            unmatched_keywords = [
+                kw for kw in extracted_keywords 
+                if kw.lower() not in already_covered
+            ]
+            
+            if not unmatched_keywords:
+                return {}
+            
+            # 키워드 임베딩 생성 (캐시 활용)
+            keyword_embeddings = []
+            keyword_list = []
+            for keyword in unmatched_keywords:
+                keyword_lower = keyword.lower()
+                if keyword_lower in self._keyword_embedding_cache:
+                    keyword_embeddings.append(self._keyword_embedding_cache[keyword_lower])
+                    keyword_list.append(keyword_lower)
+                else:
+                    try:
+                        emb = self.embedding_model.encode([keyword], show_progress_bar=False)[0]
+                        self._keyword_embedding_cache[keyword_lower] = emb
+                        keyword_embeddings.append(emb)
+                        keyword_list.append(keyword_lower)
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [SEMANTIC MATCH] Failed to encode keyword '{keyword}': {e}")
+                        continue
+            
+            if not keyword_embeddings:
+                return {}
+            
+            keyword_embeddings = np.array(keyword_embeddings)
+            
+            # 문서 텍스트 배치 처리
+            semantic_matches = {}
+            doc_texts = []
+            doc_indices = []
+            
+            for idx, doc in enumerate(results):
+                content = doc.get("content", "") or doc.get("text", "")
+                if isinstance(content, str) and content:
+                    # 문서를 문장 단위로 분리하여 더 정확한 매칭
+                    import re
+                    sentences = re.split(r'[.!?。！？\n]+', content)
+                    # 각 문장을 최대 512자로 제한
+                    for sentence in sentences[:5]:  # 최대 5개 문장만 처리
+                        if len(sentence.strip()) > 10:
+                            doc_texts.append(sentence[:512])
+                            doc_indices.append((idx, keyword_list))
+            
+            if not doc_texts:
+                return {}
+            
+            # 배치 임베딩 생성
+            try:
+                doc_embeddings = self.embedding_model.encode(
+                    doc_texts, 
+                    show_progress_bar=False, 
+                    batch_size=8
+                )
+                
+                # 배치 유사도 계산
+                for doc_idx, (doc_idx_orig, keywords_for_doc) in enumerate(doc_indices):
+                    if doc_idx >= len(doc_embeddings):
+                        continue
+                    
+                    doc_embedding = doc_embeddings[doc_idx]
+                    
+                    try:
+                        # 코사인 유사도 계산
+                        similarities = cosine_similarity(
+                            [doc_embedding],
+                            keyword_embeddings
+                        )[0]
+                        
+                        for idx, similarity in enumerate(similarities):
+                            if similarity >= threshold:
+                                keyword_lower = keywords_for_doc[idx] if idx < len(keywords_for_doc) else unmatched_keywords[idx].lower()
+                                # 최고 유사도만 저장
+                                if keyword_lower not in semantic_matches:
+                                    semantic_matches[keyword_lower] = similarity
+                                else:
+                                    semantic_matches[keyword_lower] = max(semantic_matches[keyword_lower], similarity)
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [SEMANTIC MATCH] Similarity calculation error: {e}")
+                        continue
+                
+                if semantic_matches:
+                    self.logger.debug(
+                        f"✅ [SEMANTIC MATCH] Found {len(semantic_matches)} semantic matches "
+                        f"(threshold={threshold})"
+                    )
+                
+            except Exception as e:
+                self.logger.debug(f"⚠️ [SEMANTIC MATCH] Batch embedding failed: {e}")
+                return {}
+            
+            return semantic_matches
+            
+        except ImportError:
+            self.logger.debug("⚠️ [SEMANTIC MATCH] sklearn not available, skipping semantic matching")
+            return {}
+        except Exception as e:
+            self.logger.debug(f"⚠️ [SEMANTIC MATCH] Semantic matching failed: {e}")
+            return {}
     
     def calculate_keyword_match_score(
         self,
@@ -491,9 +681,11 @@ class SearchResultProcessor:
         
         # keyword 점수가 낮은 경우 상세 로깅
         doc_id = document.get("id") or document.get("chunk_id") or document.get("doc_id") or "unknown"
+        # 🔥 개선: doc_id 타입 안전 처리 (int일 수 있음)
+        doc_id_str = str(doc_id)[:50] if doc_id and doc_id != "unknown" else "unknown"
         if keyword_match_score < 0.3 and len(keyword_weights) > 0:
             self.logger.debug(
-                f"🔍 [KEYWORD MATCH LOW SCORE] doc_id={doc_id[:50]}, "
+                f"🔍 [KEYWORD MATCH LOW SCORE] doc_id={doc_id_str}, "
                 f"keyword_match_score={keyword_match_score:.3f}, "
                 f"weighted_keyword_score={weighted_keyword_score:.3f}, "
                 f"keyword_coverage={keyword_coverage:.3f}, "

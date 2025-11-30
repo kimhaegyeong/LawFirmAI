@@ -57,23 +57,28 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-# FAISS import (optional)
-try:
-    import faiss
-    FAISS_AVAILABLE = True
-except ImportError:
+# FAISS import (optional, only when VECTOR_SEARCH_METHOD=faiss)
+VECTOR_SEARCH_METHOD = os.getenv("VECTOR_SEARCH_METHOD", "pgvector").lower()
+if VECTOR_SEARCH_METHOD == "faiss":
+    try:
+        import faiss
+        FAISS_AVAILABLE = True
+    except ImportError:
+        FAISS_AVAILABLE = False
+        logger = logging.getLogger(__name__)
+        logger.warning("FAISS not available. Install with: pip install faiss-cpu")
+else:
     FAISS_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("FAISS not available. Install with: pip install faiss-cpu")
 
 # ModelCacheManager import
 try:
-    from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager
+    from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager, _filter_model_kwargs
 except ImportError:
     try:
-        from core.shared.utils.model_cache_manager import get_model_cache_manager
+        from core.shared.utils.model_cache_manager import get_model_cache_manager, _filter_model_kwargs
     except ImportError:
         get_model_cache_manager = None
+        _filter_model_kwargs = None
 
 # Score normalization utilities
 try:
@@ -179,20 +184,22 @@ except ImportError:
                             raise ValueError(f"Failed to load model {model_name} via cache manager")
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to load model via cache manager: {e}, falling back to direct load")
-                        # 폴백: 직접 로드
+                        # 폴백: 직접 로드 (파라미터 필터링 적용)
                         logger.debug(f"Loading SentenceTransformer model {model_name} on CPU first...")
+                        filtered_kwargs = _filter_model_kwargs(model_kwargs) if _filter_model_kwargs else {}
                         self.model = SentenceTransformer(
                             model_name, 
                             device="cpu",
-                            model_kwargs=model_kwargs
+                            model_kwargs=filtered_kwargs
                         )
                 else:
-                    # ModelCacheManager가 없으면 직접 로드
+                    # ModelCacheManager가 없으면 직접 로드 (파라미터 필터링 적용)
                     logger.debug(f"Loading SentenceTransformer model {model_name} on CPU first...")
+                    filtered_kwargs = _filter_model_kwargs(model_kwargs) if _filter_model_kwargs else {}
                     self.model = SentenceTransformer(
                         model_name, 
                         device="cpu",
-                        model_kwargs=model_kwargs
+                        model_kwargs=filtered_kwargs
                     )
                 
                 try:
@@ -703,18 +710,20 @@ except ImportError:
                                     raise ValueError(f"Failed to load fallback model {fallback_model} via cache manager")
                             except Exception as e:
                                 logger.warning(f"⚠️ Failed to load fallback model via cache manager: {e}, falling back to direct load")
-                                # 폴백: 직접 로드
+                                # 폴백: 직접 로드 (파라미터 필터링 적용)
+                                filtered_fallback_kwargs = _filter_model_kwargs(fallback_model_kwargs) if _filter_model_kwargs else {}
                                 self.model = SentenceTransformer(
                                     fallback_model, 
                                     device="cpu",
-                                    model_kwargs=fallback_model_kwargs
+                                    model_kwargs=filtered_fallback_kwargs
                                 )
                         else:
-                            # ModelCacheManager가 없으면 직접 로드
+                            # ModelCacheManager가 없으면 직접 로드 (파라미터 필터링 적용)
+                            filtered_fallback_kwargs = _filter_model_kwargs(fallback_model_kwargs) if _filter_model_kwargs else {}
                             self.model = SentenceTransformer(
                                 fallback_model, 
                                 device="cpu",
-                                model_kwargs=fallback_model_kwargs
+                                model_kwargs=filtered_fallback_kwargs
                             )
                         
                         # 환경 변수 복원
@@ -1015,11 +1024,20 @@ class SemanticSearchEngineV2:
             try:
                 project_root = Path(__file__).parent.parent.parent.parent.parent
             except Exception:
-                project_root = Path(".")
-            possible_paths = [
-                project_root / "data" / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
-                Path("data") / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
-            ]
+                # except 블록 안에서도 Path를 사용할 수 있도록 별도 import
+                from pathlib import Path as PathClass
+                project_root = PathClass(".")
+                # except 블록 안에서 PathClass를 사용하도록 수정
+                possible_paths = [
+                    project_root / "data" / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                    PathClass("data") / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                ]
+            else:
+                # try 블록이 성공한 경우 Path 사용 가능
+                possible_paths = [
+                    project_root / "data" / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                    Path("data") / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                ]
             legacy_index_path = None
         
         # 새로 빌드된 인덱스를 우선 사용
@@ -1062,7 +1080,10 @@ class SemanticSearchEngineV2:
             vector_search_method = 'pgvector'
         
         self.vector_search_method = vector_search_method
-        self.logger.info(f"🔍 Vector search method: {self.vector_search_method} (pgvector only)")
+        # 벡터 검색 방법 로그 (한 번만 출력, 중복 방지)
+        if not hasattr(self, '_vector_search_logged'):
+            self.logger.info(f"🔍 Vector search method: {self.vector_search_method} (pgvector only)")
+            self._vector_search_logged = True
         
         # pgvector 어댑터 초기화 (pgvector만 사용)
         self.pgvector_adapter = None
@@ -1075,7 +1096,8 @@ class SemanticSearchEngineV2:
             try:
                 # 연결 풀에서 연결 가져오기 (나중에 실제 검색 시 사용)
                 # 여기서는 어댑터만 초기화하지 않고, 검색 시마다 생성
-                self.logger.info("✅ pgvector will be used for vector search (pgvector only mode)")
+                # pgvector 사용 로그는 이미 위에서 출력되었으므로 중복 방지
+                self.logger.debug("✅ pgvector will be used for vector search (pgvector only mode)")
             except Exception as e:
                 raise RuntimeError(
                     f"❌ Failed to initialize pgvector adapter: {e}. "
@@ -1106,18 +1128,33 @@ class SemanticSearchEngineV2:
         self._metadata_cache_max_size = 1000  # 최대 캐시 크기
         self._metadata_cache_ttl = 3600  # TTL: 1시간 (초 단위)
         self._metadata_cache_hits = 0
-        
-        # pgvector 연결 풀 워밍업 (환경 변수로 제어 가능)
-        warmup_enabled = os.getenv("PGVECTOR_WARMUP", "true").lower() == "true"
-        if warmup_enabled:
-            self._warmup_pgvector_connections()  # 캐시 히트 수
         self._metadata_cache_misses = 0  # 캐시 미스 수
         self._metadata_cache_last_cleanup = time.time()  # 마지막 정리 시간
         self._metadata_cache_cleanup_interval = 300  # 정리 간격: 5분
         
-        # MLflow 매니저 초기화
+        # pgvector 연결 풀 워밍업 (환경 변수로 제어 가능)
+        warmup_enabled = os.getenv("PGVECTOR_WARMUP", "true").lower() == "true"
+        if warmup_enabled:
+            self._warmup_pgvector_connections()
+        
+        # 메타데이터 캐시 워밍업 (환경 변수로 제어 가능)
+        metadata_warmup_enabled = os.getenv("METADATA_CACHE_WARMUP", "true").lower() == "true"
+        if metadata_warmup_enabled:
+            try:
+                self._warmup_metadata_cache()
+            except Exception as e:
+                self.logger.debug(f"Metadata cache warmup failed (non-critical): {e}")
+        
+        # MLflow 매니저 지연 로딩 (부팅 속도 개선)
         self.mlflow_manager = None
-        if self.use_mlflow_index:
+        self._mlflow_initialized = False
+        self._mlflow_config = {
+            'use_mlflow_index': self.use_mlflow_index,
+            'mlflow_run_id': self.mlflow_run_id
+        }
+        
+        # MLflow 초기화는 실제 사용 시점에 수행 (_get_mlflow_manager 메서드에서)
+        if False:  # 지연 로딩: 실제 사용 시점에 초기화
             try:
                 import sys
                 import os
@@ -1184,7 +1221,22 @@ class SemanticSearchEngineV2:
                     raise ImportError(f"Could not import mlflow_manager from any of the paths: {[str(p) for p in possible_paths]}")
                 from core.utils.config import get_config
                 config = get_config()
-                tracking_uri = config.mlflow_tracking_uri if hasattr(config, 'mlflow_tracking_uri') else None
+                
+                # 🔥 개선: MLflow 백엔드 전환 (SQLite 기본값 사용)
+                # 🔥 개선: Path를 try 블록 밖에서 import하여 except 블록에서도 사용 가능하도록 수정
+                from pathlib import Path as PathModule
+                tracking_uri = config.mlflow_tracking_uri if hasattr(config, 'mlflow_tracking_uri') and config.mlflow_tracking_uri else None
+                if not tracking_uri:
+                    # 환경 변수 확인
+                    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+                    if not tracking_uri:
+                        # SQLite 백엔드 사용 (FutureWarning 해결)
+                        project_root = PathModule(__file__).resolve().parent.parent.parent.parent.parent
+                        default_db_path = project_root / "mlflow" / "mlflow.db"
+                        default_db_path.parent.mkdir(parents=True, exist_ok=True)
+                        tracking_uri = f"sqlite:///{str(default_db_path).replace(os.sep, '/')}"
+                        self.logger.info(f"✅ [MLFLOW] Using SQLite backend: {tracking_uri}")
+                
                 experiment_name = config.mlflow_experiment_name if hasattr(config, 'mlflow_experiment_name') else "faiss_index_versions"
                 self.mlflow_manager = MLflowFAISSManager(
                     experiment_name=experiment_name,
@@ -1194,12 +1246,18 @@ class SemanticSearchEngineV2:
                 self.logger.warning(f"MLflowFAISSManager not available: {e}")
                 self.use_mlflow_index = False
             except Exception as e:
+                # 🔥 개선: except 블록에서도 Path를 안전하게 사용
+                try:
+                    from pathlib import Path as PathModule
+                except ImportError:
+                    PathModule = None
                 self.logger.warning(f"Failed to initialize MLflow manager: {e}")
                 self.use_mlflow_index = False
         
         # ✅ 방안 1: MLflow manager 초기화 후 모델 정보 확인 (MLflow 인덱스 사용 시)
         # MLflow 인덱스를 사용할 때는 항상 MLflow의 모델 정보를 최우선 사용
-        if self.use_mlflow_index and self.mlflow_manager:
+        # 지연 로딩: 모델 로딩 시점에 MLflow 초기화 및 모델 정보 확인
+        if False:  # 지연 로딩: _get_mlflow_manager()에서 처리
             try:
                 run_id = self.mlflow_run_id
                 if not run_id:
@@ -1258,19 +1316,24 @@ class SemanticSearchEngineV2:
         self.performance_monitor = None
         self.enable_performance_monitoring = False
         try:
-            scripts_utils_path = Path(__file__).parent.parent.parent / "scripts" / "utils"
+            # Path는 이미 파일 상단에서 import되었으므로 사용 가능
+            # 하지만 except 블록에서 Path를 재정의할 수 있으므로, 로컬 변수로 명시적으로 사용
+            from pathlib import Path as PathModule
+            scripts_utils_path = PathModule(__file__).parent.parent.parent / "scripts" / "utils"
             if scripts_utils_path.exists():
                 sys.path.insert(0, str(scripts_utils_path))
             from version_performance_monitor import VersionPerformanceMonitor
             # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
             if db_path:
-                performance_log_path = Path(db_path).parent / "performance_logs"
+                performance_log_path = PathModule(db_path).parent / "performance_logs"
             else:
                 # 프로젝트 루트 기준 경로 사용
                 try:
-                    project_root = Path(__file__).parent.parent.parent.parent.parent
+                    project_root = PathModule(__file__).parent.parent.parent.parent.parent
                 except Exception:
-                    project_root = Path(".")
+                    # except 블록 안에서도 PathModule을 사용할 수 있도록 별도 import
+                    from pathlib import Path as PathClass
+                    project_root = PathClass(".")
                 performance_log_path = project_root / "data" / "performance_logs"
             self.performance_monitor = VersionPerformanceMonitor(str(performance_log_path))
             self.enable_performance_monitoring = True
@@ -1336,6 +1399,107 @@ class SemanticSearchEngineV2:
                 # 인덱스는 나중에 빌드되거나 로드될 수 있으므로 에러를 발생시키지 않음
                 self.logger.info("ℹ️  MLflow 인덱스 비활성화됨 (인덱스 빌드 모드 또는 다른 용도)")
                 self.index = None
+    
+    def _get_mlflow_manager(self):
+        """MLflow Manager 지연 로딩 (부팅 속도 개선)"""
+        if not self._mlflow_initialized:
+            if self._mlflow_config.get('use_mlflow_index', False):
+                try:
+                    import sys
+                    import os
+                    # scripts/rag 경로 추가 (프로젝트 루트 기준)
+                    current_file = Path(__file__).resolve()
+                    project_root_candidates = []
+                    
+                    # 방법 1: lawfirm_langgraph 디렉토리의 부모 찾기
+                    for parent in [current_file] + list(current_file.parents):
+                        if parent.name == "lawfirm_langgraph":
+                            project_root_candidates.append(parent.parent)
+                            break
+                    
+                    # 방법 2: scripts 디렉토리의 부모 찾기
+                    for parent in [current_file] + list(current_file.parents):
+                        if parent.name == "scripts" and (parent / "rag" / "mlflow_manager.py").exists():
+                            project_root_candidates.append(parent.parent)
+                            break
+                    
+                    # 방법 3: 상대 경로로 계산
+                    project_root_candidates.append(current_file.parent.parent.parent.parent.parent)
+                    
+                    # 방법 4: 현재 작업 디렉토리 기준
+                    cwd = Path.cwd()
+                    if (cwd / "scripts" / "rag" / "mlflow_manager.py").exists():
+                        project_root_candidates.append(cwd)
+                    if (cwd.parent / "scripts" / "rag" / "mlflow_manager.py").exists():
+                        project_root_candidates.append(cwd.parent)
+                    
+                    # 가능한 경로 생성
+                    possible_paths = []
+                    for root in project_root_candidates:
+                        scripts_rag_path = root / "scripts" / "rag"
+                        if scripts_rag_path.exists() and (scripts_rag_path / "mlflow_manager.py").exists():
+                            possible_paths.append(scripts_rag_path)
+                    
+                    # 중복 제거
+                    seen = set()
+                    unique_paths = []
+                    for path in possible_paths:
+                        path_str = str(path)
+                        if path_str not in seen:
+                            seen.add(path_str)
+                            unique_paths.append(path)
+                    possible_paths = unique_paths
+                    
+                    mlflow_manager_imported = False
+                    for scripts_rag_path in possible_paths:
+                        if scripts_rag_path.exists() and (scripts_rag_path / "mlflow_manager.py").exists():
+                            if str(scripts_rag_path) not in sys.path:
+                                sys.path.insert(0, str(scripts_rag_path))
+                            try:
+                                from mlflow_manager import MLflowFAISSManager
+                                mlflow_manager_imported = True
+                                self.logger.info(f"✅ Successfully imported MLflowFAISSManager from {scripts_rag_path} (lazy loading)")
+                                break
+                            except ImportError as import_err:
+                                self.logger.debug(f"Failed to import from {scripts_rag_path}: {import_err}")
+                                continue
+                    
+                    if not mlflow_manager_imported:
+                        raise ImportError(f"Could not import mlflow_manager from any of the paths: {[str(p) for p in possible_paths]}")
+                    
+                    from core.utils.config import get_config
+                    config = get_config()
+                    
+                    from pathlib import Path as PathModule
+                    tracking_uri = config.mlflow_tracking_uri if hasattr(config, 'mlflow_tracking_uri') and config.mlflow_tracking_uri else None
+                    if not tracking_uri:
+                        tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+                        if not tracking_uri:
+                            project_root = PathModule(__file__).resolve().parent.parent.parent.parent.parent
+                            default_db_path = project_root / "mlflow" / "mlflow.db"
+                            default_db_path.parent.mkdir(parents=True, exist_ok=True)
+                            tracking_uri = f"sqlite:///{str(default_db_path).replace(os.sep, '/')}"
+                            self.logger.info(f"✅ [MLFLOW] Using SQLite backend: {tracking_uri}")
+                    
+                    experiment_name = config.mlflow_experiment_name if hasattr(config, 'mlflow_experiment_name') else "faiss_index_versions"
+                    self.mlflow_manager = MLflowFAISSManager(
+                        experiment_name=experiment_name,
+                        tracking_uri=tracking_uri
+                    )
+                    self._mlflow_initialized = True
+                    self.logger.debug("✅ MLflow Manager initialized (lazy loading)")
+                except ImportError as e:
+                    self.logger.warning(f"MLflowFAISSManager not available: {e}")
+                    self.use_mlflow_index = False
+                    self._mlflow_initialized = True
+                except Exception as e:
+                    self.logger.warning(f"Failed to initialize MLflow manager (lazy loading): {e}")
+                    self.use_mlflow_index = False
+                    self._mlflow_initialized = True
+            else:
+                self._mlflow_initialized = True
+        
+        return self.mlflow_manager
     
     def _initialize_embedder(self, model_name: str, retry_count: int = 0, max_retries: int = 2) -> bool:
         """
@@ -1758,11 +1922,7 @@ class SemanticSearchEngineV2:
             # data_type에 따른 활성 버전의 모델명 조회
             required_model = self._get_model_name_for_data_type(data_type=data_type)
             if not required_model:
-                # 모델명을 찾을 수 없으면 현재 모델 유지
-                self.logger.debug(
-                    f"⚠️ [MODEL] Could not determine required model for data_type={data_type}, "
-                    f"using current model: {self.model_name}"
-                )
+                # 모델명을 찾을 수 없으면 현재 모델 유지 (메시지 출력하지 않음)
                 return True
             
             # 현재 모델과 필요한 모델이 일치하는지 확인
@@ -1997,11 +2157,26 @@ class SemanticSearchEngineV2:
             data_type: 'statutes' 또는 'precedents' (None이면 첫 번째 활성 버전)
         
         Returns:
-            모델명 또는 None
+            모델명 또는 None (에러 발생 시 현재 모델 반환)
         """
+        # data_type 정규화 (오타 수정)
+        if data_type:
+            data_type = data_type.strip().lower()
+            if data_type == 'precedentss':
+                data_type = 'precedents'
+            elif data_type == 'statutess':
+                data_type = 'statutes'
+        
         try:
             active_version_id = self._get_active_embedding_version_id(data_type=data_type)
             if not active_version_id:
+                # 활성 버전을 찾을 수 없으면 현재 모델 반환 (fallback)
+                if self.model_name:
+                    self.logger.debug(
+                        f"📋 [MODEL] No active version found for data_type={data_type}, "
+                        f"using current model: {self.model_name}"
+                    )
+                    return self.model_name
                 return None
             
             with self._get_connection_context() as conn:
@@ -2021,9 +2196,23 @@ class SemanticSearchEngineV2:
                             f"uses model: {model_name}"
                         )
                         return model_name
+            # 모델명을 찾을 수 없으면 현재 모델 반환 (fallback)
+            if self.model_name:
+                self.logger.debug(
+                    f"📋 [MODEL] Model name not found in version (ID={active_version_id}), "
+                    f"using current model: {self.model_name}"
+                )
+                return self.model_name
             return None
         except Exception as e:
-            self.logger.warning(f"Failed to get model name for data_type={data_type}: {e}")
+            # 연결 풀 타임아웃 등 에러 발생 시 현재 모델 반환 (fallback)
+            if self.model_name:
+                self.logger.debug(
+                    f"📋 [MODEL] Error getting model name for data_type={data_type} (fallback to current model): {e}"
+                )
+                return self.model_name
+            # 현재 모델도 없으면 에러만 로깅하고 None 반환
+            self.logger.debug(f"Failed to get model name for data_type={data_type}: {e}")
             return None
 
     def _ensure_correct_embedding_model(self, data_type: Optional[str] = None) -> bool:
@@ -2040,11 +2229,7 @@ class SemanticSearchEngineV2:
             # data_type에 따른 활성 버전의 모델명 조회
             required_model = self._get_model_name_for_data_type(data_type=data_type)
             if not required_model:
-                # 모델명을 찾을 수 없으면 현재 모델 유지
-                self.logger.debug(
-                    f"⚠️ [MODEL] Could not determine required model for data_type={data_type}, "
-                    f"using current model: {self.model_name}"
-                )
+                # 모델명을 찾을 수 없으면 현재 모델 유지 (메시지 출력하지 않음)
                 return True
             
             # 현재 모델과 필요한 모델이 일치하는지 확인
@@ -2489,6 +2674,58 @@ class SemanticSearchEngineV2:
         normalized = ' '.join(query.lower().split())
         return normalized
     
+    def _adjust_threshold_dynamically(
+        self,
+        query: str,
+        source_types: Optional[List[str]] = None,
+        base_threshold: float = 0.4
+    ) -> float:
+        """
+        쿼리 특성에 따라 동적으로 임계값 조정
+        
+        Args:
+            query: 검색 쿼리
+            source_types: 소스 타입 목록
+            base_threshold: 기본 임계값
+        
+        Returns:
+            조정된 임계값
+        """
+        try:
+            adjusted_threshold = base_threshold
+            
+            # 1. 쿼리 길이 기반 조정
+            query_length = len(query)
+            if query_length < 10:
+                # 짧은 쿼리는 낮은 임계값 (다양한 결과 필요)
+                adjusted_threshold = max(0.2, adjusted_threshold - 0.05)
+                self.logger.debug(f"📊 [THRESHOLD] Short query ({query_length} chars), lowering threshold")
+            elif query_length > 100:
+                # 긴 쿼리는 높은 임계값 (정확한 결과 필요)
+                adjusted_threshold = min(0.7, adjusted_threshold + 0.05)
+                self.logger.debug(f"📊 [THRESHOLD] Long query ({query_length} chars), raising threshold")
+            
+            # 2. 소스 타입 기반 조정
+            if source_types:
+                # 법령 조문은 조금 높은 임계값
+                if 'statute_article' in source_types and len(source_types) == 1:
+                    adjusted_threshold = max(0.35, min(0.6, adjusted_threshold + 0.05))
+                    self.logger.debug(f"📊 [THRESHOLD] Statute article search, raising threshold")
+                # 판례는 기본 임계값 유지
+                elif 'precedent_content' in source_types:
+                    # 판례는 기본값 유지하거나 약간 낮춤
+                    adjusted_threshold = max(0.3, adjusted_threshold - 0.02)
+                    self.logger.debug(f"📊 [THRESHOLD] Precedent search, slightly lowering threshold")
+            
+            # 3. 임계값 범위 제한
+            adjusted_threshold = max(0.2, min(0.8, adjusted_threshold))
+            
+            return adjusted_threshold
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ [THRESHOLD] Error adjusting threshold dynamically: {e}, using base threshold")
+            return base_threshold
+    
     def _encode_query(self, query: str, use_cache: bool = True, model_name: Optional[str] = None, version_id: Optional[int] = None) -> Optional[np.ndarray]:
         """쿼리 인코딩 (캐시 사용, 재정규화 포함)
         
@@ -2918,7 +3155,7 @@ class SemanticSearchEngineV2:
                query: str,
                k: int = 10,
                source_types: Optional[List[str]] = None,
-               similarity_threshold: float = 0.5,
+               similarity_threshold: float = 0.4,
                min_results: int = 5,
                disable_retry: bool = False,
                min_ml_confidence: Optional[float] = None,
@@ -3296,6 +3533,28 @@ class SemanticSearchEngineV2:
                             f"⚠️ [RETRY] Only {len(results)} results found after {max_retries} attempts "
                             f"(min_results={min_results}, search_k_multiplier={search_k_multiplier:.1f})"
                         )
+                        # 🔥 개선: 결과가 부족하면 임계값을 더 낮춰서 재검색 시도
+                        if len(results) == 0:
+                            self.logger.warning(
+                                f"⚠️ [FALLBACK] No results found, trying with lower threshold "
+                                f"(current: {similarity_threshold:.3f} → 0.1)"
+                            )
+                            # 임계값을 0.1로 낮춰서 최소한의 결과라도 보장
+                            fallback_results = self._search_with_threshold(
+                                query, k, source_types, 0.1,  # 임계값을 0.1로 낮춤
+                                min_ml_confidence=min_ml_confidence,
+                                min_quality_score=min_quality_score,
+                                filter_by_confidence=False,  # 신뢰도 필터도 비활성화
+                                chunk_size_category=chunk_size_category,
+                                deduplicate_by_group=deduplicate_by_group,
+                                embedding_version_id=embedding_version_id,
+                                search_k_multiplier=search_k_multiplier
+                            )
+                            if len(fallback_results) > 0:
+                                self.logger.info(
+                                    f"✅ [FALLBACK] Found {len(fallback_results)} results with lowered threshold"
+                                )
+                                results = fallback_results[:min_results]  # 최소 결과 수만큼만 반환
                     
                     # 마지막 시도 성능 모니터링 로깅
                     elapsed_time = time.time() - start_time
@@ -3685,9 +3944,18 @@ class SemanticSearchEngineV2:
                 if not config.get('enabled', True):
                     continue
                 
-                # source_types 필터링
-                if source_types and source_type not in source_types:
-                    continue
+                # source_types 필터링 강화
+                if source_types:
+                    # 실제 source_type과 매핑된 source_type 모두 확인
+                    mapped_source_type = config.get('source_type', source_type)
+                    if source_type not in source_types and mapped_source_type not in source_types:
+                        # 레거시 매핑 확인 (case_paragraph -> precedent_content)
+                        if source_type == 'case_paragraph' and 'precedent_content' in source_types:
+                            pass  # 허용
+                        elif mapped_source_type == 'precedent_content' and 'precedent_content' in source_types:
+                            pass  # 허용
+                        else:
+                            continue
                 
                 # 테이블 존재 여부 확인
                 table_name = config['table_name']
@@ -3951,7 +4219,9 @@ class SemanticSearchEngineV2:
                                     
                                     if len(available_versions) == 1:
                                         # 단일 버전인 경우
-                                        filters[version_column] = available_versions[0]
+                                        # 🔥 개선: 단일 값만 전달 (리스트가 아닌 정수 값)
+                                        version_val = available_versions[0]
+                                        filters[version_column] = int(version_val) if isinstance(version_val, (int, float)) else version_val
                                         # 해당 버전의 데이터 수 확인
                                         cursor.execute(f"""
                                             SELECT COUNT(*) FROM {table_name}
@@ -3964,8 +4234,15 @@ class SemanticSearchEngineV2:
                                             f"(version={available_versions[0]}, count={version_count})"
                                         )
                                     else:
-                                        # 여러 버전인 경우 IN 절 사용
-                                        filters[version_column] = available_versions
+                                        # 여러 버전인 경우 첫 번째 버전만 사용 (타입 오류 방지)
+                                        # 🔥 개선: 단일 값만 전달 (리스트가 아닌 정수 값)
+                                        if len(available_versions) > 0:
+                                            version_val = available_versions[0]
+                                            filters[version_column] = int(version_val) if isinstance(version_val, (int, float)) else version_val
+                                        else:
+                                            filters[version_column] = None
+                                        if filters[version_column] is None:
+                                            continue
                                         # 각 버전별 데이터 수 확인
                                         version_counts = {}
                                         for version in available_versions:
@@ -4014,7 +4291,8 @@ class SemanticSearchEngineV2:
                                         if fallback_version is None:
                                             fallback_version = max(all_available_versions)
                                         
-                                        filters[version_column] = fallback_version
+                                        # 🔥 개선: 단일 값만 전달 (리스트가 아닌 정수 값)
+                                        filters[version_column] = int(fallback_version) if isinstance(fallback_version, (int, float)) else fallback_version
                                         
                                         # 🔥 개선: 폴백된 버전을 table_version_map에 기록
                                         if source_type not in table_version_map:
@@ -4056,7 +4334,12 @@ class SemanticSearchEngineV2:
                                     version_data_count = 0
                                 
                                 if version_data_count > 0:
-                                    filters[version_column] = embedding_version_id
+                                    # 🔥 개선: 단일 값만 전달 (리스트가 아닌 정수 값)
+                                    # psycopg2가 리스트를 배열로 자동 변환하는 문제 방지
+                                    if isinstance(embedding_version_id, (list, tuple)):
+                                        filters[version_column] = int(embedding_version_id[0]) if len(embedding_version_id) > 0 else None
+                                    else:
+                                        filters[version_column] = int(embedding_version_id) if isinstance(embedding_version_id, (int, float)) else embedding_version_id
                                     # 🔥 개선: 실제 사용된 버전을 table_version_map에 기록
                                     if source_type not in table_version_map:
                                         table_version_map[source_type] = []
@@ -4095,7 +4378,8 @@ class SemanticSearchEngineV2:
                                         if fallback_version is None:
                                             fallback_version = max(all_available_versions)
                                         
-                                        filters[version_column] = fallback_version
+                                        # 🔥 개선: 단일 값만 전달 (리스트가 아닌 정수 값)
+                                        filters[version_column] = int(fallback_version) if isinstance(fallback_version, (int, float)) else fallback_version
                                         
                                         # 🔥 개선: 폴백된 버전을 table_version_map에 기록
                                         if source_type not in table_version_map:
@@ -4402,6 +4686,19 @@ class SemanticSearchEngineV2:
         
         try:
             normalized_query = self._normalize_query(query)
+            
+            # 🔥 개선: 동적 임계값 조정 (쿼리 특성 기반)
+            adjusted_threshold = self._adjust_threshold_dynamically(
+                query=normalized_query,
+                source_types=source_types,
+                base_threshold=similarity_threshold
+            )
+            if adjusted_threshold != similarity_threshold:
+                self.logger.debug(
+                    f"📊 [DYNAMIC THRESHOLD] Adjusted threshold: {similarity_threshold:.3f} → {adjusted_threshold:.3f} "
+                    f"(query_length={len(normalized_query)}, source_types={source_types})"
+                )
+                similarity_threshold = adjusted_threshold
             
             # 벡터 인덱스 검색 질의 로깅
             search_query_msg = (
@@ -5119,7 +5416,7 @@ class SemanticSearchEngineV2:
                                     "SELECT precedent_content_id, chunk_index, chunk_content, metadata, embedding_version FROM precedent_chunks WHERE id = %s",
                                     (chunk_id,)
                                 )
-                            row = cursor.fetchone()
+                                row = cursor.fetchone()
                             if row:
                                 # PostgreSQL의 경우 dict-like row 또는 tuple 반환
                                 if hasattr(row, 'keys'):
@@ -5219,53 +5516,53 @@ class SemanticSearchEngineV2:
                                 "SELECT precedent_content_id, chunk_index, chunk_content, metadata, embedding_version FROM precedent_chunks WHERE id = %s",
                                 (chunk_id,)
                             )
-                        row = cursor.fetchone()
-                        if row:
-                            # PostgreSQL의 경우 dict-like row 또는 tuple 반환
-                            if hasattr(row, 'keys'):
-                                version_id = row.get('embedding_version')
-                                metadata_val = row.get('metadata')
-                                precedent_content_id = row.get('precedent_content_id')
-                                chunk_index = row.get('chunk_index')
-                                chunk_content = row.get('chunk_content')
-                            else:
-                                version_id = row[4] if len(row) > 4 else None
-                                metadata_val = row[3] if len(row) > 3 else None
-                                precedent_content_id = row[0] if len(row) > 0 else None
-                                chunk_index = row[1] if len(row) > 1 else None
-                                chunk_content = row[2] if len(row) > 2 else None
-                            
-                            if version_id is None:
-                                active_version_id = self._get_active_embedding_version_id()
-                                if active_version_id:
-                                    version_id = active_version_id
-                            
-                            # precedent_chunks.metadata 컬럼에서 메타데이터 로드 (이미 JSONB)
-                            chunk_meta_json = None
-                            if metadata_val:
-                                if isinstance(metadata_val, dict):
-                                    chunk_meta_json = metadata_val
+                            row = cursor.fetchone()
+                            if row:
+                                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                if hasattr(row, 'keys'):
+                                    version_id = row.get('embedding_version')
+                                    metadata_val = row.get('metadata')
+                                    precedent_content_id = row.get('precedent_content_id')
+                                    chunk_index = row.get('chunk_index')
+                                    chunk_content = row.get('chunk_content')
                                 else:
-                                    try:
-                                        import json
-                                        chunk_meta_json = json.loads(metadata_val) if isinstance(metadata_val, str) else metadata_val
-                                    except Exception as e:
-                                        self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
-                            
-                            chunk_metadata = {
-                                'source_type': 'precedent_content',
-                                'source_id': precedent_content_id,
-                                'text': chunk_content if chunk_content else '',
-                                'chunk_index': chunk_index,
-                                'embedding_version_id': version_id
-                            }
-                            
-                            # precedent_chunks.metadata의 메타데이터를 chunk_metadata에 병합
-                            if chunk_meta_json:
-                                chunk_metadata.update(chunk_meta_json)
-                            
-                            # self._chunk_metadata에도 저장
-                            self._chunk_metadata[chunk_id] = chunk_metadata
+                                    version_id = row[4] if len(row) > 4 else None
+                                    metadata_val = row[3] if len(row) > 3 else None
+                                    precedent_content_id = row[0] if len(row) > 0 else None
+                                    chunk_index = row[1] if len(row) > 1 else None
+                                    chunk_content = row[2] if len(row) > 2 else None
+                                
+                                if version_id is None:
+                                    active_version_id = self._get_active_embedding_version_id()
+                                    if active_version_id:
+                                        version_id = active_version_id
+                                
+                                # precedent_chunks.metadata 컬럼에서 메타데이터 로드 (이미 JSONB)
+                                chunk_meta_json = None
+                                if metadata_val:
+                                    if isinstance(metadata_val, dict):
+                                        chunk_meta_json = metadata_val
+                                    else:
+                                        try:
+                                            import json
+                                            chunk_meta_json = json.loads(metadata_val) if isinstance(metadata_val, str) else metadata_val
+                                        except Exception as e:
+                                            self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
+                                
+                                chunk_metadata = {
+                                    'source_type': 'precedent_content',
+                                    'source_id': precedent_content_id,
+                                    'text': chunk_content if chunk_content else '',
+                                    'chunk_index': chunk_index,
+                                    'embedding_version_id': version_id
+                                }
+                                
+                                # precedent_chunks.metadata의 메타데이터를 chunk_metadata에 병합
+                                if chunk_meta_json:
+                                    chunk_metadata.update(chunk_meta_json)
+                                
+                                # self._chunk_metadata에도 저장
+                                self._chunk_metadata[chunk_id] = chunk_metadata
                     except Exception as e:
                         self.logger.debug(f"Failed to load chunk_metadata for chunk_id={chunk_id}: {e}")
                 
@@ -5937,11 +6234,12 @@ class SemanticSearchEngineV2:
             else:
                 self.logger.warning(f"⚠️  No results found for query: {query[:50]}")
                 
-                # Fallback: threshold를 낮춰서 재시도
-                if similarity_threshold > 0.3:
-                    self.logger.info(f"🔄 Retrying with lower threshold: {similarity_threshold:.3f} → 0.30")
+                # Fallback: threshold를 낮춰서 재시도 (더 낮은 threshold로 시작)
+                if similarity_threshold > 0.25:
+                    new_threshold = max(0.25, similarity_threshold - 0.15)
+                    self.logger.info(f"🔄 Retrying with lower threshold: {similarity_threshold:.3f} → {new_threshold:.3f}")
                     fallback_results = self._search_with_threshold(
-                        query, k, source_types, 0.30,
+                        query, k, source_types, new_threshold,
                         min_ml_confidence, min_quality_score, filter_by_confidence,
                         chunk_size_category, deduplicate_by_group, embedding_version_id
                     )
@@ -7527,15 +7825,14 @@ class SemanticSearchEngineV2:
             try:
                 # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
                 if self.db_path and Path(self.db_path).exists():
-                    conn = self._get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) as count FROM embeddings")
-                    row = cursor.fetchone()
-                    emb_count = row['count'] if row else 0
-                    cursor.execute("SELECT COUNT(*) as count FROM precedent_chunks")
-                    row = cursor.fetchone()
-                    chunk_count = row['count'] if row else 0
-                    self._safe_close_connection(conn)
+                    with self._get_connection_context() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) as count FROM embeddings")
+                        row = cursor.fetchone()
+                        emb_count = row['count'] if row else 0
+                        cursor.execute("SELECT COUNT(*) as count FROM precedent_chunks")
+                        row = cursor.fetchone()
+                        chunk_count = row['count'] if row else 0
                     self.logger.info(f"      - Database embeddings: {emb_count}")
                     self.logger.info(f"      - Database chunks: {chunk_count}")
                 else:
@@ -7739,7 +8036,7 @@ class SemanticSearchEngineV2:
             return False
     
     def _warmup_pgvector_connections(self):
-        """pgvector 연결 풀 워밍업"""
+        """pgvector 연결 풀 워밍업 (필요 시에만 실행)"""
         try:
             if not PGVECTOR_AVAILABLE or not self._db_adapter:
                 return
@@ -7749,14 +8046,22 @@ class SemanticSearchEngineV2:
                 self.logger.debug("Connection pool not available, skipping warmup")
                 return
             
+            # 환경 변수로 워밍업 활성화 여부 확인 (기본값: False, 필요 시에만 활성화)
+            import os
+            enable_warmup = os.getenv("PGVECTOR_ENABLE_WARMUP", "false").lower() == "true"
+            if not enable_warmup:
+                self.logger.debug("pgvector warmup disabled (set PGVECTOR_ENABLE_WARMUP=true to enable)")
+                return
+            
             # 초기화 시간 측정
             import time
             import logging
             warmup_start = time.time()
             
-            # 연결 풀 크기에 따라 워밍업할 연결 수 결정
+            # 연결 풀 크기에 따라 워밍업할 연결 수 결정 (최소화)
             max_conn = getattr(self._db_adapter.connection_pool, 'maxconn', 1)
-            warmup_connections = min(5, max_conn)
+            # 워밍업 연결 수 감소 (5개 → 2개)
+            warmup_connections = min(2, max_conn)
             
             # 워밍업 중 연결 반환 로그 억제를 위해 db_adapter 로거 레벨 일시 조정
             # (요약 로그만 출력하기 위함)
@@ -7807,6 +8112,48 @@ class SemanticSearchEngineV2:
                 self.logger.warning(f"⚠️ No connections warmed up ({warmup_time:.3f}초)")
         except Exception as e:
             self.logger.debug(f"pgvector warmup failed: {e}")
+    
+    def _warmup_metadata_cache(self):
+        """메타데이터 캐시 워밍업 (자주 사용되는 chunk_id 사전 로딩)"""
+        try:
+            if not self._db_adapter:
+                return
+            
+            warmup_start = time.time()
+            warmup_limit = int(os.getenv("METADATA_CACHE_WARMUP_LIMIT", "100"))  # 기본 100개
+            
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # 자주 사용되는 chunk_id 조회 (최근 검색된 chunk_id 또는 인기 chunk_id)
+                # precedent_chunks에서 최근 업데이트된 chunk_id 우선
+                warmup_query = """
+                    SELECT id 
+                    FROM precedent_chunks 
+                    WHERE embedding_vector IS NOT NULL 
+                    ORDER BY id DESC 
+                    LIMIT %s
+                """
+                cursor.execute(warmup_query, (warmup_limit,))
+                rows = cursor.fetchall()
+                
+                chunk_ids = [row[0] if isinstance(row, (tuple, list)) else row.get('id') for row in rows]
+                
+                if chunk_ids:
+                    # 배치로 메타데이터 로드
+                    metadata_map = self._batch_load_chunk_metadata(conn, chunk_ids)
+                    warmed_count = len(metadata_map)
+                    
+                    warmup_time = time.time() - warmup_start
+                    if warmed_count > 0:
+                        self.logger.info(
+                            f"✅ Metadata cache warmed up: {warmed_count}/{len(chunk_ids)} chunks "
+                            f"({warmup_time:.3f}초)"
+                        )
+                    else:
+                        self.logger.debug(f"Metadata cache warmup: no chunks loaded ({warmup_time:.3f}초)")
+        except Exception as e:
+            self.logger.debug(f"Metadata cache warmup failed (non-critical): {e}")
 
     def _build_faiss_index(self):
         """FAISS IVF 인덱스 빌드 및 저장 (기존 호환용, 동기 방식)"""
@@ -8414,16 +8761,13 @@ class SemanticSearchEngineV2:
             if self._chunk_ids and not self._chunk_metadata:
                 self.logger.info(f"Loading chunk metadata for {len(self._chunk_ids)} chunks...")
                 try:
-                    conn = self._get_connection()
-                    # 배치로 메타데이터 로드
-                    batch_size = 1000
-                    for i in range(0, len(self._chunk_ids), batch_size):
-                        batch_ids = self._chunk_ids[i:i + batch_size]
-                        batch_metadata = self._batch_load_chunk_metadata(conn, batch_ids)
-                        self._chunk_metadata.update(batch_metadata)
-                    # 연결 풀 사용 시 close() 호출 불필요 (자동 재사용)
-                    if not self._connection_pool:
-                        self._safe_close_connection(conn)
+                    with self._get_connection_context() as conn:
+                        # 배치로 메타데이터 로드
+                        batch_size = 1000
+                        for i in range(0, len(self._chunk_ids), batch_size):
+                            batch_ids = self._chunk_ids[i:i + batch_size]
+                            batch_metadata = self._batch_load_chunk_metadata(conn, batch_ids)
+                            self._chunk_metadata.update(batch_metadata)
                     self.logger.info(f"Loaded metadata for {len(self._chunk_metadata)} chunks")
                 except Exception as e:
                     self.logger.warning(f"Failed to load chunk metadata: {e}")
@@ -8492,18 +8836,35 @@ class SemanticSearchEngineV2:
         if uncached_ids:
             # 배치 크기 최적화: PostgreSQL도 충분히 큰 배치 처리 가능
             batch_size = min(1000, len(uncached_ids))
+            
+            # 연결 상태를 한 번만 확인 (최적화: 각 배치마다 확인하지 않음)
+            connection_valid = True
+            if hasattr(conn, '_is_closed') and conn._is_closed():
+                self.logger.warning("Connection is closed, attempting to get new connection")
+                try:
+                    conn = self._get_connection()
+                    connection_valid = True
+                except Exception as e:
+                    self.logger.error(f"Failed to get new connection: {e}")
+                    connection_valid = False
+            elif hasattr(conn, 'conn') and hasattr(conn.conn, 'closed') and conn.conn.closed != 0:
+                self.logger.warning("Connection is closed, attempting to get new connection")
+                try:
+                    conn = self._get_connection()
+                    connection_valid = True
+                except Exception as e:
+                    self.logger.error(f"Failed to get new connection: {e}")
+                    connection_valid = False
+            
+            if not connection_valid:
+                self.logger.error("Cannot proceed with batch load: connection is invalid")
+                return metadata_map
+            
+            # 모든 배치를 하나의 연결로 처리 (연결 재사용)
             for i in range(0, len(uncached_ids), batch_size):
                 batch = uncached_ids[i:i + batch_size]
                 cursor = None
                 try:
-                    # 연결 상태 확인 및 재연결 시도
-                    if hasattr(conn, '_is_closed') and conn._is_closed():
-                        self.logger.warning("Connection is closed, attempting to get new connection")
-                        conn = self._get_connection()
-                    elif hasattr(conn, 'conn') and hasattr(conn.conn, 'closed') and conn.conn.closed != 0:
-                        self.logger.warning("Connection is closed, attempting to get new connection")
-                        conn = self._get_connection()
-                    
                     # DatabaseAdapter를 통한 연결은 cursor를 먼저 가져와야 함
                     cursor = conn.cursor()
                     placeholders = ','.join(['%s'] * len(batch))  # PostgreSQL은 %s 사용

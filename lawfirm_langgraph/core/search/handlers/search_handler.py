@@ -1246,12 +1246,33 @@ class SearchHandler:
                             original_doc = original_docs_by_content[content_hash]
                 
                 if original_doc:
-                    # 원본 문서의 메타데이터를 doc에 복원
-                    if not doc.get("type") and original_doc.get("type"):
-                        doc["type"] = original_doc.get("type")
-                    # 🔥 source_type 제거: source_type이 있으면 type으로 변환
-                    if not doc.get("type") and original_doc.get("source_type"):
-                        doc["type"] = original_doc.get("source_type")
+                    # 🔥 개선: 원본 문서의 타입 정보를 더 적극적으로 복원 (우선순위 높임)
+                    original_type = (
+                        original_doc.get("type") or
+                        original_doc.get("source_type") or
+                        (original_doc.get("metadata", {}).get("type") if isinstance(original_doc.get("metadata"), dict) else None) or
+                        (original_doc.get("metadata", {}).get("source_type") if isinstance(original_doc.get("metadata"), dict) else None)
+                    )
+                    if original_type and original_type.lower() != "unknown":
+                        doc["type"] = original_type
+                        # metadata에도 저장
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        doc["metadata"]["type"] = original_type
+                        doc["metadata"]["source_type"] = original_type
+                        # 🔥 개선: merged_id 타입 안전 처리
+                        if merged_id:
+                            merged_id_str = str(merged_id) if not isinstance(merged_id, str) else merged_id
+                            merged_id_display = merged_id_str[:20] if len(merged_id_str) > 20 else merged_id_str
+                        else:
+                            merged_id_display = 'unknown'
+                        self.logger.debug(
+                            f"🔍 [TYPE RESTORE] 원본 문서에서 타입 복원: "
+                            f"doc_id={merged_id_display}, "
+                            f"type={original_type}"
+                        )
                     
                     # 법령/판례 관련 필드 복원
                     for key in ["statute_name", "law_name", "article_no", "article_number", 

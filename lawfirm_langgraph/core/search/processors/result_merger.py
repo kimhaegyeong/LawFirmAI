@@ -5,6 +5,7 @@ Result Merger and Ranker
 """
 
 import logging
+import re
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
 except ImportError:
@@ -12,6 +13,13 @@ except ImportError:
 import math
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+try:
+    from html import unescape
+except ImportError:
+    # Python 2 호환성
+    from HTMLParser import HTMLParser
+    def unescape(text):
+        return HTMLParser().unescape(text)
 try:
     from sklearn.metrics.pairwise import cosine_similarity
     import numpy as np
@@ -167,7 +175,7 @@ class ResultRanker:
     _semantic_model = None
     _semantic_model_name = None
     
-    def __init__(self, use_cross_encoder: bool = True, rerank_original_weight: float = None, rerank_cross_encoder_weight: float = None):
+    def __init__(self, use_cross_encoder: bool = True, rerank_original_weight: float = None, rerank_cross_encoder_weight: float = None, cross_encoder_model_name: str = None):
         """순위 결정기 초기화"""
         self.logger = get_logger(__name__)
         self.use_cross_encoder = use_cross_encoder
@@ -189,22 +197,95 @@ class ResultRanker:
             self.rerank_original_weight = 0.6
             self.rerank_cross_encoder_weight = 0.4
         
+        # Cross-Encoder는 지연 로딩 (초기화 시간 단축)
+        # 실제 사용 시점에 로드됨
         if use_cross_encoder:
-            try:
-                from sentence_transformers import CrossEncoder
-                self.cross_encoder = CrossEncoder('Dongjin-kr/ko-reranker', max_length=512)
-                self.logger.info("Cross-Encoder reranker initialized (Dongjin-kr/ko-reranker)")
-            except ImportError:
-                self.logger.warning("sentence-transformers not available, Cross-Encoder disabled")
-                self.use_cross_encoder = False
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize Cross-Encoder: {e}, falling back to standard ranking")
-                self.use_cross_encoder = False
+            # 모델명 설정 (파라미터 > 환경 변수 > 기본값)
+            if cross_encoder_model_name:
+                self._cross_encoder_model_name = cross_encoder_model_name
+            else:
+                import os
+                self._cross_encoder_model_name = os.getenv("CROSS_ENCODER_MODEL_NAME", "dragonkue/bge-reranker-v2-m3-ko")
+            self._cross_encoder_initialized = False
+            self.logger.debug(f"Cross-Encoder reranker will be loaded on first use (model: {self._cross_encoder_model_name})")
         
         self.logger.info(
             f"ResultRanker initialized (cross_encoder={self.use_cross_encoder}, "
             f"weights: original={self.rerank_original_weight:.2f}, cross_encoder={self.rerank_cross_encoder_weight:.2f})"
         )
+    
+    def _preprocess_text_for_cross_encoder(self, text: str, max_length: int = 512) -> str:
+        """
+        Cross-Encoder용 텍스트 전처리 (판례 문서 특수 처리 강화)
+        
+        Args:
+            text: 원본 텍스트
+            max_length: 최대 길이 (기본값: 512)
+        
+        Returns:
+            전처리된 텍스트
+        """
+        if not text or not isinstance(text, str):
+            return ""
+        
+        # 🔥 개선: 판례 문서 특수 형식 처리
+        # 【신 청 인】, 【피신청인】 등의 특수 마커를 일반 텍스트로 변환 (띄어쓰기 제거)
+        # 패턴: 【내용】 -> 내용 (띄어쓰기 제거)
+        def normalize_marker(match):
+            """【】 마커 내부의 띄어쓰기 제거"""
+            content = match.group(1)  # 【】 안의 내용
+            # 띄어쓰기 제거
+            normalized = re.sub(r'\s+', '', content)
+            return normalized
+        
+        # 【】 마커를 일반 텍스트로 변환 (띄어쓰기 제거)
+        text = re.sub(r'【([^】]+)】', normalize_marker, text)
+        
+        # HTML 태그 제거
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # HTML 엔티티 디코딩
+        try:
+            text = unescape(text)
+        except Exception:
+            pass  # 디코딩 실패 시 원본 유지
+        
+        # 공백 정리 (연속된 공백을 하나로)
+        text = ' '.join(text.split())
+        
+        # 텍스트 길이 제한 (Cross-Encoder 최대 길이 고려)
+        if len(text) > max_length:
+            text = text[:max_length]
+        
+        return text.strip()
+    
+    def _ensure_cross_encoder_loaded(self):
+        """Cross-Encoder 모델을 지연 로딩 (필요 시에만 로드)"""
+        if not self.use_cross_encoder:
+            return False
+        
+        if self._cross_encoder_initialized:
+            return self.cross_encoder is not None
+        
+        try:
+            import time
+            load_start = time.time()
+            from sentence_transformers import CrossEncoder
+            self.cross_encoder = CrossEncoder(self._cross_encoder_model_name, max_length=512)
+            load_time = time.time() - load_start
+            self._cross_encoder_initialized = True
+            self.logger.info(f"Cross-Encoder reranker loaded ({self._cross_encoder_model_name}, {load_time:.2f}초)")
+            return True
+        except ImportError:
+            self.logger.warning("sentence-transformers not available, Cross-Encoder disabled")
+            self.use_cross_encoder = False
+            self.cross_encoder = None
+            return False
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Cross-Encoder: {e}, falling back to standard ranking")
+            self.use_cross_encoder = False
+            self.cross_encoder = None
+            return False
     
     @classmethod
     def _get_semantic_model(cls):
@@ -322,25 +403,27 @@ class ResultRanker:
         )
         
         # Cross-Encoder reranking 적용 (상위 후보만, 중복 실행 방지)
-        if not already_reranked and self.use_cross_encoder and self.cross_encoder and len(ranked_results) > 0:
-            try:
-                # extracted_keywords 추출 (metadata에서)
-                extracted_keywords = None
-                for result in ranked_results:
-                    if isinstance(result.metadata, dict):
-                        extracted_keywords = result.metadata.get("extracted_keywords", [])
-                        if extracted_keywords:
-                            break
-                
-                reranked_results = self.cross_encoder_rerank(
-                    ranked_results[:top_k * 2],  # 상위 후보만 rerank
-                    query=query,  # query 전달
-                    top_k=top_k,
-                    extracted_keywords=extracted_keywords
-                )
-                ranked_results = reranked_results + ranked_results[top_k * 2:]
-            except Exception as e:
-                self.logger.warning(f"Cross-Encoder reranking failed: {e}, using standard ranking")
+        if not already_reranked and self.use_cross_encoder and len(ranked_results) > 0:
+            # Cross-Encoder 지연 로딩
+            if self._ensure_cross_encoder_loaded() and self.cross_encoder:
+                try:
+                    # extracted_keywords 추출 (metadata에서)
+                    extracted_keywords = None
+                    for result in ranked_results:
+                        if isinstance(result.metadata, dict):
+                            extracted_keywords = result.metadata.get("extracted_keywords", [])
+                            if extracted_keywords:
+                                break
+                    
+                    reranked_results = self.cross_encoder_rerank(
+                        ranked_results[:top_k * 2],  # 상위 후보만 rerank
+                        query=query,  # query 전달
+                        top_k=top_k,
+                        extracted_keywords=extracted_keywords
+                    )
+                    ranked_results = reranked_results + ranked_results[top_k * 2:]
+                except Exception as e:
+                    self.logger.warning(f"Cross-Encoder reranking failed: {e}, using standard ranking")
         elif already_reranked:
             self.logger.debug("⚡ [PERFORMANCE] Cross-Encoder reranking 스킵 (이미 reranking된 문서)")
         
@@ -374,7 +457,11 @@ class ResultRanker:
         Returns:
             List[MergedResult]: 재정렬된 결과
         """
-        if not results or not self.cross_encoder:
+        if not results:
+            return results[:top_k]
+        
+        # Cross-Encoder 지연 로딩
+        if not self._ensure_cross_encoder_loaded() or not self.cross_encoder:
             return results[:top_k]
         
         # query 추출 우선순위: 파라미터 > metadata > 원본 쿼리
@@ -431,8 +518,10 @@ class ResultRanker:
             # query-document 쌍 생성 (상위 문서만)
             pairs = []
             for result in pre_filtered_results:
-                text = result.text[:500]  # 길이 제한
-                pairs.append([extracted_query, text])
+                # 🔥 개선: 텍스트 전처리 (HTML 태그 제거, 텍스트 정리, 길이 제한)
+                text = self._preprocess_text_for_cross_encoder(result.text, max_length=500)
+                if text:  # 전처리 후에도 텍스트가 있으면 추가
+                    pairs.append([extracted_query, text])
             
             # 개선: 배치 크기 최적화 (Cross-Encoder의 predict는 이미 배치 처리 지원)
             # batch_size를 명시적으로 설정하여 메모리 효율성 향상
@@ -468,6 +557,39 @@ class ResultRanker:
                 original_score = result.score
                 cross_encoder_score = float(score)  # 정규화된 점수 사용
                 
+                # 🔥 개선: 판례 및 법령 문서 점수 보정 (Cross-Encoder 점수가 매우 낮은 경우)
+                doc_type = result.metadata.get("type", "") if isinstance(result.metadata, dict) else ""
+                doc_type_lower = doc_type.lower()
+                is_precedent = any(keyword in doc_type_lower for keyword in ["precedent", "case", "case_paragraph", "판례"])
+                is_statute = any(keyword in doc_type_lower for keyword in ["statute", "article", "law", "법령", "조문"])
+                
+                # Cross-Encoder 점수가 매우 낮은 경우 (0.1 미만) 원본 점수에 더 높은 가중치 부여
+                if (is_precedent or is_statute) and cross_encoder_score < 0.1:
+                    # 판례 또는 법령 문서의 경우 Cross-Encoder 점수가 낮으면 원본 점수에 더 높은 가중치 부여
+                    adjusted_original_weight = min(0.8, self.rerank_original_weight + 0.2)
+                    adjusted_cross_encoder_weight = max(0.2, self.rerank_cross_encoder_weight - 0.2)
+                    doc_type_name = "판례" if is_precedent else "법령"
+                    self.logger.debug(
+                        f"🔧 [{doc_type_name.upper()} SCORE ADJUST] {doc_type_name} 문서 점수 보정: "
+                        f"cross_encoder={cross_encoder_score:.3f} < 0.1, "
+                        f"original_weight={adjusted_original_weight:.2f} (기본: {self.rerank_original_weight:.2f}), "
+                        f"cross_encoder_weight={adjusted_cross_encoder_weight:.2f} (기본: {self.rerank_cross_encoder_weight:.2f})"
+                    )
+                # 🔥 개선: 법령 문서에 대한 추가 보정 (법령 조문은 중요하므로 더 높은 가중치)
+                elif is_statute and cross_encoder_score < 0.3:
+                    # 법령 문서의 경우 Cross-Encoder 점수가 낮으면 원본 점수에 더 높은 가중치 부여
+                    adjusted_original_weight = min(0.75, self.rerank_original_weight + 0.15)
+                    adjusted_cross_encoder_weight = max(0.25, self.rerank_cross_encoder_weight - 0.15)
+                    self.logger.debug(
+                        f"🔧 [STATUTE SCORE ADJUST] 법령 문서 점수 보정: "
+                        f"cross_encoder={cross_encoder_score:.3f} < 0.3, "
+                        f"original_weight={adjusted_original_weight:.2f} (기본: {self.rerank_original_weight:.2f}), "
+                        f"cross_encoder_weight={adjusted_cross_encoder_weight:.2f} (기본: {self.rerank_cross_encoder_weight:.2f})"
+                    )
+                else:
+                    adjusted_original_weight = self.rerank_original_weight
+                    adjusted_cross_encoder_weight = self.rerank_cross_encoder_weight
+                
                 # Phase 2: Keyword Coverage 기반 보너스 계산
                 keyword_bonus = 0.0
                 if extracted_keywords:
@@ -494,15 +616,15 @@ class ResultRanker:
                 
                 # 가중 평균 (가중치 튜닝 가능, 환경 변수로 조정)
                 base_combined_score = (
-                    self.rerank_original_weight * original_score + 
-                    self.rerank_cross_encoder_weight * cross_encoder_score
+                    adjusted_original_weight * original_score + 
+                    adjusted_cross_encoder_weight * cross_encoder_score
                 )
                 
                 # 디버그 로그 (가중치 확인용)
                 if self.logger.isEnabledFor(logging.DEBUG):
                     self.logger.debug(
-                        f"Score combination: original={original_score:.3f} (weight={self.rerank_original_weight:.2f}), "
-                        f"cross_encoder={cross_encoder_score:.3f} (weight={self.rerank_cross_encoder_weight:.2f}), "
+                        f"Score combination: original={original_score:.3f} (weight={adjusted_original_weight:.2f}), "
+                        f"cross_encoder={cross_encoder_score:.3f} (weight={adjusted_cross_encoder_weight:.2f}), "
                         f"combined={base_combined_score:.3f}"
                     )
                 
@@ -779,167 +901,251 @@ class ResultRanker:
         )
         
         # Stage 5: Cross-Encoder 재랭킹 (개선: 조기 종료 조건 강화)
-        if self.use_cross_encoder and self.cross_encoder and len(diverse_docs) > 0 and query:
-            # 개선: 조기 종료 조건 강화 (품질 >= 0.75 또는 문서 <= 10)
-            should_skip_cross_encoder = (
-                search_quality >= 0.75 or  # 품질이 중간 이상이면 스킵 (0.85 → 0.75로 완화)
-                len(diverse_docs) <= 10  # 문서 수가 적으면 스킵 (8 → 10으로 완화)
-            )
-            
-            if should_skip_cross_encoder:
-                self.logger.info(
-                    f"⏭️ [CROSS-ENCODER SKIP] Skipping Cross-Encoder reranking "
-                    f"(quality: {search_quality:.2f}, docs: {len(diverse_docs)})"
-                )
-                return diverse_docs
-            
-            try:
-                # 개선: Cross-Encoder 재랭킹 후보 수 감소 (10-20개 → 5-10개)
-                # 문서 수에 따라 동적으로 조정: 최소 5개, 최대 10개
-                if len(diverse_docs) <= 5:
-                    rerank_candidates_count = len(diverse_docs)  # 문서 수가 매우 적으면 모두 재랭킹
-                elif len(diverse_docs) <= 10:
-                    rerank_candidates_count = min(8, len(diverse_docs))  # 중간 크기면 8개
-                elif len(diverse_docs) <= 15:
-                    rerank_candidates_count = min(10, len(diverse_docs))  # 큰 경우 10개
-                else:
-                    rerank_candidates_count = min(10, max(5, len(diverse_docs) // 4))  # 매우 큰 경우 동적 조정 (최대 10개)
-                
-                candidates_for_rerank = diverse_docs[:rerank_candidates_count]
-                
-                print(f"[CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates out of {len(diverse_docs)} documents for reranking", flush=True)
-                self.logger.info(
-                    f"🔍 [CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates "
-                    f"out of {len(diverse_docs)} documents for reranking"
+        if self.use_cross_encoder and len(diverse_docs) > 0 and query:
+            # Cross-Encoder 지연 로딩
+            if self._ensure_cross_encoder_loaded() and self.cross_encoder:
+                # 개선: 조기 종료 조건 강화 (품질 >= 0.75 또는 문서 <= 10)
+                should_skip_cross_encoder = (
+                    search_quality >= 0.75 or  # 품질이 중간 이상이면 스킵 (0.85 → 0.75로 완화)
+                    len(diverse_docs) <= 10  # 문서 수가 적으면 스킵 (8 → 10으로 완화)
                 )
                 
-                # 개선: Dict를 MergedResult로 변환 최적화 (불필요한 복사 최소화)
-                merged_candidates = []
-                for doc in candidates_for_rerank:
-                    # 기존 _dict_to_merged_result 호출 대신 직접 생성 (성능 향상)
-                    text = doc.get("text") or doc.get("content") or doc.get("chunk_text", "")
-                    score = doc.get("final_weighted_score") or doc.get("relevance_score", 0.0)
-                    source = doc.get("source") or doc.get("title") or doc.get("document_id", "")
-                    metadata = doc.get("metadata", {})
-                    if not isinstance(metadata, dict):
-                        metadata = doc if isinstance(doc, dict) else {}
-                    
-                    merged_candidates.append(MergedResult(
-                        text=text,
-                        score=score,
-                        source=source,
-                        metadata=metadata
-                    ))
-                
-                # Cross-Encoder 재랭킹 수행
-                reranked_merged = self.cross_encoder_rerank(
-                    results=merged_candidates,
-                    query=query,
-                    top_k=rerank_candidates_count,
-                    extracted_keywords=extracted_keywords
-                )
-                
-                # MergedResult를 Dict로 변환하고 기존 점수 정보 유지
-                reranked_docs = []
-                # 원본 문서를 텍스트로 인덱싱 (빠른 매칭을 위해)
-                original_docs_by_text = {doc.get("text") or doc.get("content") or doc.get("chunk_text", ""): doc for doc in candidates_for_rerank}
-                
-                for merged_result in reranked_merged:
-                    doc_dict = self._merged_result_to_dict(merged_result)
-                    # 텍스트로 원본 문서 찾기
-                    doc_text = merged_result.text
-                    original_doc = original_docs_by_text.get(doc_text)
-                    
-                    if original_doc:
-                        # 기존 필드 유지하면서 점수만 업데이트
-                        doc_dict.update({
-                            **original_doc,
-                            "final_weighted_score": merged_result.score,
-                            "relevance_score": merged_result.score,
-                            "score": merged_result.score,
-                            "cross_encoder_applied": True
-                        })
-                    else:
-                        # 원본 문서를 찾지 못한 경우에도 점수 업데이트
-                        doc_dict.update({
-                            "final_weighted_score": merged_result.score,
-                            "relevance_score": merged_result.score,
-                            "score": merged_result.score,
-                            "cross_encoder_applied": True
-                        })
-                    reranked_docs.append(doc_dict)
-                
-                # 재랭킹된 문서와 나머지 문서 병합
-                remaining_docs = diverse_docs[rerank_candidates_count:]
-                final_docs = reranked_docs + remaining_docs
-                
-                # 개선: 재랭킹 결과 검증 - 전후 점수 분포 비교
-                # Cross-Encoder 재랭킹 직전 점수와 재랭킹 후 점수 비교
-                if reranked_docs:
-                    # 재랭킹 직전 점수: merged_candidates의 score (MergedResult.score)
-                    before_scores = [result.score for result in merged_candidates]
-                    # 재랭킹 후 점수: reranked_merged의 score (Cross-Encoder 재랭킹 후)
-                    after_scores = [result.score for result in reranked_merged]
-                    
-                    if before_scores and after_scores and len(before_scores) == len(after_scores):
-                        before_avg = sum(before_scores) / len(before_scores)
-                        after_avg = sum(after_scores) / len(after_scores)
-                        before_max = max(before_scores)
-                        after_max = max(after_scores)
-                        before_min = min(before_scores)
-                        after_min = min(after_scores)
-                        
-                        # 순위 변경 추적 (상위 3개 문서)
-                        before_top3_indices = sorted(range(len(before_scores)), key=lambda i: before_scores[i], reverse=True)[:3]
-                        after_top3_indices = sorted(range(len(after_scores)), key=lambda i: after_scores[i], reverse=True)[:3]
-                        rank_change = len(set(before_top3_indices) & set(after_top3_indices))  # 상위 3개 중 유지된 문서 수
-                        
-                        improvement_pct = (after_avg - before_avg) * 100 / before_avg if before_avg > 0 else 0
-                        max_improvement_pct = (after_max - before_max) * 100 / before_max if before_max > 0 else 0
-                        
-                        print(f"[CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents. Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), min {before_min:.3f}→{after_min:.3f}. Top 3 rank stability: {rank_change}/3", flush=True)
-                        self.logger.info(
-                            f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
-                            f"(out of {len(diverse_docs)} total documents). "
-                            f"Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), "
-                            f"max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), "
-                            f"min {before_min:.3f}→{after_min:.3f}. "
-                            f"Top 3 rank stability: {rank_change}/3"
-                        )
-                    else:
-                        self.logger.info(
-                            f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
-                            f"(out of {len(diverse_docs)} total documents)"
-                        )
-                else:
-                    self.logger.warning(
-                        f"⚠️ [CROSS-ENCODER RERANK] No documents were reranked "
-                        f"(expected {rerank_candidates_count}, got {len(reranked_docs)})"
+                if should_skip_cross_encoder:
+                    self.logger.info(
+                        f"⏭️ [CROSS-ENCODER SKIP] Skipping Cross-Encoder reranking "
+                        f"(quality: {search_quality:.2f}, docs: {len(diverse_docs)})"
                     )
+                    return diverse_docs
                 
-                # 개선: 재랭킹 성능 모니터링
-                rerank_time = time.time() - start_time
-                self.logger.info(
-                    f"⏱️ [RERANK PERFORMANCE] Total reranking time: {rerank_time:.3f}s "
-                    f"({len(diverse_docs)} documents, {rerank_candidates_count} reranked)"
-                )
+                try:
+                    # 개선: Cross-Encoder 재랭킹 후보 수 감소 (10-20개 → 5-10개)
+                    # 문서 수에 따라 동적으로 조정: 최소 5개, 최대 10개
+                    if len(diverse_docs) <= 5:
+                        rerank_candidates_count = len(diverse_docs)  # 문서 수가 매우 적으면 모두 재랭킹
+                    elif len(diverse_docs) <= 10:
+                        rerank_candidates_count = min(8, len(diverse_docs))  # 중간 크기면 8개
+                    elif len(diverse_docs) <= 15:
+                        rerank_candidates_count = min(10, len(diverse_docs))  # 큰 경우 10개
+                    else:
+                        rerank_candidates_count = min(10, max(5, len(diverse_docs) // 4))  # 매우 큰 경우 동적 조정 (최대 10개)
+                    
+                    candidates_for_rerank = diverse_docs[:rerank_candidates_count]
+                    
+                    print(f"[CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates out of {len(diverse_docs)} documents for reranking", flush=True)
+                    self.logger.info(
+                        f"🔍 [CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates "
+                        f"out of {len(diverse_docs)} documents for reranking"
+                    )
+                    
+                    # 개선: Dict를 MergedResult로 변환 최적화 (불필요한 복사 최소화)
+                    merged_candidates = []
+                    for doc in candidates_for_rerank:
+                        # 기존 _dict_to_merged_result 호출 대신 직접 생성 (성능 향상)
+                        text = doc.get("text") or doc.get("content") or doc.get("chunk_text", "")
+                        score = doc.get("final_weighted_score") or doc.get("relevance_score", 0.0)
+                        source = doc.get("source") or doc.get("title") or doc.get("document_id", "")
+                        metadata = doc.get("metadata", {})
+                        if not isinstance(metadata, dict):
+                            metadata = doc if isinstance(doc, dict) else {}
+                        
+                        merged_candidates.append(MergedResult(
+                            text=text,
+                            score=score,
+                            source=source,
+                            metadata=metadata
+                        ))
+                    
+                    # Cross-Encoder 재랭킹 수행
+                    reranked_merged = self.cross_encoder_rerank(
+                        results=merged_candidates,
+                        query=query,
+                        top_k=rerank_candidates_count,
+                        extracted_keywords=extracted_keywords
+                    )
+                    
+                    # MergedResult를 Dict로 변환하고 기존 점수 정보 유지
+                    reranked_docs = []
+                    # 원본 문서를 텍스트로 인덱싱 (빠른 매칭을 위해)
+                    original_docs_by_text = {doc.get("text") or doc.get("content") or doc.get("chunk_text", ""): doc for doc in candidates_for_rerank}
+                    
+                    for merged_result in reranked_merged:
+                        doc_dict = self._merged_result_to_dict(merged_result)
+                        # 텍스트로 원본 문서 찾기
+                        doc_text = merged_result.text
+                        original_doc = original_docs_by_text.get(doc_text)
+                        
+                        if original_doc:
+                            # 기존 필드 유지하면서 점수만 업데이트
+                            doc_dict.update({
+                                **original_doc,
+                                "final_weighted_score": merged_result.score,
+                                "relevance_score": merged_result.score,
+                                "score": merged_result.score,
+                                "cross_encoder_applied": True
+                            })
+                        else:
+                            # 원본 문서를 찾지 못한 경우에도 점수 업데이트
+                            doc_dict.update({
+                                "final_weighted_score": merged_result.score,
+                                "relevance_score": merged_result.score,
+                                "score": merged_result.score,
+                                "cross_encoder_applied": True
+                            })
+                        reranked_docs.append(doc_dict)
+                    
+                    # 재랭킹된 문서와 나머지 문서 병합
+                    remaining_docs = diverse_docs[rerank_candidates_count:]
+                    final_docs = reranked_docs + remaining_docs
+                    
+                    # 🔥 개선: 타입별 다양성 보장 (법령 질의인 경우)
+                    if query_type == "law_inquiry":
+                        # 타입별로 문서 분류
+                        statute_docs = []
+                        precedent_docs = []
+                        other_docs = []
+                        
+                        for doc in final_docs:
+                            doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                            if "statute" in doc_type or "법령" in doc_type:
+                                statute_docs.append(doc)
+                            elif "precedent" in doc_type or "판례" in doc_type:
+                                precedent_docs.append(doc)
+                            else:
+                                other_docs.append(doc)
+                        
+                        # 법령 질의인 경우: 법령 최소 1개, 판례 최소 1개 보장
+                        if len(statute_docs) == 0 and len(diverse_docs) > len(final_docs):
+                            # 법령 문서가 없으면 원본 문서에서 법령 문서 찾기
+                            for doc in diverse_docs:
+                                if doc not in final_docs:
+                                    doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                                    if "statute" in doc_type or "법령" in doc_type:
+                                        statute_docs.append(doc)
+                                        final_docs.append(doc)
+                                        break
+                        
+                        if len(precedent_docs) == 0 and len(diverse_docs) > len(final_docs):
+                            # 판례 문서가 없으면 원본 문서에서 판례 문서 찾기
+                            for doc in diverse_docs:
+                                if doc not in final_docs:
+                                    doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                                    if "precedent" in doc_type or "판례" in doc_type:
+                                        precedent_docs.append(doc)
+                                        final_docs.append(doc)
+                                        break
+                        
+                        # 타입별 다양성 보장 후 점수 기준으로 재정렬
+                        final_docs.sort(
+                            key=lambda x: x.get("final_weighted_score", x.get("relevance_score", 0.0)),
+                            reverse=True
+                        )
+                        
+                        self.logger.info(
+                            f"🔍 [TYPE DIVERSITY] 법령 질의 타입별 다양성 보장: "
+                            f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개, 기타={len(other_docs)}개"
+                        )
+                    
+                    # 개선: 재랭킹 결과 검증 - 전후 점수 분포 비교
+                    # Cross-Encoder 재랭킹 직전 점수와 재랭킹 후 점수 비교
+                    if reranked_docs:
+                        # 재랭킹 직전 점수: merged_candidates의 score (MergedResult.score)
+                        before_scores = [result.score for result in merged_candidates]
+                        # 재랭킹 후 점수: reranked_merged의 score (Cross-Encoder 재랭킹 후)
+                        after_scores = [result.score for result in reranked_merged]
+                        
+                        if before_scores and after_scores and len(before_scores) == len(after_scores):
+                            before_avg = sum(before_scores) / len(before_scores)
+                            after_avg = sum(after_scores) / len(after_scores)
+                            before_max = max(before_scores)
+                            after_max = max(after_scores)
+                            before_min = min(before_scores)
+                            after_min = min(after_scores)
+                            
+                            # 순위 변경 추적 (상위 3개 문서)
+                            before_top3_indices = sorted(range(len(before_scores)), key=lambda i: before_scores[i], reverse=True)[:3]
+                            after_top3_indices = sorted(range(len(after_scores)), key=lambda i: after_scores[i], reverse=True)[:3]
+                            rank_change = len(set(before_top3_indices) & set(after_top3_indices))  # 상위 3개 중 유지된 문서 수
+                            
+                            improvement_pct = (after_avg - before_avg) * 100 / before_avg if before_avg > 0 else 0
+                            max_improvement_pct = (after_max - before_max) * 100 / before_max if before_max > 0 else 0
+                            
+                            print(f"[CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents. Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), min {before_min:.3f}→{after_min:.3f}. Top 3 rank stability: {rank_change}/3", flush=True)
+                            self.logger.info(
+                                f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
+                                f"(out of {len(diverse_docs)} total documents). "
+                                f"Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), "
+                                f"max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), "
+                                f"min {before_min:.3f}→{after_min:.3f}. "
+                                f"Top 3 rank stability: {rank_change}/3"
+                            )
+                        else:
+                            self.logger.info(
+                                f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
+                                f"(out of {len(diverse_docs)} total documents)"
+                            )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ [CROSS-ENCODER RERANK] No documents were reranked "
+                            f"(expected {rerank_candidates_count}, got {len(reranked_docs)})"
+                        )
+                    
+                    # 개선: 재랭킹 성능 모니터링
+                    rerank_time = time.time() - start_time
+                    self.logger.info(
+                        f"⏱️ [RERANK PERFORMANCE] Total reranking time: {rerank_time:.3f}s "
+                        f"({len(diverse_docs)} documents, {rerank_candidates_count} reranked)"
+                    )
+                    
+                    return final_docs
                 
-                return final_docs
-                
-            except Exception as e:
-                rerank_time = time.time() - start_time
-                self.logger.warning(
-                    f"Cross-Encoder reranking in multi_stage_rerank failed: {e}, using MMR results "
-                    f"(time: {rerank_time:.3f}s)"
-                )
-                return diverse_docs
+                except Exception as e:
+                    rerank_time = time.time() - start_time
+                    self.logger.warning(
+                        f"Cross-Encoder reranking in multi_stage_rerank failed: {e}, using MMR results "
+                        f"(time: {rerank_time:.3f}s)"
+                    )
+                    return diverse_docs
         else:
             # Cross-Encoder가 비활성화되었거나 쿼리가 없는 경우 MMR 결과 반환
             rerank_time = time.time() - start_time
-            if not self.use_cross_encoder or not self.cross_encoder:
+            if not self.use_cross_encoder or not self._ensure_cross_encoder_loaded() or not self.cross_encoder:
                 self.logger.info(f"⏭️ [CROSS-ENCODER SKIP] Cross-Encoder not available, skipping Stage 5 (time: {rerank_time:.3f}s)")
             elif not query:
                 self.logger.info(f"⏭️ [CROSS-ENCODER SKIP] Query not provided, skipping Cross-Encoder reranking (time: {rerank_time:.3f}s)")
+            
+            # 🔥 개선: 타입별 다양성 보장 (법령 질의인 경우, Cross-Encoder 없이도)
+            if query_type == "law_inquiry":
+                # 타입별로 문서 분류
+                statute_docs = []
+                precedent_docs = []
+                other_docs = []
+                
+                for doc in diverse_docs:
+                    doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                    if "statute" in doc_type or "법령" in doc_type:
+                        statute_docs.append(doc)
+                    elif "precedent" in doc_type or "판례" in doc_type:
+                        precedent_docs.append(doc)
+                    else:
+                        other_docs.append(doc)
+                
+                # 법령 질의인 경우: 법령 최소 1개, 판례 최소 1개 보장
+                if len(statute_docs) == 0:
+                    self.logger.warning(
+                        f"⚠️ [TYPE DIVERSITY] 법령 질의인데 법령 문서가 없음: "
+                        f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개"
+                    )
+                elif len(precedent_docs) == 0:
+                    self.logger.warning(
+                        f"⚠️ [TYPE DIVERSITY] 법령 질의인데 판례 문서가 없음: "
+                        f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개"
+                    )
+                else:
+                    self.logger.info(
+                        f"✅ [TYPE DIVERSITY] 법령 질의 타입별 다양성 확인: "
+                        f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개, 기타={len(other_docs)}개"
+                    )
+            
             return diverse_docs
     
     def evaluate_search_quality(
@@ -2173,7 +2379,23 @@ class ResultRanker:
         # 4. Cross-Encoder 점수 (15%)
         cross_encoder_score = 0.0
         if doc.get("cross_encoder_score") is not None:
-            cross_encoder_score = doc.get("cross_encoder_score", 0.0) * 0.15
+            raw_cross_encoder_score = doc.get("cross_encoder_score", 0.0)
+            
+            # 🔥 개선: 판례 문서 점수 보정 (Cross-Encoder 점수가 매우 낮은 경우)
+            doc_type = doc.get("type", "") or (doc.get("metadata", {}).get("type", "") if isinstance(doc.get("metadata"), dict) else "")
+            is_precedent = any(keyword in doc_type.lower() for keyword in ["precedent", "case", "case_paragraph", "판례"])
+            
+            # Cross-Encoder 점수가 매우 낮은 경우 (0.1 미만) 원본 점수에 더 높은 가중치 부여
+            if is_precedent and raw_cross_encoder_score < 0.1:
+                # 판례 문서의 경우 Cross-Encoder 점수 가중치를 낮춤 (원본 점수에 더 높은 가중치)
+                cross_encoder_score = raw_cross_encoder_score * 0.10  # 15% → 10%로 감소
+                self.logger.debug(
+                    f"🔧 [PRECEDENT SCORE ADJUST] 통합 점수 계산에서 판례 문서 점수 보정: "
+                    f"cross_encoder={raw_cross_encoder_score:.3f} < 0.1, "
+                    f"weight=0.10 (기본: 0.15)"
+                )
+            else:
+                cross_encoder_score = raw_cross_encoder_score * 0.15
         
         # 5. 다양성 점수 (10%)
         diversity_score = doc.get("diversity_score", 0.0) * 0.1
@@ -2213,6 +2435,57 @@ class ResultRanker:
         
         doc["unified_rerank_score"] = unified_score
         return unified_score
+    
+    def _rerank_by_type(
+        self,
+        docs: List[Dict[str, Any]],
+        query: str,
+        extracted_keywords: List[str],
+        citation_cache: Dict[str, Any],
+        keyword_cache: Dict[str, Any],
+        min_count: int = 1,
+        max_count: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        특정 타입의 문서들만으로 reranking 수행 (테이블별 reranking)
+        
+        Args:
+            docs: reranking할 문서 리스트 (동일한 타입)
+            query: 검색 쿼리
+            extracted_keywords: 추출된 키워드
+            citation_cache: Citation 캐시
+            keyword_cache: 키워드 점수 캐시
+            min_count: 최소 선택할 문서 수
+            max_count: 최대 선택할 문서 수
+        
+        Returns:
+            List[Dict[str, Any]]: reranking된 문서 리스트
+        """
+        if not docs:
+            return []
+        
+        # 1. 통합 점수 재계산 (해당 타입 내에서만)
+        for doc in docs:
+            unified_score = self._calculate_unified_score_fast(
+                doc,
+                query=query,
+                extracted_keywords=extracted_keywords,
+                citation_cache=citation_cache,
+                keyword_cache=keyword_cache
+            )
+            doc["final_rerank_score"] = unified_score
+        
+        # 2. 점수 기준으로 정렬
+        sorted_docs = sorted(
+            docs,
+            key=lambda x: x.get("final_rerank_score", 0.0),
+            reverse=True
+        )
+        
+        # 3. 최소/최대 개수 보장
+        selected_count = max(min_count, min(max_count, len(sorted_docs)))
+        
+        return sorted_docs[:selected_count]
     
     def _apply_mmr_diversity_fast(
         self,
@@ -2339,14 +2612,51 @@ class ResultRanker:
         if extracted_keywords is None:
             extracted_keywords = []
         
+        # 🔥 개선: 입력 문서들의 doc_id를 사전에 정규화 (방어적 접근)
+        all_input_docs = db_results + vector_results + keyword_results
+        for doc in all_input_docs:
+            if isinstance(doc, dict):
+                # doc_id 필드들을 문자열로 정규화
+                for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                    if id_field in doc and doc[id_field] is not None:
+                        if isinstance(doc[id_field], int):
+                            doc[id_field] = str(doc[id_field])
+                        elif not isinstance(doc[id_field], str):
+                            doc[id_field] = str(doc[id_field])
+                
+                # metadata 내부의 doc_id도 정규화
+                if isinstance(doc.get('metadata'), dict):
+                    for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                        if id_field in doc['metadata'] and doc['metadata'][id_field] is not None:
+                            if isinstance(doc['metadata'][id_field], int):
+                                doc['metadata'][id_field] = str(doc['metadata'][id_field])
+                            elif not isinstance(doc['metadata'][id_field], str):
+                                doc['metadata'][id_field] = str(doc['metadata'][id_field])
+        
         # 🔥 성능 최적화: 작은 문서 수일 때 통합 reranking 스킵
         total_docs = len(db_results) + len(vector_results) + len(keyword_results)
         
-        # 문서가 5개 이하이고 품질이 높으면 간단한 병합만 수행
-        if total_docs <= 5 and search_quality >= 0.7:
+        # 🔥 개선: 타입별 다양성이 필요한 경우에는 스킵하지 않음
+        # 법령 질의(query_type == "law_inquiry")인 경우 법령과 판례가 각각 필요하므로 스킵하지 않음
+        all_docs_preview = db_results + vector_results + keyword_results
+        doc_types = set()
+        for doc in all_docs_preview:
+            doc_type = doc.get("type", "") or (doc.get("metadata", {}).get("type", "") if isinstance(doc.get("metadata"), dict) else "")
+            if doc_type:
+                doc_types.add(doc_type.lower())
+        
+        # 법령 질의인 경우 무조건 통합 reranking 수행 (타입별 다양성 보장을 위해)
+        # 통합 reranking이 호출되기 전 단계에서 이미 타입이 필터링되었을 수 있으므로,
+        # 법령 질의인 경우에는 타입 다양성과 무관하게 통합 reranking 수행
+        needs_type_diversity = (
+            query_type == "law_inquiry"
+        )
+        
+        # 문서가 5개 이하이고 품질이 높고 타입별 다양성이 필요하지 않으면 간단한 병합만 수행
+        if total_docs <= 5 and search_quality >= 0.7 and not needs_type_diversity:
             self.logger.info(
                 f"⚡ [PERFORMANCE] 통합 reranking 스킵 (문서 수 적음: {total_docs}개, "
-                f"품질: {search_quality:.2f}). 간단한 병합만 수행."
+                f"품질: {search_quality:.2f}, 타입 다양성 불필요). 간단한 병합만 수행."
             )
             # 간단한 병합 및 정렬만 수행
             all_docs = db_results + vector_results + keyword_results
@@ -2382,17 +2692,81 @@ class ResultRanker:
                     if doc.get(key) and not doc["metadata"].get(key):
                         doc["metadata"][key] = doc.get(key)
             
-            # 점수 기준으로 정렬
-            sorted_docs = sorted(
-                all_docs,
-                key=lambda x: (
-                    x.get("score", 0) or 
-                    x.get("relevance_score", 0) or 
-                    x.get("similarity", 0) or 
-                    0
-                ),
-                reverse=True
-            )
+            # 🔥 개선: 타입별 다양성 보장 (법령 질의인 경우)
+            if query_type == "law_inquiry":
+                # 법령과 판례를 각각 분리
+                statute_docs = [doc for doc in all_docs if "statute" in doc.get("type", "").lower()]
+                precedent_docs = [doc for doc in all_docs if "precedent" in doc.get("type", "").lower() or "case" in doc.get("type", "").lower()]
+                other_docs = [doc for doc in all_docs if doc not in statute_docs and doc not in precedent_docs]
+                
+                # 타입별로 점수 기준 정렬
+                statute_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                precedent_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                other_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                
+                # 타입별 최소 보장: 법령 최소 1개, 판례 최소 1개
+                sorted_docs = []
+                if statute_docs:
+                    sorted_docs.append(statute_docs[0])  # 최소 1개 법령
+                if precedent_docs:
+                    sorted_docs.append(precedent_docs[0])  # 최소 1개 판례
+                
+                # 나머지는 점수 순으로 추가
+                remaining_slots = top_k - len(sorted_docs)
+                remaining_docs = []
+                if len(statute_docs) > 1:
+                    remaining_docs.extend(statute_docs[1:])
+                if len(precedent_docs) > 1:
+                    remaining_docs.extend(precedent_docs[1:])
+                remaining_docs.extend(other_docs)
+                
+                remaining_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                sorted_docs.extend(remaining_docs[:remaining_slots])
+            else:
+                # 일반적인 경우 점수 기준으로 정렬
+                sorted_docs = sorted(
+                    all_docs,
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+            
             # top_k만큼 반환
             return sorted_docs[:top_k]
         
@@ -2404,17 +2778,66 @@ class ResultRanker:
         # 2. 모든 결과 통합
         all_docs = db_results + vector_results + keyword_results
         
+        # 🔥 CRITICAL: 메타데이터 백업 전 타입 정보 보존 강화
+        # 타입이 없거나 unknown이면 DocumentType.from_metadata로 재추론 시도
+        from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+        for doc in all_docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            # 타입이 없거나 unknown이면 재추론 시도
+            current_type = doc.get("type", "").lower() if doc.get("type") else ""
+            if not doc.get("type") or current_type == "unknown":
+                try:
+                    doc_type_enum = DocumentType.from_metadata(doc)
+                    if doc_type_enum != DocumentType.UNKNOWN:
+                        doc["type"] = doc_type_enum.value
+                        # metadata에도 저장
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        doc["metadata"]["type"] = doc_type_enum.value
+                        doc["metadata"]["source_type"] = doc_type_enum.value
+                        # 🔥 개선: doc_id 타입 안전 처리
+                        doc_id_for_log = doc.get('id', 'unknown')
+                        if doc_id_for_log and doc_id_for_log != 'unknown':
+                            doc_id_str = str(doc_id_for_log) if not isinstance(doc_id_for_log, str) else doc_id_for_log
+                            doc_id_display = doc_id_str[:20] if len(doc_id_str) > 20 else doc_id_str
+                        else:
+                            doc_id_display = 'unknown'
+                        self.logger.debug(
+                            f"🔍 [TYPE PRESERVATION] 백업 전 타입 재추론 성공: "
+                            f"doc_id={doc_id_display}, "
+                            f"type={doc_type_enum.value}"
+                        )
+                except Exception as e:
+                    self.logger.debug(f"🔍 [TYPE PRESERVATION] 타입 재추론 실패: {e}")
+        
         # 🔥 개선: 메타데이터 백업 (파이프라인 시작 시)
         # 재랭킹 과정에서 메타데이터가 손실되지 않도록 백업
         metadata_backup = {}
         for doc in all_docs:
             # 고유 ID 생성 (여러 필드 조합으로 안정적인 ID 생성)
-            doc_id = (
+            # 🔥 개선: doc_id를 항상 문자열로 정규화 (딕셔너리 키 및 슬라이싱 안전성 보장)
+            raw_doc_id = (
                 doc.get("id") or 
                 doc.get("chunk_id") or 
                 doc.get("document_id") or
-                str(hash(str(doc.get("text", "")) + str(doc.get("content", "")) + str(doc.get("source", ""))))
+                None
             )
+            
+            if raw_doc_id is not None:
+                # 정수인 경우 문자열로 변환
+                if isinstance(raw_doc_id, int):
+                    doc_id = str(raw_doc_id)
+                elif not isinstance(raw_doc_id, str):
+                    doc_id = str(raw_doc_id)
+                else:
+                    doc_id = raw_doc_id
+            else:
+                # 해시 기반 ID 생성 (이미 문자열)
+                doc_id = str(hash(str(doc.get("text", "")) + str(doc.get("content", "")) + str(doc.get("source", ""))))
             
             if doc_id:
                 # 메타데이터 딕셔너리 백업 (deep copy)
@@ -2472,8 +2895,16 @@ class ResultRanker:
         # 샘플 백업 메타데이터 로깅 (처음 2개만)
         sample_backups = list(metadata_backup.items())[:2]
         for doc_id, backup in sample_backups:
+            # 🔥 개선: doc_id가 정수인 경우 문자열로 변환
+            doc_id_str = str(doc_id) if not isinstance(doc_id, str) else doc_id
+            # 🔥 개선: doc_id_str이 이미 문자열인지 확인
+            if isinstance(doc_id_str, str):
+                doc_id_display = doc_id_str[:20] + "..." if len(doc_id_str) > 20 else doc_id_str
+            else:
+                doc_id_str_safe = str(doc_id_str) if doc_id_str else 'unknown'
+                doc_id_display = doc_id_str_safe[:20] + "..." if len(doc_id_str_safe) > 20 else doc_id_str_safe
             self.logger.info(
-                f"🔍 [METADATA BACKUP SAMPLE] Doc ID={doc_id[:20]}...: "
+                f"🔍 [METADATA BACKUP SAMPLE] Doc ID={doc_id_display}: "
                 f"type={backup.get('type')}, "
                 f"metadata_type={backup.get('metadata', {}).get('type') if isinstance(backup.get('metadata'), dict) else 'N/A'}, "
                 f"has_statute_fields={bool(backup.get('statute_name') or backup.get('law_name') or backup.get('article_no'))}, "
@@ -2518,45 +2949,79 @@ class ResultRanker:
         # 7. Cross-Encoder 재랭킹 (품질이 낮을 때만)
         # 기존 multi_stage_rerank의 Cross-Encoder 로직 사용
         cross_encoder_docs = specialized_docs
-        if search_quality < 0.85 and self.use_cross_encoder and self.cross_encoder and query:
-            try:
-                # 상위 후보만 Cross-Encoder 재랭킹
-                rerank_candidates = specialized_docs[:min(top_k * 2, len(specialized_docs))]
-                
-                # 쿼리-문서 쌍 생성
-                pairs = []
-                for doc in rerank_candidates:
-                    text = doc.get("text") or doc.get("content", "")
-                    if text:
-                        pairs.append([query, text])
-                
-                if pairs:
-                    # Cross-Encoder 점수 계산
-                    scores = self.cross_encoder.predict(
-                        pairs,
-                        batch_size=min(32, len(pairs)),
-                        show_progress_bar=False
-                    )
+        if search_quality < 0.85 and self.use_cross_encoder and query:
+            # Cross-Encoder 지연 로딩
+            if self._ensure_cross_encoder_loaded() and self.cross_encoder:
+                try:
+                    # 상위 후보만 Cross-Encoder 재랭킹
+                    rerank_candidates = specialized_docs[:min(top_k * 2, len(specialized_docs))]
                     
-                    # 점수 추가
-                    for i, doc in enumerate(rerank_candidates):
-                        if i < len(scores):
-                            doc["cross_encoder_score"] = float(scores[i])
+                    # 쿼리-문서 쌍 생성
+                    pairs = []
+                    for doc in rerank_candidates:
+                        # 🔥 개선: 텍스트 전처리 (HTML 태그 제거, 텍스트 정리, 길이 제한)
+                        raw_text = doc.get("text") or doc.get("content", "")
+                        text = self._preprocess_text_for_cross_encoder(raw_text, max_length=512)
+                        if text:  # 전처리 후에도 텍스트가 있으면 추가
+                            pairs.append([query, text])
                     
-                    # Cross-Encoder 점수로 정렬
-                    rerank_candidates.sort(
-                        key=lambda x: x.get("cross_encoder_score", 0.0),
-                        reverse=True
-                    )
-                    
-                    # 나머지 문서와 합치기
-                    # 🔥 개선: 딕셔너리 객체 비교 대신 ID 기반 비교로 변경
-                    rerank_candidate_ids = {doc.get("id") or doc.get("chunk_id") or str(id(doc)) for doc in rerank_candidates}
-                    remaining = [d for d in specialized_docs if (d.get("id") or d.get("chunk_id") or str(id(d))) not in rerank_candidate_ids]
-                    cross_encoder_docs = rerank_candidates + remaining
-            except Exception as e:
-                self.logger.warning(f"Cross-Encoder reranking failed: {e}")
-                cross_encoder_docs = specialized_docs
+                    if pairs:
+                        # Cross-Encoder 점수 계산
+                        scores = self.cross_encoder.predict(
+                            pairs,
+                            batch_size=min(32, len(pairs)),
+                            show_progress_bar=False
+                        )
+                        
+                        # Cross-Encoder 점수 정규화 (0-1 범위로 정규화하여 기존 점수와 스케일 일치)
+                        if SKLEARN_AVAILABLE and len(scores) > 1:
+                            scores_array = np.array([float(s) for s in scores])
+                            min_score = scores_array.min()
+                            max_score = scores_array.max()
+                            if max_score > min_score:
+                                # Min-Max 정규화 (0-1 범위)
+                                normalized_scores = (scores_array - min_score) / (max_score - min_score)
+                            else:
+                                normalized_scores = scores_array
+                            scores = normalized_scores.tolist()
+                        
+                        # 점수 추가 및 판례 문서 점수 보정
+                        for i, doc in enumerate(rerank_candidates):
+                            if i < len(scores):
+                                raw_cross_encoder_score = float(scores[i])
+                                
+                                # 🔥 개선: 판례 문서 점수 보정 (Cross-Encoder 점수가 매우 낮은 경우)
+                                doc_type = doc.get("type", "") or (doc.get("metadata", {}).get("type", "") if isinstance(doc.get("metadata"), dict) else "")
+                                is_precedent = any(keyword in doc_type.lower() for keyword in ["precedent", "case", "case_paragraph", "판례"])
+                                
+                                # Cross-Encoder 점수가 매우 낮은 경우 (0.1 미만) 원본 점수에 더 높은 가중치 부여
+                                if is_precedent and raw_cross_encoder_score < 0.1:
+                                    # 판례 문서의 경우 Cross-Encoder 점수를 약간 보정 (최소 0.05로 설정)
+                                    adjusted_score = max(0.05, raw_cross_encoder_score * 1.5)
+                                    doc["cross_encoder_score"] = min(1.0, adjusted_score)
+                                    doc["cross_encoder_score_original"] = raw_cross_encoder_score  # 원본 점수 저장
+                                    self.logger.debug(
+                                        f"🔧 [PRECEDENT SCORE ADJUST] 통합 파이프라인에서 판례 문서 점수 보정: "
+                                        f"cross_encoder={raw_cross_encoder_score:.3f} < 0.1, "
+                                        f"adjusted={doc['cross_encoder_score']:.3f}"
+                                    )
+                                else:
+                                    doc["cross_encoder_score"] = raw_cross_encoder_score
+                        
+                        # Cross-Encoder 점수로 정렬
+                        rerank_candidates.sort(
+                            key=lambda x: x.get("cross_encoder_score", 0.0),
+                            reverse=True
+                        )
+                        
+                        # 나머지 문서와 합치기
+                        # 🔥 개선: 딕셔너리 객체 비교 대신 ID 기반 비교로 변경
+                        rerank_candidate_ids = {doc.get("id") or doc.get("chunk_id") or str(id(doc)) for doc in rerank_candidates}
+                        remaining = [d for d in specialized_docs if (d.get("id") or d.get("chunk_id") or str(id(d))) not in rerank_candidate_ids]
+                        cross_encoder_docs = rerank_candidates + remaining
+                except Exception as e:
+                    self.logger.warning(f"Cross-Encoder reranking failed: {e}")
+                    cross_encoder_docs = specialized_docs
         
         # 8. 통합 점수 계산 (사전 계산된 값 사용)
         for doc in cross_encoder_docs:
@@ -2569,14 +3034,95 @@ class ResultRanker:
             )
             doc["final_rerank_score"] = unified_score
         
-        # 9. 최종 정렬
-        final_docs = sorted(
-            cross_encoder_docs,
-            key=lambda x: x.get("final_rerank_score", 0.0),
-            reverse=True
-        )
+        # 🔥 개선: 문서 타입별(테이블별) reranking (law_inquiry인 경우)
+        if query_type == "law_inquiry":
+            # 문서 타입별로 분리
+            statute_docs = []
+            precedent_docs = []
+            other_docs = []
+            
+            for doc in cross_encoder_docs:
+                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                if not doc_type:
+                    # metadata에서 타입 확인
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        doc_type = metadata.get("type", "").lower() if metadata.get("type") else ""
+                
+                if "statute" in doc_type or "법령" in doc_type:
+                    statute_docs.append(doc)
+                elif "precedent" in doc_type or "판례" in doc_type or "case" in doc_type:
+                    precedent_docs.append(doc)
+                else:
+                    other_docs.append(doc)
+            
+            self.logger.info(
+                f"🔍 [TYPE-BASED RERANK] 문서 타입별 분리: "
+                f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개, 기타={len(other_docs)}개"
+            )
+            
+            # 각 타입별로 독립적으로 reranking 수행
+            reranked_by_type = []
+            
+            # 1. 법령 문서 reranking (최소 1개 보장)
+            if statute_docs:
+                statute_reranked = self._rerank_by_type(
+                    statute_docs,
+                    query=query,
+                    extracted_keywords=extracted_keywords,
+                    citation_cache=precomputed["citations"],
+                    keyword_cache=precomputed["keyword_scores"],
+                    min_count=1,  # 최소 1개 보장
+                    max_count=max(1, top_k // 2)  # 최대 top_k의 절반
+                )
+                reranked_by_type.extend(statute_reranked)
+                self.logger.info(
+                    f"✅ [TYPE-BASED RERANK] 법령 문서 reranking 완료: "
+                    f"{len(statute_reranked)}개 선택됨 (전체 {len(statute_docs)}개 중)"
+                )
+            
+            # 2. 판례 문서 reranking (최소 1개 보장)
+            if precedent_docs:
+                precedent_reranked = self._rerank_by_type(
+                    precedent_docs,
+                    query=query,
+                    extracted_keywords=extracted_keywords,
+                    citation_cache=precomputed["citations"],
+                    keyword_cache=precomputed["keyword_scores"],
+                    min_count=1,  # 최소 1개 보장
+                    max_count=max(1, top_k // 2)  # 최대 top_k의 절반
+                )
+                reranked_by_type.extend(precedent_reranked)
+                self.logger.info(
+                    f"✅ [TYPE-BASED RERANK] 판례 문서 reranking 완료: "
+                    f"{len(precedent_reranked)}개 선택됨 (전체 {len(precedent_docs)}개 중)"
+                )
+            
+            # 3. 기타 문서는 점수 순으로 추가 (남은 슬롯만큼)
+            remaining_slots = top_k - len(reranked_by_type)
+            if remaining_slots > 0 and other_docs:
+                other_docs_sorted = sorted(
+                    other_docs,
+                    key=lambda x: x.get("final_rerank_score", 0.0),
+                    reverse=True
+                )
+                reranked_by_type.extend(other_docs_sorted[:remaining_slots])
+            
+            # 타입별 reranking 결과를 최종 문서로 사용
+            final_docs = reranked_by_type
+            # 🔥 개선: 타입별 reranking 후에는 MMR 다양성 보장 스킵 (이미 타입별로 분리되어 있음)
+            use_mmr = False
+        else:
+            # 일반적인 경우 기존 로직 사용
+            # 9. 최종 정렬
+            final_docs = sorted(
+                cross_encoder_docs,
+                key=lambda x: x.get("final_rerank_score", 0.0),
+                reverse=True
+            )
         
         # 10. 다양성 보장 (MMR, 사전 계산된 유사도 행렬 사용)
+        # 🔥 개선: 타입별 reranking 후에는 MMR 스킵 (이미 타입별로 분리되어 있음)
         if use_mmr:
             diverse_docs = self._apply_mmr_diversity_fast(
                 final_docs,
@@ -2594,12 +3140,25 @@ class ResultRanker:
         
         for doc in diverse_docs:
             # 고유 ID 생성 (백업 시와 동일한 방식)
-            doc_id = (
+            # 🔥 개선: doc_id를 항상 문자열로 정규화 (백업 시와 동일한 방식)
+            raw_doc_id = (
                 doc.get("id") or 
                 doc.get("chunk_id") or 
                 doc.get("document_id") or
-                str(hash(str(doc.get("text", "")) + str(doc.get("content", "")) + str(doc.get("source", ""))))
+                None
             )
+            
+            if raw_doc_id is not None:
+                # 정수인 경우 문자열로 변환
+                if isinstance(raw_doc_id, int):
+                    doc_id = str(raw_doc_id)
+                elif not isinstance(raw_doc_id, str):
+                    doc_id = str(raw_doc_id)
+                else:
+                    doc_id = raw_doc_id
+            else:
+                # 해시 기반 ID 생성 (이미 문자열)
+                doc_id = str(hash(str(doc.get("text", "")) + str(doc.get("content", "")) + str(doc.get("source", ""))))
             
             if doc_id and doc_id in metadata_backup:
                 backup = metadata_backup[doc_id]
@@ -2614,12 +3173,35 @@ class ResultRanker:
                     doc["metadata"].update(backup["metadata"])
                 
                 # 최상위 필드 복원 (백업된 값이 있으면 우선 적용)
+                # 🔥 개선: type 필드를 우선적으로 복원
                 for key in ["type", "statute_name", "law_name", "article_no", 
                            "article_number", "clause_no", "item_no", "case_id", "court", 
                            "ccourt", "doc_id", "casenames", "precedent_id", "source", 
                            "source_description", "source_url"]:
                     if backup.get(key) is not None:  # None이 아닌 경우에만 복원
                         doc[key] = backup[key]
+                
+                # 🔥 개선: type이 unknown이면 재추론 시도
+                if doc.get("type", "").lower() == "unknown" or not doc.get("type"):
+                    try:
+                        from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                        doc_type_enum = DocumentType.from_metadata(doc)
+                        if doc_type_enum != DocumentType.UNKNOWN:
+                            doc["type"] = doc_type_enum.value
+                            # 🔥 개선: doc_id가 정수인 경우 문자열로 변환
+                            doc_id_str = str(doc_id) if doc_id else 'unknown'
+                            if isinstance(doc_id_str, str):
+                                doc_id_display = doc_id_str[:20] if len(doc_id_str) > 20 else doc_id_str
+                            else:
+                                doc_id_str_safe = str(doc_id_str) if doc_id_str else 'unknown'
+                                doc_id_display = doc_id_str_safe[:20] if len(doc_id_str_safe) > 20 else doc_id_str_safe
+                            self.logger.debug(
+                                f"🔍 [TYPE RESTORE] 복원 후 타입 재추론 성공: "
+                                f"doc_id={doc_id_display}, "
+                                f"type={doc_type_enum.value}"
+                            )
+                    except Exception as e:
+                        self.logger.debug(f"🔍 [TYPE RESTORE] 타입 재추론 실패: {e}")
                 
                 # 복원된 최상위 필드를 metadata에도 복사 (일관성 유지)
                 if isinstance(doc.get("metadata"), dict):
@@ -2650,6 +3232,27 @@ class ResultRanker:
                                        "case_id", "court", "doc_id", "casenames", "precedent_id"]:
                                 if backup.get(key) is not None:
                                     doc[key] = backup[key]
+                            
+                            # 🔥 개선: type이 unknown이면 재추론 시도
+                            if doc.get("type", "").lower() == "unknown" or not doc.get("type"):
+                                try:
+                                    from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                                    doc_type_enum = DocumentType.from_metadata(doc)
+                                    if doc_type_enum != DocumentType.UNKNOWN:
+                                        doc["type"] = doc_type_enum.value
+                                        # 🔥 개선: doc_id 타입 안전 처리
+                                        if doc_id:
+                                            doc_id_str_safe = str(doc_id) if not isinstance(doc_id, str) else doc_id
+                                            doc_id_display = doc_id_str_safe[:20] if len(doc_id_str_safe) > 20 else doc_id_str_safe
+                                        else:
+                                            doc_id_display = 'unknown'
+                                        self.logger.debug(
+                                            f"🔍 [TYPE RESTORE] 대체 방법으로 복원 후 타입 재추론 성공: "
+                                            f"doc_id={doc_id_display}, "
+                                            f"type={doc_type_enum.value}"
+                                        )
+                                except Exception as e:
+                                    self.logger.debug(f"🔍 [TYPE RESTORE] 타입 재추론 실패: {e}")
                             
                             if isinstance(doc.get("metadata"), dict):
                                 for key in ["type", "statute_name", "law_name", "article_no", 
@@ -2685,6 +3288,28 @@ class ResultRanker:
                 f"has_statute_fields={bool(doc.get('statute_name') or doc.get('law_name') or doc.get('article_no'))}, "
                 f"has_case_fields={bool(doc.get('case_id') or doc.get('court') or doc.get('doc_id'))}"
             )
+        
+        # 🔥 개선: 반환 전 모든 문서의 doc_id를 문자열로 정규화 (타입 안전 처리)
+        for doc in diverse_docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            # doc_id 필드들을 모두 문자열로 변환
+            for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                if id_field in doc and doc[id_field] is not None:
+                    if isinstance(doc[id_field], int):
+                        doc[id_field] = str(doc[id_field])
+                    elif not isinstance(doc[id_field], str):
+                        doc[id_field] = str(doc[id_field])
+            
+            # metadata 내부의 doc_id도 정규화
+            if isinstance(doc.get('metadata'), dict):
+                for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                    if id_field in doc['metadata'] and doc['metadata'][id_field] is not None:
+                        if isinstance(doc['metadata'][id_field], int):
+                            doc['metadata'][id_field] = str(doc['metadata'][id_field])
+                        elif not isinstance(doc['metadata'][id_field], str):
+                            doc['metadata'][id_field] = str(doc['metadata'][id_field])
         
         elapsed_time = time.time() - start_time
         self.logger.info(

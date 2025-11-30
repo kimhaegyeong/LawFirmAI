@@ -21,13 +21,17 @@ except ImportError:
 
 logger = get_logger(__name__)
 
-# FAISS 지원 확인
-try:
-    import faiss
-    FAISS_AVAILABLE = True
-except ImportError:
+# FAISS 지원 확인 (only when VECTOR_SEARCH_METHOD=faiss)
+VECTOR_SEARCH_METHOD = os.getenv("VECTOR_SEARCH_METHOD", "pgvector").lower()
+if VECTOR_SEARCH_METHOD == "faiss":
+    try:
+        import faiss
+        FAISS_AVAILABLE = True
+    except ImportError:
+        FAISS_AVAILABLE = False
+        logger.warning("FAISS not available. Install with: pip install faiss-cpu")
+else:
     FAISS_AVAILABLE = False
-    logger.warning("FAISS not available. Install with: pip install faiss-cpu")
 
 # pgvector 지원 확인
 try:
@@ -204,36 +208,134 @@ class PgVectorAdapter(VectorSearchAdapter):
         
         if filters:
             for key, values in filters.items():
-                if isinstance(values, list):
-                    if len(values) > 0:
-                        # PostgreSQL 배열로 변환하여 ANY 절 사용
-                        where_clauses.append(f"{key} = ANY(%s::int[])")
-                        params.append(values)
+                # 🔥 개선: 리스트 타입 체크 강화 (타입 변환 문제 방지)
+                # psycopg2가 리스트를 배열로 자동 변환하는 문제를 방지하기 위해
+                # 리스트가 아닌 단일 값만 전달하도록 보장
+                if isinstance(values, (list, tuple)):
+                    if len(values) == 0:
+                        # 빈 리스트는 무시
+                        continue
+                    elif len(values) == 1:
+                        # 단일 값은 리스트가 아닌 단일 값으로 처리 (타입 변환 문제 방지)
+                        single_value = values[0]
+                        # 명시적으로 정수로 변환하여 타입 일관성 보장
+                        if isinstance(single_value, (int, float)):
+                            single_value = int(single_value)
+                        where_clauses.append(f"{key} = %s")
+                        params.append(single_value)
+                        logger.debug(f"🔍 [FILTER] {key} = {single_value} (converted from list)")
+                    else:
+                        # 여러 값은 IN 절 사용 (ANY 절 대신)
+                        # IN 절이 타입 변환 문제를 피하는 더 안전한 방법
+                        # 각 값을 명시적으로 정수로 변환하여 타입 일관성 보장
+                        int_values = [int(v) if isinstance(v, (int, float)) else v for v in values]
+                        placeholders = ",".join(["%s"] * len(int_values))
+                        where_clauses.append(f"{key} IN ({placeholders})")
+                        # extend 대신 개별 append로 명시적으로 처리
+                        for val in int_values:
+                            params.append(val)
+                        logger.debug(f"🔍 [FILTER] {key} IN ({placeholders}) with {len(int_values)} values: {int_values[:5]}")
                 else:
+                    # 단일 값도 명시적으로 정수로 변환
+                    if isinstance(values, (int, float)):
+                        int_value = int(values)
+                    else:
+                        int_value = values
                     where_clauses.append(f"{key} = %s")
-                    params.append(values)
+                    params.append(int_value)
+                    logger.debug(f"🔍 [FILTER] {key} = {int_value} (single value)")
         
-        where_clause = ""
-        if where_clauses:
-            where_clause = "WHERE " + " AND ".join(where_clauses)
+        # query_vector를 리스트로 변환 (모든 쿼리 패턴에서 사용)
+        query_vector_list = query_vector.tolist()
         
-        # 코사인 거리 사용 (<=> 연산자)
-        # pgvector의 <=> 연산자는 코사인 거리를 반환 (0에 가까울수록 유사)
-        query = f"""
-            SELECT {self.id_column}, 
-                   {self.vector_column} <=> %s::vector AS distance
-            FROM {self.table_name}
-            {where_clause}
-            ORDER BY distance
-            LIMIT %s
-        """
+        # 🔥 개선: embedding_version 필터가 있는 경우 서브쿼리로 최적화
+        # 벡터 인덱스와 버전 필터를 함께 사용하는 복합 인덱스 활용
+        has_version_filter = filters and 'embedding_version' in filters
         
-        # 파라미터 순서: query_vector, filters..., limit
-        params = [query_vector.tolist()] + params + [limit]
+        if has_version_filter:
+            # embedding_version 필터가 있는 경우: 서브쿼리로 필터링 후 벡터 검색
+            # 이렇게 하면 복합 부분 인덱스(idx_*_vector_version)를 더 효율적으로 사용
+            version_value = filters['embedding_version']
+            # embedding_version 필터를 제외한 나머지 필터
+            other_filters = {k: v for k, v in filters.items() if k != 'embedding_version'}
+            
+            other_where_clauses = []
+            other_params = []
+            if other_filters:
+                for key, values in other_filters.items():
+                    if isinstance(values, (list, tuple)):
+                        if len(values) == 0:
+                            continue
+                        elif len(values) == 1:
+                            single_value = values[0]
+                            if isinstance(single_value, (int, float)):
+                                single_value = int(single_value)
+                            other_where_clauses.append(f"{key} = %s")
+                            other_params.append(single_value)
+                        else:
+                            int_values = [int(v) if isinstance(v, (int, float)) else v for v in values]
+                            placeholders = ",".join(["%s"] * len(int_values))
+                            other_where_clauses.append(f"{key} IN ({placeholders})")
+                            for val in int_values:
+                                other_params.append(val)
+                    else:
+                        if isinstance(values, (int, float)):
+                            int_value = int(values)
+                        else:
+                            int_value = values
+                        other_where_clauses.append(f"{key} = %s")
+                        other_params.append(int_value)
+            
+            other_where = ""
+            if other_where_clauses:
+                other_where = " AND " + " AND ".join(other_where_clauses)
+            
+            # 서브쿼리로 필터링 후 벡터 검색 (인덱스 최적화)
+            query = f"""
+                SELECT {self.id_column}, 
+                       {self.vector_column} <=> %s::vector AS distance
+                FROM (
+                    SELECT {self.id_column}, {self.vector_column}
+                    FROM {self.table_name}
+                    WHERE {self.vector_column} IS NOT NULL 
+                      AND embedding_version = %s
+                      {other_where}
+                ) AS filtered_table
+                ORDER BY {self.vector_column} <=> %s::vector
+                LIMIT %s
+            """
+            # 파라미터 순서: query_vector (SELECT), version, other_params..., query_vector (ORDER BY), limit
+            final_params = [query_vector_list, version_value] + other_params + [query_vector_list, limit]
+        else:
+            # embedding_version 필터가 없는 경우: 기존 방식 사용
+            where_clause = ""
+            if where_clauses:
+                where_clause = "WHERE " + " AND ".join(where_clauses)
+            
+            query = f"""
+                SELECT {self.id_column}, 
+                       {self.vector_column} <=> %s::vector AS distance
+                FROM {self.table_name}
+                {where_clause}
+                ORDER BY {self.vector_column} <=> %s::vector
+                LIMIT %s
+            """
+            final_params = [query_vector_list, query_vector_list] + params + [limit]
+        
+        # 🔥 디버깅: 파라미터 타입 확인
+        logger.debug(f"🔍 [QUERY PARAMS] Total params: {len(final_params)}, "
+                    f"query_vector type: {type(query_vector_list)}, length: {len(query_vector_list)}, "
+                    f"has_version_filter: {has_version_filter}, "
+                    f"filter params types: {[type(p) for p in (other_params if has_version_filter else params)]}, "
+                    f"limit type: {type(limit)}")
+        
+        # 🔥 개선: 성능 모니터링 추가
+        import time
+        search_start = time.time()
         
         cursor = self.connection.cursor()
         try:
-            cursor.execute(query, params)
+            cursor.execute(query, final_params)
             results = []
             for row in cursor.fetchall():
                 # row가 dict인 경우와 tuple인 경우 모두 처리
@@ -245,9 +347,54 @@ class PgVectorAdapter(VectorSearchAdapter):
                     vector_id = row[0]
                     distance = float(row[1])
                 results.append((vector_id, distance))
+            
+            # 🔥 개선: 느린 쿼리 감지 및 로깅
+            search_time = time.time() - search_start
+            if search_time > 0.5:  # 0.5초 이상 소요 시 경고
+                logger.warning(
+                    f"⚠️ [SLOW QUERY] PgVector search took {search_time:.3f}s "
+                    f"(table={self.table_name}, limit={limit}, filters={filters})"
+                )
+            elif search_time > 0.3:  # 0.3초 이상 소요 시 디버그 로그
+                logger.debug(
+                    f"⏱️ [QUERY TIME] PgVector search: {search_time:.3f}s "
+                    f"(table={self.table_name}, limit={limit})"
+                )
+            
             return results
         except Exception as e:
-            logger.error(f"PgVector search error: {e}")
+            search_time = time.time() - search_start
+            # 🔥 개선: 트랜잭션 중단 오류 처리
+            import psycopg2
+            if isinstance(e, psycopg2.errors.InFailedSqlTransaction):
+                # 트랜잭션이 중단된 경우 롤백 후 재시도
+                try:
+                    self.connection.rollback()
+                    logger.warning(f"⚠️ Transaction aborted, rolled back. Retrying query...")
+                    # 재시도
+                    cursor.execute(query, final_params)
+                    results = []
+                    for row in cursor.fetchall():
+                        if isinstance(row, dict):
+                            vector_id = row[self.id_column]
+                            distance = float(row['distance'])
+                        else:
+                            vector_id = row[0]
+                            distance = float(row[1])
+                        results.append((vector_id, distance))
+                    logger.info(f"✅ Query retry successful after rollback")
+                    return results
+                except Exception as retry_error:
+                    logger.error(
+                        f"❌ Query retry failed after rollback: {retry_error} "
+                        f"(table={self.table_name}, limit={limit})"
+                    )
+                    raise
+            
+            logger.error(
+                f"PgVector search error after {search_time:.3f}s: {e} "
+                f"(table={self.table_name}, limit={limit})"
+            )
             raise
     
     def add_vectors(

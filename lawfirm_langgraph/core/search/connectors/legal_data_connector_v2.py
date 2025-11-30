@@ -224,9 +224,8 @@ class LegalDataConnectorV2:
             컬럼 존재 여부
         """
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            try:
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
                 cursor.execute("""
                     SELECT EXISTS (
                         SELECT 1 FROM information_schema.columns 
@@ -238,9 +237,6 @@ class LegalDataConnectorV2:
                 row = cursor.fetchone()
                 result = row[0] if row else False
                 return bool(result)
-            finally:
-                cursor.close()
-                conn.close()
         except Exception as e:
             self.logger.warning(f"Error checking column existence for {table_name}.{column_name}: {e}")
             return False
@@ -363,8 +359,19 @@ class LegalDataConnectorV2:
         Returns:
             정규화된 relevance_score (0.0 ~ 1.0)
         """
+        # 🔥 개선: rank_score >= 1.0인 경우에도 차별화를 위해 로그 스케일 사용
         if rank_score >= 1.0:
-            relevance_score = min(1.0, rank_score)
+            # 로그 스케일을 사용하여 높은 rank_score도 차별화
+            # rank_score가 클수록 relevance_score가 높아지지만, 1.0에 가까워지도록 제한
+            # 예: rank_score=319 → log(319+1) / log(1000) ≈ 0.8
+            import math
+            # 최대 rank_score를 1000으로 가정 (실제 최대값에 따라 조정 가능)
+            max_rank_score = 1000.0
+            # 로그 스케일 정규화: log(rank_score + 1) / log(max_rank_score + 1)
+            log_normalized = math.log(rank_score + 1) / math.log(max_rank_score + 1)
+            # 0.7 ~ 1.0 범위로 매핑 (높은 rank_score도 차별화)
+            relevance_score = 0.7 + (log_normalized * 0.3)
+            relevance_score = min(1.0, max(0.7, relevance_score))
         else:
             relevance_score = max(0.0, min(1.0, rank_score * self.postgresql_normalization_coefficient))
         
@@ -375,7 +382,7 @@ class LegalDataConnectorV2:
                 f"rank_score={rank_score:.6f}, "
                 f"relevance_score={relevance_score:.4f}, "
                 f"coefficient={self.postgresql_normalization_coefficient}, "
-                f"normalized={'no' if rank_score >= 1.0 else 'yes'}"
+                f"normalized={'log_scale' if rank_score >= 1.0 else 'linear'}"
             )
         
         return relevance_score
@@ -389,12 +396,13 @@ class LegalDataConnectorV2:
             with self._db_connection_context() as (conn, cursor):
                 cursor.execute(...)
         """
-        conn = None
+        conn_wrapper = None
         cursor = None
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            yield (conn, cursor)
+            conn_wrapper = self._get_connection()
+            conn = conn_wrapper.conn if hasattr(conn_wrapper, 'conn') else conn_wrapper
+            cursor = conn_wrapper.cursor()
+            yield (conn_wrapper, cursor)
         finally:
             # 리소스 정리
             if cursor:
@@ -402,11 +410,17 @@ class LegalDataConnectorV2:
                     cursor.close()
                 except Exception:
                     pass
-            if conn:
+            # PostgreSQL 연결 풀에 반환
+            if conn_wrapper and self._db_adapter and self._db_adapter.connection_pool:
                 try:
-                    conn.close()  # 연결 풀에 반환
-                except Exception:
-                    pass
+                    if hasattr(conn_wrapper, 'conn'):
+                        if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
+                            self._db_adapter.connection_pool.putconn(conn_wrapper.conn)
+                    else:
+                        if hasattr(conn_wrapper, 'closed') and conn_wrapper.closed == 0:
+                            self._db_adapter.connection_pool.putconn(conn_wrapper)
+                except Exception as e:
+                    self.logger.warning(f"Error returning connection to pool: {e}")
     
     def _build_statute_article_result(self, row: Dict[str, Any], text_content: str, 
                                      relevance_score: float, search_type: str = "keyword",
@@ -783,62 +797,51 @@ class LegalDataConnectorV2:
         Returns:
             실행 계획 정보 딕셔너리 또는 None
         """
-        conn = None
         try:
             safe_query = self._sanitize_tsquery(query)
             if not safe_query:
                 return None
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
 
-            # 테이블별 텍스트 컬럼 매핑
-            # ⚠️ 사용 중단 테이블 제거: case_paragraphs, decision_paragraphs, interpretation_paragraphs
-            # Open Law 스키마 테이블만 사용: statutes_articles, precedent_contents
-            text_column_map = {
-                'statutes_articles': 'article_content',  # Open Law 스키마
-                'precedent_contents': 'section_content',  # Open Law 스키마
-                # 사용 중단: 'case_paragraphs', 'decision_paragraphs', 'interpretation_paragraphs'
-            }
-            
-            text_column = text_column_map.get(table_name, 'text')
-            
-            # PostgreSQL EXPLAIN
-            explain_query = f"""
-                EXPLAIN
-                SELECT id, 
-                       ts_rank_cd(to_tsvector('simple', {text_column}), 
-                                  plainto_tsquery('simple', %s)) as rank_score
-                FROM {table_name}
-                WHERE to_tsvector('simple', {text_column}) @@ plainto_tsquery('simple', %s)
-                ORDER BY rank_score DESC
-                LIMIT 10
-            """
-            cursor.execute(explain_query, (safe_query, safe_query))
-            plan_rows = cursor.fetchall()
-            
-            # 실행 계획 분석
-            plan_info = {
-                "uses_index": any("Index" in str(row) or "GIN" in str(row) for row in plan_rows),
-                "scan_type": "GIN" if any("GIN" in str(row) for row in plan_rows) else "Seq Scan",
-                "plan_detail": [str(row) for row in plan_rows]
-            }
-            
-            self.logger.debug(f"Query plan for '{query[:30]}': {plan_info}")
-            return plan_info
+                # 테이블별 텍스트 컬럼 매핑
+                # ⚠️ 사용 중단 테이블 제거: case_paragraphs, decision_paragraphs, interpretation_paragraphs
+                # Open Law 스키마 테이블만 사용: statutes_articles, precedent_contents
+                text_column_map = {
+                    'statutes_articles': 'article_content',  # Open Law 스키마
+                    'precedent_contents': 'section_content',  # Open Law 스키마
+                    # 사용 중단: 'case_paragraphs', 'decision_paragraphs', 'interpretation_paragraphs'
+                }
+                
+                text_column = text_column_map.get(table_name, 'text')
+                
+                # PostgreSQL EXPLAIN
+                explain_query = f"""
+                    EXPLAIN
+                    SELECT id, 
+                           ts_rank_cd(to_tsvector('simple', {text_column}), 
+                                      plainto_tsquery('simple', %s)) as rank_score
+                    FROM {table_name}
+                    WHERE to_tsvector('simple', {text_column}) @@ plainto_tsquery('simple', %s)
+                    ORDER BY rank_score DESC
+                    LIMIT 10
+                """
+                cursor.execute(explain_query, (safe_query, safe_query))
+                plan_rows = cursor.fetchall()
+                
+                # 실행 계획 분석
+                plan_info = {
+                    "uses_index": any("Index" in str(row) or "GIN" in str(row) for row in plan_rows),
+                    "scan_type": "GIN" if any("GIN" in str(row) for row in plan_rows) else "Seq Scan",
+                    "plan_detail": [str(row) for row in plan_rows]
+                }
+                
+                self.logger.debug(f"Query plan for '{query[:30]}': {plan_info}")
+                return plan_info
         except Exception as e:
             self.logger.debug(f"Error analyzing query plan: {e}")
             return None
-        finally:
-            # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-            try:
-                cursor.close()
-            except Exception:
-                pass
-            try:
-                conn.close()  # 연결 풀에 반환
-            except Exception:
-                pass
 
     def _optimize_tsquery(self, query: str) -> str:
         """
@@ -1242,10 +1245,9 @@ class LegalDataConnectorV2:
                 if plan_info:
                     self.logger.debug(f"Query plan analysis: {plan_info}")
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            try:
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
                 # text_search_vector 컬럼 존재 여부 확인
                 has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
                 
@@ -1310,16 +1312,6 @@ class LegalDataConnectorV2:
                     )
                     if result:
                         results.append(result)
-            finally:
-                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-                try:
-                    conn.close()  # 연결 풀에 반환
-                except Exception:
-                    pass
             
             self.logger.info(f"TSVECTOR search found {len(results)} statute articles for query: '{query}'")
             
@@ -1405,10 +1397,8 @@ class LegalDataConnectorV2:
             
             self.logger.debug(f"조문 번호 형식 변환: '{article_no}' -> variants={article_no_variants}")
             
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            try:
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
                 # 개선 2: 법령명 매칭 로직 강화 (유사도 매칭)
                 # 🔥 수정: PostgreSQL은 %s 플레이스홀더 사용
                 # 🔥 수정: Open Law API 스키마는 law_name_kr, law_abbrv 사용
@@ -1574,16 +1564,6 @@ class LegalDataConnectorV2:
                             "search_type": "direct_statute",
                             "direct_match": True
                         })
-            finally:
-                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-                try:
-                    conn.close()  # 연결 풀에 반환
-                except Exception:
-                    pass
             
             if results:
                 self.logger.info(f"✅ [DIRECT STATUTE SEARCH] {len(results)}개 조문 직접 검색 성공: {law_name} 제{article_no}조")
@@ -1636,10 +1616,8 @@ class LegalDataConnectorV2:
                 fallback_query = f"{law_name} OR {article_no}"
                 self.logger.info(f"Fallback 1: Searching with law name + article: '{fallback_query}'")
                 
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                
-                try:
+                with self._db_adapter.get_connection_context() as conn:
+                    cursor = conn.cursor()
                     # text_search_vector 컬럼 존재 여부 확인
                     has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
                     
@@ -1700,16 +1678,6 @@ class LegalDataConnectorV2:
                             )
                             if result:
                                 fallback_results.append(result)
-                finally:
-                    # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                    try:
-                        cursor.close()
-                    except Exception:
-                        pass
-                    try:
-                        conn.close()  # 연결 풀에 반환
-                    except Exception:
-                        pass
                 
                 if fallback_results:
                     self.logger.info(f"Fallback 1 found {len(fallback_results)} results")
@@ -1734,10 +1702,8 @@ class LegalDataConnectorV2:
                 
                 self.logger.info(f"Fallback 2: Searching with keyword only: '{keyword_query}'")
                 
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                
-                try:
+                with self._db_adapter.get_connection_context() as conn:
+                    cursor = conn.cursor()
                     # text_search_vector 컬럼 존재 여부 확인
                     has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
                     
@@ -1798,16 +1764,6 @@ class LegalDataConnectorV2:
                             )
                             if result:
                                 fallback_results.append(result)
-                finally:
-                    # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                    try:
-                        cursor.close()
-                    except Exception:
-                        pass
-                    try:
-                        conn.close()  # 연결 풀에 반환
-                    except Exception:
-                        pass
                 
                 if fallback_results:
                     self.logger.info(f"Fallback 2 found {len(fallback_results)} results")
@@ -1825,9 +1781,8 @@ class LegalDataConnectorV2:
                     
                     self.logger.info(f"Fallback 3: Searching with article number only: '{fallback_query}'")
                     
-                    conn = self._get_connection()
-                    cursor = conn.cursor()
-                    try:
+                    with self._db_adapter.get_connection_context() as conn:
+                        cursor = conn.cursor()
                         # text_search_vector 컬럼 존재 여부 확인
                         has_text_search_vector = self._check_column_exists('statutes_articles', 'text_search_vector')
                         
@@ -1888,16 +1843,6 @@ class LegalDataConnectorV2:
                                 )
                                 if result:
                                     fallback_results.append(result)
-                    finally:
-                        # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                        try:
-                            cursor.close()
-                        except Exception:
-                            pass
-                        try:
-                            conn.close()  # 연결 풀에 반환
-                        except Exception:
-                            pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback 3 found {len(fallback_results)} results")
@@ -1911,10 +1856,10 @@ class LegalDataConnectorV2:
                         first_word = words[0]
                         if len(first_word) >= 2:  # 최소 2자 이상
                             self.logger.info(f"Trying final fallback: single keyword '{first_word}'")
-                            conn = self._get_connection()
-                            cursor = conn.cursor()
-                            
-                            # 단일 키워드로 간단한 검색 (PostgreSQL tsvector)
+                            with self._db_adapter.get_connection_context() as conn:
+                                cursor = conn.cursor()
+                                
+                                # 단일 키워드로 간단한 검색 (PostgreSQL tsvector)
                             simple_query = f"{first_word}"
                             where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
                                 simple_query,
@@ -2002,9 +1947,8 @@ class LegalDataConnectorV2:
                     keyword_query = " OR ".join(keywords[:5])  # 최대 5개
                     self.logger.info(f"Fallback case search: Using keywords: '{keyword_query}'")
                     
-                    conn = self._get_connection()
-                    cursor = conn.cursor()
-                    try:
+                    with self._db_adapter.get_connection_context() as conn:
+                        cursor = conn.cursor()
                         # text_search_vector 컬럼 존재 여부 확인
                         has_text_search_vector = self._check_column_exists('precedent_contents', 'text_search_vector')
                         
@@ -2076,16 +2020,6 @@ class LegalDataConnectorV2:
                                     "search_type": "keyword",
                                     "fallback_strategy": "keyword_only"
                                 })
-                    finally:
-                        # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                        try:
-                            cursor.close()
-                        except Exception:
-                            pass
-                        try:
-                            conn.close()  # 연결 풀에 반환
-                        except Exception:
-                            pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback case search found {len(fallback_results)} results")
@@ -2104,9 +2038,8 @@ class LegalDataConnectorV2:
                         self.logger.info(f"Fallback case search (strategy 2): Using keywords from original query: '{keyword_query}'")
                         
                         try:
-                            conn = self._get_connection()
-                            cursor = conn.cursor()
-                            try:
+                            with self._db_adapter.get_connection_context() as conn:
+                                cursor = conn.cursor()
                                 # text_search_vector 컬럼 존재 여부 확인
                                 has_text_search_vector = self._check_column_exists('precedent_contents', 'text_search_vector')
                                 
@@ -2181,13 +2114,6 @@ class LegalDataConnectorV2:
                                             "search_type": "keyword",
                                             "fallback_strategy": "original_query_keywords"
                                         })
-                            finally:
-                                # 연결 풀링 사용 시 close() 호출하지 않음
-                                if not self._connection_pool:
-                                    try:
-                                        conn.close()
-                                    except Exception:
-                                        pass
                             
                             if fallback_results:
                                 self.logger.info(f"Fallback case search (strategy 2) found {len(fallback_results)} results")
@@ -2240,10 +2166,9 @@ class LegalDataConnectorV2:
                 if plan_info:
                     self.logger.debug(f"Query plan analysis: {plan_info}")
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            try:
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
                 # PostgreSQL tsvector 쿼리
                 # 주의: precedent_contents (open_law 스키마)는 text_search_vector 컬럼이 없어서 text_content_column 사용
                 where_clause, order_clause, rank_score_expr, tsquery = self._convert_fts5_to_postgresql_fts(
@@ -2316,16 +2241,6 @@ class LegalDataConnectorV2:
                     )
                     if result:
                         results.append(result)
-            finally:
-                # 🔥 수정: DatabaseAdapter는 연결을 close()하면 풀에 반환하므로 항상 close() 호출
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-                try:
-                    conn.close()  # 연결 풀에 반환
-                except Exception:
-                    pass
             
             self.logger.info(f"FTS search found {len(results)} case paragraphs for query: {query}")
             
@@ -2642,6 +2557,8 @@ class LegalDataConnectorV2:
         """
         쿼리 실행 (DatabaseManager 호환성)
         
+        최적화: DatabaseAdapter의 get_connection_context를 사용하여 연결 재사용
+        
         Args:
             query: SQL 쿼리
             params: 쿼리 파라미터
@@ -2649,44 +2566,55 @@ class LegalDataConnectorV2:
         Returns:
             쿼리 결과 리스트
         """
-        conn_wrapper = None
-        conn = None
-        try:
-            conn_wrapper = self._get_connection()
-            conn = conn_wrapper.conn if hasattr(conn_wrapper, 'conn') else conn_wrapper
-            cursor = conn_wrapper.cursor()
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-        except Exception as e:
-            self.logger.error(f"Error executing query: {e}")
-            raise
-        finally:
-            # 연결 풀에 반환 (PostgreSQL 연결 풀 사용 시)
-            if self._db_adapter and self._db_adapter.connection_pool and conn_wrapper:
-                try:
-                    if hasattr(conn_wrapper, 'conn'):
-                        # 연결이 닫혀있지 않은 경우에만 풀에 반환
-                        if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
-                            self._db_adapter.connection_pool.putconn(conn_wrapper.conn)
-                        else:
-                            self.logger.debug("Connection already closed, not returning to pool")
-                    else:
-                        # conn 속성이 없으면 직접 반환 시도
-                        if conn and hasattr(conn, 'closed') and conn.closed == 0:
-                            self._db_adapter.connection_pool.putconn(conn)
-                except Exception as put_error:
-                    self.logger.warning(f"Error returning connection to pool: {put_error}")
-                    # 연결이 손상된 경우 닫기 시도
+        if self._db_adapter:
+            # DatabaseAdapter의 컨텍스트 매니저 사용 (연결 자동 반환)
+            with self._db_adapter.get_connection_context() as conn_wrapper:
+                cursor = conn_wrapper.cursor()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        else:
+            # 하위 호환성: 기존 방식 사용
+            conn_wrapper = None
+            conn = None
+            try:
+                conn_wrapper = self._get_connection()
+                conn = conn_wrapper.conn if hasattr(conn_wrapper, 'conn') else conn_wrapper
+                cursor = conn_wrapper.cursor()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+            except Exception as e:
+                self.logger.error(f"Error executing query: {e}")
+                raise
+            finally:
+                # 연결 풀에 반환 (PostgreSQL 연결 풀 사용 시)
+                if self._db_adapter and self._db_adapter.connection_pool and conn_wrapper:
                     try:
-                        if conn and hasattr(conn, 'close'):
-                            conn.close()
-                    except Exception:
-                        pass
+                        if hasattr(conn_wrapper, 'conn'):
+                            # 연결이 닫혀있지 않은 경우에만 풀에 반환
+                            if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
+                                self._db_adapter.connection_pool.putconn(conn_wrapper.conn)
+                            else:
+                                self.logger.debug("Connection already closed, not returning to pool")
+                        else:
+                            # conn 속성이 없으면 직접 반환 시도
+                            if conn and hasattr(conn, 'closed') and conn.closed == 0:
+                                self._db_adapter.connection_pool.putconn(conn)
+                    except Exception as put_error:
+                        self.logger.warning(f"Error returning connection to pool: {put_error}")
+                        # 연결이 손상된 경우 닫기 시도
+                        try:
+                            if conn and hasattr(conn, 'close'):
+                                conn.close()
+                        except Exception:
+                            pass
 
     def execute_update(self, query: str, params: tuple = ()) -> int:
         """
         업데이트 쿼리 실행 (DatabaseManager 호환성)
+        
+        최적화: DatabaseAdapter의 get_connection_context를 사용하여 연결 재사용
         
         Args:
             query: SQL 쿼리
@@ -2695,45 +2623,55 @@ class LegalDataConnectorV2:
         Returns:
             영향받은 행 수
         """
-        conn_wrapper = None
-        conn = None
-        try:
-            conn_wrapper = self._get_connection()
-            conn = conn_wrapper.conn if hasattr(conn_wrapper, 'conn') else conn_wrapper
-            cursor = conn_wrapper.cursor()
-            cursor.execute(query, params)
-            conn_wrapper.commit()
-            return cursor.rowcount
-        except Exception as e:
-            self.logger.error(f"Error executing update: {e}")
-            if conn_wrapper:
-                try:
-                    conn_wrapper.rollback()
-                except Exception:
-                    pass
-            raise
-        finally:
-            # 연결 풀에 반환 (PostgreSQL 연결 풀 사용 시)
-            if self._db_adapter and self._db_adapter.connection_pool and conn_wrapper:
-                try:
-                    if hasattr(conn_wrapper, 'conn'):
-                        # 연결이 닫혀있지 않은 경우에만 풀에 반환
-                        if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
-                            self._db_adapter.connection_pool.putconn(conn_wrapper.conn)
-                        else:
-                            self.logger.debug("Connection already closed, not returning to pool")
-                    else:
-                        # conn 속성이 없으면 직접 반환 시도
-                        if conn and hasattr(conn, 'closed') and conn.closed == 0:
-                            self._db_adapter.connection_pool.putconn(conn)
-                except Exception as put_error:
-                    self.logger.warning(f"Error returning connection to pool: {put_error}")
-                    # 연결이 손상된 경우 닫기 시도
+        if self._db_adapter:
+            # DatabaseAdapter의 컨텍스트 매니저 사용 (연결 자동 반환, 자동 커밋)
+            with self._db_adapter.get_connection_context() as conn_wrapper:
+                cursor = conn_wrapper.cursor()
+                cursor.execute(query, params)
+                # 컨텍스트 매니저가 자동으로 커밋하지만 명시적으로 커밋
+                conn_wrapper.commit()
+                return cursor.rowcount
+        else:
+            # 하위 호환성: 기존 방식 사용
+            conn_wrapper = None
+            conn = None
+            try:
+                conn_wrapper = self._get_connection()
+                conn = conn_wrapper.conn if hasattr(conn_wrapper, 'conn') else conn_wrapper
+                cursor = conn_wrapper.cursor()
+                cursor.execute(query, params)
+                conn_wrapper.commit()
+                return cursor.rowcount
+            except Exception as e:
+                self.logger.error(f"Error executing update: {e}")
+                if conn_wrapper:
                     try:
-                        if conn and hasattr(conn, 'close'):
-                            conn.close()
+                        conn_wrapper.rollback()
                     except Exception:
                         pass
+                raise
+            finally:
+                # 연결 풀에 반환 (PostgreSQL 연결 풀 사용 시)
+                if self._db_adapter and self._db_adapter.connection_pool and conn_wrapper:
+                    try:
+                        if hasattr(conn_wrapper, 'conn'):
+                            # 연결이 닫혀있지 않은 경우에만 풀에 반환
+                            if hasattr(conn_wrapper, '_is_closed') and not conn_wrapper._is_closed():
+                                self._db_adapter.connection_pool.putconn(conn_wrapper.conn)
+                            else:
+                                self.logger.debug("Connection already closed, not returning to pool")
+                        else:
+                            # conn 속성이 없으면 직접 반환 시도
+                            if conn and hasattr(conn, 'closed') and conn.closed == 0:
+                                self._db_adapter.connection_pool.putconn(conn)
+                    except Exception as put_error:
+                        self.logger.warning(f"Error returning connection to pool: {put_error}")
+                        # 연결이 손상된 경우 닫기 시도
+                        try:
+                            if conn and hasattr(conn, 'close'):
+                                conn.close()
+                        except Exception:
+                            pass
 
     def get_all_categories(self) -> List[str]:
         """도메인 목록 반환 (하위 호환성)"""

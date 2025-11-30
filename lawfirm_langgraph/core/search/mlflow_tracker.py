@@ -56,20 +56,13 @@ class SearchQualityTracker:
                 if env_uri:
                     mlflow.set_tracking_uri(env_uri)
                 else:
-                    # 기본값: 프로젝트 루트의 mlflow/mlruns 사용
+                    # 기본값: SQLite 백엔드 사용 (FutureWarning 해결)
                     from pathlib import Path
                     project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-                    default_mlruns = project_root / "mlflow" / "mlruns"
-                    if default_mlruns.exists():
-                        # Windows 경로를 file:/// 형식으로 변환
-                        default_uri = f"file:///{str(default_mlruns).replace(chr(92), '/')}"
-                        mlflow.set_tracking_uri(default_uri)
-                    else:
-                        # 환경변수나 config에서 읽기
-                        from core.utils.config import Config
-                        config = Config()
-                        if hasattr(config, 'mlflow_tracking_uri') and config.mlflow_tracking_uri:
-                            mlflow.set_tracking_uri(config.mlflow_tracking_uri)
+                    default_db_path = project_root / "mlflow" / "mlflow.db"
+                    default_db_path.parent.mkdir(parents=True, exist_ok=True)
+                    default_uri = f"sqlite:///{str(default_db_path).replace(os.sep, '/')}"
+                    mlflow.set_tracking_uri(default_uri)
             
             mlflow.set_experiment(experiment_name)
             self.logger.info(f"SearchQualityTracker initialized (experiment: {experiment_name})")
