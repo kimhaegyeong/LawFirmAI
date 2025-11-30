@@ -1261,14 +1261,22 @@ class SemanticSearchEngineV2:
             try:
                 run_id = self.mlflow_run_id
                 if not run_id:
-                    run_id = self.mlflow_manager.get_production_run()
+                    mlflow_manager = self._get_mlflow_manager()
+                if mlflow_manager:
+                    run_id = mlflow_manager.get_production_run()
+                else:
+                    run_id = None
                 
                 if run_id:
                     import mlflow
                     version_info = None
                     if hasattr(self.mlflow_manager, 'load_version_info_from_local'):
                         self.logger.debug(f"로컬 파일 시스템에서 version_info.json 로드 시도: run_id={run_id}")
-                        version_info = self.mlflow_manager.load_version_info_from_local(run_id)
+                        mlflow_manager = self._get_mlflow_manager()
+                        if mlflow_manager:
+                            version_info = mlflow_manager.load_version_info_from_local(run_id)
+                        else:
+                            version_info = None
                         if version_info:
                             self.logger.info("✅ 로컬 파일 시스템에서 version_info.json 직접 로드 완료")
                     
@@ -8240,7 +8248,11 @@ class SemanticSearchEngineV2:
             # run_id가 없으면 프로덕션 run 자동 조회
             run_id = self.mlflow_run_id
             if not run_id:
-                run_id = self.mlflow_manager.get_production_run()
+                mlflow_manager = self._get_mlflow_manager()
+                if mlflow_manager:
+                    run_id = mlflow_manager.get_production_run()
+                else:
+                    run_id = None
                 if run_id:
                     self.logger.info(f"Auto-detected production run: {run_id}")
                     self.mlflow_run_id = run_id
@@ -8249,7 +8261,10 @@ class SemanticSearchEngineV2:
             
             # MLflow에서 인덱스 로드
             self.logger.info(f"Attempting to load index from MLflow run: {run_id}")
-            index_data = self.mlflow_manager.load_index(run_id)
+            mlflow_manager = self._get_mlflow_manager()
+            if not mlflow_manager:
+                raise RuntimeError("MLflow manager is not available")
+            index_data = mlflow_manager.load_index(run_id)
             if not index_data:
                 self.logger.error(f"MLflow manager returned None for run {run_id}. Check MLflow logs for details.")
                 raise RuntimeError(f"Failed to load index from MLflow run: {run_id}")
@@ -8311,8 +8326,9 @@ class SemanticSearchEngineV2:
                 self.logger.info(f"📖 MLflow version_info.json 로드 시도: run_id={run_id}")
                 
                 version_info = None
-                if self.mlflow_manager and hasattr(self.mlflow_manager, 'load_version_info_from_local'):
-                    version_info = self.mlflow_manager.load_version_info_from_local(run_id)
+                mlflow_manager = self._get_mlflow_manager()
+                if mlflow_manager and hasattr(mlflow_manager, 'load_version_info_from_local'):
+                    version_info = mlflow_manager.load_version_info_from_local(run_id)
                     if version_info:
                         self.logger.info("✅ 로컬 파일 시스템에서 version_info.json 직접 로드 완료")
                 
