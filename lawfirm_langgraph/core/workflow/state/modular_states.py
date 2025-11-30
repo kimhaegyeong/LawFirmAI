@@ -90,11 +90,14 @@ class AnalysisState(TypedDict):
 # ============================================
 # 5. Answer State - 답변 생성 결과
 # ============================================
-class AnswerState(TypedDict):
+class AnswerState(TypedDict, total=False):
     """답변 및 소스"""
     answer: str
     sources: List[str]
     structure_confidence: float
+    # 구조화된 정보 (새로 추가)
+    document_usage: Optional[List[Dict[str, Any]]]  # DocumentUsageInfo의 dict 형태
+    coverage: Optional[Dict[str, Any]]  # CoverageMetrics의 dict 형태
 
 
 # ============================================
@@ -240,11 +243,13 @@ def create_default_analysis() -> AnalysisState:
 
 def create_default_answer() -> AnswerState:
     """기본 Answer State 생성"""
-    return AnswerState(
-        answer="",
-        sources=[],
-        structure_confidence=0.0
-    )
+    return {
+        "answer": "",
+        "sources": [],
+        "structure_confidence": 0.0,
+        "document_usage": None,
+        "coverage": None
+    }
 
 
 def create_default_document() -> DocumentState:

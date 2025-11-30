@@ -58,9 +58,10 @@ class ClassificationEdges:
             workflow: StateGraph 인스턴스
             use_agentic_mode: Agentic 모드 사용 여부
         """
+        # 🔥 개선: classify_query_simple을 엔트리 포인트로 사용 (2단계 분류)
         if use_agentic_mode and self.route_by_complexity_with_agentic_func:
             workflow.add_conditional_edges(
-                "classify_query_and_complexity",
+                "classify_query_simple",
                 self.route_by_complexity_with_agentic_func,
                 {
                     "ethical_reject": "ethical_rejection",
@@ -71,7 +72,7 @@ class ClassificationEdges:
             )
         elif self.route_by_complexity_func:
             workflow.add_conditional_edges(
-                "classify_query_and_complexity",
+                "classify_query_simple",
                 self.route_by_complexity_func,
                 {
                     "ethical_reject": "ethical_rejection",
@@ -102,4 +103,10 @@ class ClassificationEdges:
         else:
             # 기본 엣지 (문서 분석 없이 바로 검색)
             workflow.add_edge("route_expert", "expand_keywords")
+        
+        # 🔥 개선: 키워드 확장 후 복잡도 재평가 엣지 추가
+        workflow.add_edge("expand_keywords", "classify_complexity_after_keywords")
+        
+        # 🔥 개선: 복잡도 재평가 후 멀티 질의 검색 에이전트로 이동
+        workflow.add_edge("classify_complexity_after_keywords", "multi_query_search_agent")
 

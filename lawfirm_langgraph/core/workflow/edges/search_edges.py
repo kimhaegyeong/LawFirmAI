@@ -58,18 +58,10 @@ class SearchEdges:
         # 문서 분석 후 검색으로
         workflow.add_edge("analyze_document", "expand_keywords")
         
-        # 키워드 확장 후 멀티 질의 에이전트 사용 여부 결정
-        if self.should_use_multi_query_agent_func:
-            workflow.add_conditional_edges(
-                "expand_keywords",
-                self.should_use_multi_query_agent_func,
-                {
-                    "multi_query_agent": "multi_query_search_agent",
-                    "standard_search": "prepare_search_query"
-                }
-            )
-        else:
-            workflow.add_edge("expand_keywords", "prepare_search_query")
+        # 🔥 개선: expand_keywords → classify_complexity_after_keywords → multi_query_search_agent
+        # (classification_edges.py에서 이미 처리하므로 여기서는 제거)
+        # 키워드 확장 후 복잡도 재평가가 먼저 실행되고, 그 후 멀티 질의 에이전트로 이동
+        # 따라서 expand_keywords에서 직접 연결하는 엣지는 제거됨
         
         # 멀티 질의 에이전트 실행 후 결과 처리 노드로 연결 (병합 및 중복 제거를 위해)
         # 노드가 존재하는지 확인 (노드 이름 리스트로 확인)

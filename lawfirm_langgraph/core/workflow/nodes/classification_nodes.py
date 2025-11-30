@@ -73,3 +73,15 @@ class ClassificationNodes:
         if self.workflow:
             return self.workflow.direct_answer_node(state)
         raise RuntimeError("workflow_instance가 설정되지 않았습니다")
+    
+    def classify_query_simple(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """질의 타입만 빠르게 분류 (검색 필터링에 필수)"""
+        if self.workflow:
+            return self.workflow.classify_query_simple(state)
+        raise RuntimeError("workflow_instance가 설정되지 않았습니다")
+    
+    def classify_complexity_after_keywords(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """키워드 확장 결과를 반영하여 복잡도 재평가"""
+        if self.workflow:
+            return self.workflow.classify_complexity_after_keywords(state)
+        raise RuntimeError("workflow_instance가 설정되지 않았습니다")

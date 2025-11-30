@@ -99,7 +99,8 @@ class ModularGraphBuilder:
         self._register_subgraphs(workflow)
         
         # 3. 엔트리 포인트 설정
-        workflow.set_entry_point("classify_query_and_complexity")
+        # 🔥 개선: classify_query_simple을 엔트리 포인트로 변경 (2단계 분류)
+        workflow.set_entry_point("classify_query_simple")
         
         # 4. 엣지 추가
         self._add_edges(workflow)

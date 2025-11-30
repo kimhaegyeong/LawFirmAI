@@ -96,12 +96,15 @@ try:
 except ImportError:
     LANGGRAPH_POSTGRES_AVAILABLE = False
     # 안전한 로깅 사용 (멀티스레딩 안전, 한 번만 출력)
-    # 선택적 기능이므로 INFO 레벨로 변경 (경고가 아닌 정보)
+    # 체크포인트가 활성화된 경우에만 로그 출력 (중복 방지)
     # 모듈 레벨에서는 global 선언 불필요
     if not _checkpoint_warning_logged:
-        _temp_logger = logging.getLogger(__name__)
-        safe_log_info(_temp_logger, "LangGraph PostgreSQL checkpoint not available (optional, checkpoint is disabled by default). Install langgraph-checkpoint-postgres to enable.")
-        _checkpoint_warning_logged = True
+        import os
+        checkpoint_enabled = os.getenv("ENABLE_CHECKPOINT", "false").lower() == "true"
+        if checkpoint_enabled:
+            _temp_logger = logging.getLogger(__name__)
+            safe_log_info(_temp_logger, "LangGraph PostgreSQL checkpoint not available (optional, checkpoint is disabled by default). Install langgraph-checkpoint-postgres to enable.")
+            _checkpoint_warning_logged = True
 
 # DatabaseAdapter import
 try:
@@ -169,15 +172,19 @@ class CheckpointManager:
         
         # LangGraph 사용 가능 여부 확인
         if not LANGGRAPH_AVAILABLE:
-            safe_log_warning(self.logger, "LangGraph checkpoint functionality not available")
+            # 체크포인트가 비활성화된 경우에만 로그 출력 (중복 방지)
+            if storage_type != "disabled":
+                safe_log_debug(self.logger, "LangGraph checkpoint functionality not available")
             # 폴백으로 MemorySaver 시도
             try:
                 from langgraph.checkpoint.memory import MemorySaver
                 self.saver = MemorySaver()
                 self.storage_type = "memory"
-                safe_log_info(self.logger, "Using MemorySaver as fallback (LangGraph not available)")
+                if storage_type != "disabled":
+                    safe_log_info(self.logger, "Using MemorySaver as fallback (LangGraph not available)")
             except ImportError:
-                safe_log_error(self.logger, "No checkpoint functionality available")
+                if storage_type != "disabled":
+                    safe_log_error(self.logger, "No checkpoint functionality available")
             return
         
         # 저장소 타입에 따라 초기화

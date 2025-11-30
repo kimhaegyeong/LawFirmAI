@@ -405,14 +405,73 @@ class MultiQuerySearchAgentNode:
         return queries[:max_queries]
     
     def _get_doc_id(self, result: Dict[str, Any]) -> Optional[str]:
-        """문서 ID 추출"""
-        if isinstance(result, dict):
-            metadata = result.get("metadata", {})
-            return (metadata.get("id") or 
-                   metadata.get("chunk_id") or 
-                   metadata.get("source_id") or
-                   result.get("id") or
-                   result.get("source", ""))
+        """문서 ID 추출 (다양한 문서 타입 지원)"""
+        if not isinstance(result, dict):
+            return None
+        
+        metadata = result.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        
+        # 🔥 개선: 다양한 문서 타입별 ID 추출 (확장 가능)
+        # 판례 문서 ID 추출 (우선순위 높음)
+        precedent_id = metadata.get("precedent_id") or result.get("precedent_id")
+        if precedent_id:
+            # section_id나 chunk_id가 있으면 조합하여 고유 ID 생성
+            section_id = metadata.get("section_id") or result.get("section_id") or metadata.get("id") or result.get("id")
+            if section_id and str(section_id) != str(precedent_id):
+                return f"precedent_{precedent_id}_{section_id}"
+            return f"precedent_{precedent_id}"
+        
+        # 판례 문서의 case_id 또는 doc_id
+        case_id = metadata.get("case_id") or result.get("case_id")
+        doc_id_meta = metadata.get("doc_id") or result.get("doc_id")
+        if case_id or doc_id_meta:
+            case_id_str = str(case_id or doc_id_meta)
+            # section_id가 있으면 조합하여 고유 ID 생성
+            section_id = metadata.get("section_id") or result.get("section_id") or metadata.get("id") or result.get("id")
+            if section_id and str(section_id) != case_id_str:
+                return f"case_{case_id_str}_{section_id}"
+            return f"case_{case_id_str}"
+        
+        # 법령 문서 ID 추출
+        statute_id = metadata.get("statute_id") or result.get("statute_id")
+        if statute_id:
+            statute_id_str = str(statute_id)
+            article_no = metadata.get("article_no") or result.get("article_no")
+            if article_no:
+                return f"statute_{statute_id_str}_{article_no}"
+            return f"statute_{statute_id_str}"
+        
+        # 일반 문서 ID 추출 (기존 로직)
+        # id 필드가 "case_para_"로 시작하는 경우 처리
+        result_id = result.get("id", "")
+        if isinstance(result_id, str) and result_id.startswith("case_para_"):
+            # case_para_123 형식인 경우, precedent_id와 조합
+            if precedent_id:
+                return f"precedent_{precedent_id}_{result_id}"
+            return result_id
+        
+        doc_id = (metadata.get("id") or 
+                 metadata.get("chunk_id") or 
+                 metadata.get("source_id") or
+                 metadata.get("doc_id") or
+                 result.get("id") or
+                 result.get("chunk_id") or
+                 result.get("document_id") or
+                 result.get("doc_id"))
+        
+        if doc_id:
+            return str(doc_id)
+        
+        # 🔥 개선: source와 content 기반 해시 ID 생성 (최후 수단)
+        source = result.get("source", "")
+        content = result.get("content", "") or result.get("text", "")
+        if source and content:
+            import hashlib
+            content_hash = hashlib.md5(f"{source}_{content[:100]}".encode()).hexdigest()[:16]
+            return f"hash_{content_hash}"
+        
         return None
     
     def _merge_and_rerank(self, keyword_results: List[Dict], vector_results: List[Dict], limit: int) -> List[Dict]:
@@ -581,8 +640,9 @@ class MultiQuerySearchAgentNode:
         query_type_lower = query_type.lower()
         
         # 질의 타입별 문서 타입 매핑
+        # 🔥 개선: law_inquiry에도 판례 포함 (법령 질의에도 판례가 유용함)
         type_mapping = {
-            "law_inquiry": ["statute_article"],  # 법령 질의 → 법령 조문만 검색
+            "law_inquiry": ["statute_article", "precedent_content"],  # 법령 질의 → 법령 조문 + 판례 검색
             "precedent_search": ["precedent_content"],  # 판례 검색 → 판례만 검색
             "general_question": None,  # 일반 질의 → 모든 타입 검색
             "legal_advice": None,  # 법률 조언 → 모든 타입 검색
@@ -685,9 +745,59 @@ class MultiQuerySearchAgentNode:
             all_results = []
             seen_doc_ids = set()
             
+            # 🔥 개선: 타입별 최소 문서 수 보장 (확장 가능한 구조)
+            # source_types가 지정된 경우 각 타입별 최소 문서 수 보장
+            type_min_counts = {}
+            if source_types:
+                # 각 타입별 최소 2-3개 문서 보장 (law_inquiry의 경우 판례도 포함)
+                for doc_type in source_types:
+                    if doc_type == "statute_article":
+                        type_min_counts[doc_type] = 3  # 법령은 최소 3개
+                    elif doc_type == "precedent_content":
+                        type_min_counts[doc_type] = 2  # 판례는 최소 2개
+                    else:
+                        type_min_counts[doc_type] = 2  # 기타 타입은 최소 2개
+            else:
+                # source_types가 없으면 전체 최소 10개
+                type_min_counts = {"all": 10}
+            
             # 🔥 최적화 1: 동적 타임아웃 및 조기 종료
             min_results_needed = 10  # 최소 필요 결과 수
-            max_results_target = 20  # 목표 최대 결과 수
+            max_results_target = 30  # 목표 최대 결과 수 (타입별 보장을 위해 증가)
+            
+            def _get_doc_type(result: Dict[str, Any]) -> str:
+                """문서 타입 추출 (확장 가능)"""
+                doc_type = result.get("type", "").lower()
+                if not doc_type or doc_type == "unknown":
+                    metadata = result.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        doc_type = metadata.get("type", "").lower()
+                # 타입 정규화
+                if "precedent" in doc_type or "case" in doc_type or "판례" in doc_type:
+                    return "precedent_content"
+                elif "statute" in doc_type or "article" in doc_type or "법령" in doc_type or "조문" in doc_type:
+                    return "statute_article"
+                return doc_type or "unknown"
+            
+            def _check_type_requirements_met(results: List[Dict], type_min_counts: Dict[str, int]) -> bool:
+                """타입별 최소 문서 수 요구사항 충족 여부 확인"""
+                if not type_min_counts:
+                    return True
+                
+                type_counts = {}
+                for result in results:
+                    doc_type = _get_doc_type(result)
+                    type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+                
+                # "all" 키가 있으면 전체 개수만 확인
+                if "all" in type_min_counts:
+                    return len(results) >= type_min_counts["all"]
+                
+                # 각 타입별 최소 개수 확인
+                for doc_type, min_count in type_min_counts.items():
+                    if type_counts.get(doc_type, 0) < min_count:
+                        return False
+                return True
             
             with ThreadPoolExecutor(max_workers=6) as executor:
                 futures = []
@@ -710,10 +820,19 @@ class MultiQuerySearchAgentNode:
                         # 🔥 최적화: 벡터 검색은 8초 타임아웃
                         futures.append(("vector", sub_query, vector_future, 8.0))
                 
-                # 🔥 최적화 2: 조기 종료 로직 적용
+                # 🔥 개선: 조기 종료 로직 - 타입별 최소 문서 수 보장
+                # 타입별 요구사항이 있는 경우 모든 futures가 완료될 때까지 기다림
+                completed_futures = set()
+                has_type_requirements = bool(type_min_counts and "all" not in type_min_counts)
+                
                 for search_type, sub_query, future, timeout in futures:
+                    if future in completed_futures:
+                        continue
+                    
                     try:
                         results = future.result(timeout=timeout)
+                        completed_futures.add(future)
+                        
                         for result in results:
                             doc_id = self._get_doc_id(result)
                             if doc_id and doc_id not in seen_doc_ids:
@@ -722,23 +841,137 @@ class MultiQuerySearchAgentNode:
                                 result["search_type"] = search_type
                                 result["original_query"] = query
                                 all_results.append(result)
-                                
-                                # 🔥 최적화 3: 충분한 결과 수집 시 조기 종료
-                                if len(all_results) >= max_results_target:
-                                    # 나머지 futures 취소
-                                    for _, _, f, _ in futures:
-                                        if not f.done():
-                                            f.cancel()
-                                    self.logger.debug(f"✅ [MULTI-QUERY] 조기 종료: {len(all_results)}개 결과 수집 완료")
-                                    break
+                        
+                        # 🔥 개선: 타입별 요구사항이 없거나 충족된 경우에만 조기 종료
+                        if not has_type_requirements:
+                            # 타입별 요구사항이 없으면 기존 로직 사용
+                            if len(all_results) >= max_results_target:
+                                # 나머지 futures 취소
+                                for _, _, f, _ in futures:
+                                    if f not in completed_futures and not f.done():
+                                        f.cancel()
+                                self.logger.debug(
+                                    f"✅ [MULTI-QUERY] 조기 종료: {len(all_results)}개 결과 수집 완료 "
+                                    f"(최대 결과 수 도달)"
+                                )
+                                break
+                        else:
+                            # 타입별 요구사항이 있으면 충족 여부 확인
+                            if len(all_results) >= min_results_needed:
+                                if _check_type_requirements_met(all_results, type_min_counts):
+                                    # 타입별 요구사항 충족 + 최대 결과 수 도달 시 조기 종료
+                                    if len(all_results) >= max_results_target:
+                                        # 나머지 futures 취소
+                                        for _, _, f, _ in futures:
+                                            if f not in completed_futures and not f.done():
+                                                f.cancel()
+                                        type_distribution = {}
+                                        for r in all_results:
+                                            doc_type = _get_doc_type(r)
+                                            type_distribution[doc_type] = type_distribution.get(doc_type, 0) + 1
+                                        self.logger.debug(
+                                            f"✅ [MULTI-QUERY] 조기 종료: {len(all_results)}개 결과 수집 완료 "
+                                            f"(타입 분포: {type_distribution}, 요구사항 충족)"
+                                        )
+                                        break
                     except TimeoutError:
+                        completed_futures.add(future)
                         self.logger.warning(f"⚠️ [MULTI-QUERY] Search timeout for '{sub_query}' ({search_type}, timeout: {timeout}s)")
                     except Exception as e:
+                        completed_futures.add(future)
                         self.logger.warning(f"⚠️ [MULTI-QUERY] Search failed for '{sub_query}': {e}")
                     
                     # 조기 종료 체크 (외부 루프에서도)
-                    if len(all_results) >= max_results_target:
-                        break
+                    if not has_type_requirements:
+                        if len(all_results) >= max_results_target:
+                            break
+                    else:
+                        if len(all_results) >= min_results_needed:
+                            if _check_type_requirements_met(all_results, type_min_counts):
+                                if len(all_results) >= max_results_target:
+                                    break
+                
+                # 🔥 개선: 타입별 최소 문서 수 보장 (부족한 경우 추가 검색)
+                if type_min_counts and not _check_type_requirements_met(all_results, type_min_counts):
+                    type_counts = {}
+                    for result in all_results:
+                        doc_type = _get_doc_type(result)
+                        type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+                    
+                    missing_types = []
+                    for doc_type, min_count in type_min_counts.items():
+                        if doc_type != "all" and type_counts.get(doc_type, 0) < min_count:
+                            missing_count = min_count - type_counts.get(doc_type, 0)
+                            missing_types.append((doc_type, missing_count))
+                    
+                    if missing_types:
+                        self.logger.debug(
+                            f"⚠️ [MULTI-QUERY] 타입별 최소 문서 수 부족: {type_counts}, "
+                            f"부족한 타입: {missing_types}"
+                        )
+                        
+                        # 🔥 개선: 부족한 타입에 대해 추가 검색 수행
+                        for missing_type, needed_count in missing_types:
+                            try:
+                                if missing_type == "precedent_content":
+                                    # 판례 추가 검색
+                                    additional_results = self.keyword_search.search_cases_fts(query, limit=needed_count * 2)
+                                    added_count = 0
+                                    for result in additional_results:
+                                        doc_id = self._get_doc_id(result)
+                                        if doc_id and doc_id not in seen_doc_ids:
+                                            seen_doc_ids.add(doc_id)
+                                            result["sub_query"] = query
+                                            result["search_type"] = "keyword"
+                                            result["original_query"] = query
+                                            all_results.append(result)
+                                            added_count += 1
+                                            if added_count >= needed_count:
+                                                break
+                                    if added_count > 0:
+                                        self.logger.debug(
+                                            f"✅ [MULTI-QUERY] 판례 추가 검색 완료: {added_count}개 추가 "
+                                            f"(필요: {needed_count}개)"
+                                        )
+                                elif missing_type == "statute_article":
+                                    # 법령 추가 검색
+                                    additional_results = self.keyword_search.search_statutes_fts(query, limit=needed_count * 2)
+                                    added_count = 0
+                                    for result in additional_results:
+                                        doc_id = self._get_doc_id(result)
+                                        if doc_id and doc_id not in seen_doc_ids:
+                                            seen_doc_ids.add(doc_id)
+                                            result["sub_query"] = query
+                                            result["search_type"] = "keyword"
+                                            result["original_query"] = query
+                                            all_results.append(result)
+                                            added_count += 1
+                                            if added_count >= needed_count:
+                                                break
+                                    if added_count > 0:
+                                        self.logger.debug(
+                                            f"✅ [MULTI-QUERY] 법령 추가 검색 완료: {added_count}개 추가 "
+                                            f"(필요: {needed_count}개)"
+                                        )
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"⚠️ [MULTI-QUERY] {missing_type} 추가 검색 실패: {e}"
+                                )
+                        
+                        # 추가 검색 후 타입 분포 재확인
+                        final_type_counts = {}
+                        for result in all_results:
+                            doc_type = _get_doc_type(result)
+                            final_type_counts[doc_type] = final_type_counts.get(doc_type, 0) + 1
+                        
+                        if _check_type_requirements_met(all_results, type_min_counts):
+                            self.logger.debug(
+                                f"✅ [MULTI-QUERY] 타입별 최소 문서 수 충족: {final_type_counts}"
+                            )
+                        else:
+                            self.logger.warning(
+                                f"⚠️ [MULTI-QUERY] 추가 검색 후에도 타입별 최소 문서 수 부족: {final_type_counts}"
+                            )
             
             # 🔥 최적화 4: 리랭킹 최적화 (상위 N개만 리랭킹)
             if len(all_results) > 20:
