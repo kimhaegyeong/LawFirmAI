@@ -100,6 +100,49 @@ def normalize_document_type(doc: Dict[str, Any]) -> Dict[str, Any]:
                     f"doc_keys={list(doc.keys())[:15]}, "
                     f"metadata_keys={list(doc.get('metadata', {}).keys())[:15] if isinstance(doc.get('metadata'), dict) else []}"
                 )
+            else:
+                # 🔥 개선: DocumentType.from_metadata 실패 시 추가 추론 시도
+                # 법령/판례 관련 필드 직접 확인
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    # 법령 필드 확인 (statute_name, law_name, article_no, statute_id 등)
+                    if any(key in metadata and metadata[key] for key in ["statute_name", "law_name", "law_name_kr", "article_no", "article_number", "statute_id"]):
+                        collected_type = DocumentType.STATUTE_ARTICLE.value
+                        from lawfirm_langgraph.core.utils.logger import get_logger
+                        logger = get_logger(__name__)
+                        logger.debug(
+                            f"[normalize_document_type] ✅ 법령 필드 기반 타입 추론 성공: "
+                            f"doc_type={collected_type}"
+                        )
+                    # 판례 필드 확인 (precedent_id, case_id, court, doc_id 등)
+                    elif any(key in metadata and metadata[key] for key in ["precedent_id", "case_id", "court", "court_name", "ccourt", "casenames", "case_name", "doc_id", "case_number"]):
+                        collected_type = DocumentType.PRECEDENT_CONTENT.value
+                        from lawfirm_langgraph.core.utils.logger import get_logger
+                        logger = get_logger(__name__)
+                        logger.debug(
+                            f"[normalize_document_type] ✅ 판례 필드 기반 타입 추론 성공: "
+                            f"doc_type={collected_type}"
+                        )
+                    # 최상위 레벨 필드도 확인
+                    else:
+                        # 법령 필드 확인 (최상위 레벨)
+                        if any(doc.get(key) for key in ["statute_name", "law_name", "law_name_kr", "article_no", "article_number", "statute_id"]):
+                            collected_type = DocumentType.STATUTE_ARTICLE.value
+                            from lawfirm_langgraph.core.utils.logger import get_logger
+                            logger = get_logger(__name__)
+                            logger.debug(
+                                f"[normalize_document_type] ✅ 최상위 레벨 법령 필드 기반 타입 추론 성공: "
+                                f"doc_type={collected_type}"
+                            )
+                        # 판례 필드 확인 (최상위 레벨)
+                        elif any(doc.get(key) for key in ["precedent_id", "case_id", "court", "court_name", "ccourt", "casenames", "case_name", "doc_id", "case_number"]):
+                            collected_type = DocumentType.PRECEDENT_CONTENT.value
+                            from lawfirm_langgraph.core.utils.logger import get_logger
+                            logger = get_logger(__name__)
+                            logger.debug(
+                                f"[normalize_document_type] ✅ 최상위 레벨 판례 필드 기반 타입 추론 성공: "
+                                f"doc_type={collected_type}"
+                            )
         except (ImportError, AttributeError) as e:
             from lawfirm_langgraph.core.utils.logger import get_logger
             logger = get_logger(__name__)

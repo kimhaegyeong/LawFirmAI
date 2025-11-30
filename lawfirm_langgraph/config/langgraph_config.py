@@ -17,61 +17,74 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
-# 환경 변수 로드 (중앙 집중식 로더 사용)
+# 환경 변수 로드 상태 추적 변수
+_env_loaded = False
+
+# 환경 변수 로드 (중앙 집중식 로더 사용, 중복 로드 방지)
 # 프로젝트 루트의 .env 파일을 우선적으로 로드
-try:
-    # 프로젝트 루트 찾기: lawfirm_langgraph/config/ -> lawfirm_langgraph/ -> 프로젝트 루트
-    _langgraph_dir = Path(__file__).parent.parent
-    _project_root = _langgraph_dir.parent
+def _load_env_once():
+    """환경 변수를 한 번만 로드 (중복 방지)"""
+    global _env_loaded
+    if _env_loaded:
+        return
     
-    # 공통 로더 사용 (프로젝트 루트 .env 파일 우선 로드)
     try:
-        import sys
-        if str(_project_root) not in sys.path:
-            sys.path.insert(0, str(_project_root))
-        from utils.env_loader import ensure_env_loaded, load_all_env_files
+        # 프로젝트 루트 찾기: lawfirm_langgraph/config/ -> lawfirm_langgraph/ -> 프로젝트 루트
+        _langgraph_dir = Path(__file__).parent.parent
+        _project_root = _langgraph_dir.parent
         
-        # 프로젝트 루트 .env 파일 명시적으로 로드 (중복 방지)
-        ensure_env_loaded(_project_root)
-        # load_all_env_files는 ensure_env_loaded 내부에서 호출되므로 중복 호출 방지
-        # loaded_files = load_all_env_files(_project_root)  # 중복 호출 제거
-    except ImportError:
-        # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
-        root_env = _project_root / ".env"
-        langgraph_env = _langgraph_dir / ".env"
-        
-        # 프로젝트 루트 .env 먼저 로드
-        if root_env.exists():
-            load_dotenv(dotenv_path=str(root_env), override=False)
-        
-        # lawfirm_langgraph/.env 로드 (덮어쓰기)
-        if langgraph_env.exists():
-            load_dotenv(dotenv_path=str(langgraph_env), override=True)
-except Exception as e:
-    # 모든 방법이 실패하면 기존 방식으로 fallback
-    _langgraph_dir = Path(__file__).parent.parent
-    _project_root = _langgraph_dir.parent
-    
-    # 프로젝트 루트 .env 시도
-    root_env = _project_root / ".env"
-    if root_env.exists():
+        # 공통 로더 사용 (프로젝트 루트 .env 파일 우선 로드)
         try:
-            load_dotenv(dotenv_path=str(root_env), override=False)
+            import sys
+            if str(_project_root) not in sys.path:
+                sys.path.insert(0, str(_project_root))
+            from utils.env_loader import ensure_env_loaded
+            
+            # 프로젝트 루트 .env 파일 명시적으로 로드 (중복 방지)
+            ensure_env_loaded(_project_root)
+        except ImportError:
+            # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
+            root_env = _project_root / ".env"
+            langgraph_env = _langgraph_dir / ".env"
+            
+            # 프로젝트 루트 .env 먼저 로드
+            if root_env.exists():
+                load_dotenv(dotenv_path=str(root_env), override=False)
+            
+            # lawfirm_langgraph/.env 로드 (덮어쓰기)
+            if langgraph_env.exists():
+                load_dotenv(dotenv_path=str(langgraph_env), override=True)
+        
+        _env_loaded = True
+    except Exception as e:
+        # 모든 방법이 실패하면 기존 방식으로 fallback
+        try:
+            _langgraph_dir = Path(__file__).parent.parent
+            _project_root = _langgraph_dir.parent
+            
+            # 프로젝트 루트 .env 시도
+            root_env = _project_root / ".env"
+            if root_env.exists():
+                load_dotenv(dotenv_path=str(root_env), override=False)
+            
+            # lawfirm_langgraph/.env 시도
+            _env_file = _langgraph_dir / ".env"
+            if _env_file.exists():
+                load_dotenv(dotenv_path=str(_env_file), override=True)
+            
+            _env_loaded = True
         except Exception:
             pass
-    
-    # lawfirm_langgraph/.env 시도
-    _env_file = _langgraph_dir / ".env"
-    if _env_file.exists():
-        try:
-            load_dotenv(dotenv_path=str(_env_file), override=True)
-        except Exception:
-            pass
+
+# 모듈 로드 시 환경 변수 로드 (한 번만)
+_load_env_once()
 
 logger = get_logger(__name__)
 
 # 설정 캐시 (싱글톤)
 _cached_config: Optional['LangGraphConfig'] = None
+# 환경 변수 로드 상태 추적 (중복 로드 방지)
+_env_loaded: bool = False
 
 
 class CheckpointStorageType(Enum):
@@ -173,6 +186,9 @@ class LangGraphConfig:
             # 캐시에서 재사용 시 DEBUG 레벨로만 로그 출력 (중복 방지)
             logger.debug("LangGraphConfig reused from cache")
             return _cached_config
+        
+        # 환경 변수 로드 (한 번만)
+        _load_env_once()
         
         # 최초 로드 시에만 로그 출력
         logger.debug("LangGraphConfig loading from environment...")

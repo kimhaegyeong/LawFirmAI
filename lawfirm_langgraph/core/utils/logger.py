@@ -139,6 +139,14 @@ def configure_global_logging(log_level: Optional[str] = None) -> None:
                 logger.propagate = False
             except (ValueError, AttributeError, RuntimeError):
                 pass
+        
+        # asyncio 로거는 TRACE 레벨로 설정 (proactor 로그 과다 방지)
+        try:
+            asyncio_logger = logging.getLogger("asyncio")
+            asyncio_logger.setLevel(logging.TRACE)
+            asyncio_logger.propagate = False
+        except (ValueError, AttributeError, RuntimeError):
+            pass
 
 
 def setup_logging(config: Optional[Config] = None) -> None:
