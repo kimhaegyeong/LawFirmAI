@@ -53,9 +53,10 @@ class MLflowFAISSManager:
         else:
             tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
             if not tracking_uri:
-                default_path = project_root / "mlflow" / "mlruns"
-                default_path.mkdir(parents=True, exist_ok=True)
-                tracking_uri = f"file:///{str(default_path).replace(os.sep, '/')}"
+                # SQLite 백엔드 사용 (FutureWarning 해결)
+                default_db_path = project_root / "mlflow" / "mlflow.db"
+                default_db_path.parent.mkdir(parents=True, exist_ok=True)
+                tracking_uri = f"sqlite:///{str(default_db_path).replace(os.sep, '/')}"
             mlflow.set_tracking_uri(tracking_uri)
         
         self.tracking_uri = mlflow.get_tracking_uri()
@@ -98,11 +99,20 @@ class MLflowFAISSManager:
             logger.info(f"Using existing MLflow experiment: {experiment_name} (id: {self.experiment_id})")
     
     def _is_local_filesystem(self) -> bool:
-        """로컬 파일 시스템인지 확인"""
-        return self.tracking_uri.startswith("file://")
+        """로컬 파일 시스템인지 확인 (SQLite 포함)"""
+        return self.tracking_uri.startswith("file://") or self.tracking_uri.startswith("sqlite://")
     
     def _get_local_base_path(self) -> Path:
         """로컬 파일 시스템의 기본 경로 반환"""
+        # SQLite 백엔드인 경우
+        if self.tracking_uri.startswith("sqlite:///"):
+            uri_path = self.tracking_uri.replace("sqlite:///", "")
+            return Path(uri_path).parent
+        elif self.tracking_uri.startswith("sqlite://"):
+            uri_path = self.tracking_uri.replace("sqlite://", "")
+            return Path(uri_path).parent
+        
+        # 파일 시스템 백엔드인 경우
         uri_path = self.tracking_uri.replace("file://", "").replace("file:///", "")
         
         if os.name == 'nt':

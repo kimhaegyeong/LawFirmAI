@@ -95,10 +95,12 @@ def load_mlflow_index(run_id: Optional[str] = None) -> Tuple[Optional[faiss.Inde
         return load_mlflow_index_via_engine(run_id)
     
     try:
-        # MLflow tracking URI 설정
-        mlflow_uri = str(project_root / "mlflow" / "mlruns")
-        os.environ['MLFLOW_TRACKING_URI'] = f"file:///{mlflow_uri.replace(chr(92), '/')}"
-        mlflow.set_tracking_uri(os.environ['MLFLOW_TRACKING_URI'])
+        # MLflow tracking URI 설정 (SQLite 백엔드 사용)
+        mlflow_db_path = project_root / "mlflow" / "mlflow.db"
+        mlflow_db_path.parent.mkdir(parents=True, exist_ok=True)
+        mlflow_uri = f"sqlite:///{str(mlflow_db_path).replace(os.sep, '/')}"
+        os.environ['MLFLOW_TRACKING_URI'] = mlflow_uri
+        mlflow.set_tracking_uri(mlflow_uri)
         
         # run_id가 없으면 프로덕션 run 찾기, 없으면 최근 run 사용
         if not run_id:

@@ -44,6 +44,19 @@ class ExperimentComparator:
         
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
+        else:
+            # 환경 변수 확인
+            import os
+            env_uri = os.getenv("MLFLOW_TRACKING_URI")
+            if env_uri:
+                mlflow.set_tracking_uri(env_uri)
+            else:
+                # SQLite 백엔드 사용 (FutureWarning 해결)
+                default_db_path = project_root / "mlflow" / "mlflow.db"
+                default_db_path.parent.mkdir(parents=True, exist_ok=True)
+                default_uri = f"sqlite:///{str(default_db_path).replace(os.sep, '/')}"
+                mlflow.set_tracking_uri(default_uri)
+                logger.info(f"✅ Using SQLite backend: {default_uri}")
         
         self.experiment_name = experiment_name
         experiment = mlflow.get_experiment_by_name(experiment_name)
