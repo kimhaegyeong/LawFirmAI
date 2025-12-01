@@ -402,7 +402,19 @@ class UnifiedPromptManager:
                 )
 
             # 6. 최종 프롬프트 구성
-            final_prompt = self._build_final_prompt(base_prompt, query, context, question_type)
+            # 🔥 개선: final_prompt 초기화 보장
+            final_prompt = None
+            try:
+                final_prompt = self._build_final_prompt(base_prompt, query, context, question_type)
+            except Exception as build_error:
+                logger.error(f"Error building final prompt: {build_error}")
+                # fallback 프롬프트 사용
+                final_prompt = self._get_fallback_prompt(query)
+            
+            # final_prompt가 여전히 None이면 fallback 사용
+            if final_prompt is None:
+                logger.warning("⚠️ [PROMPT BUILD] final_prompt is None, using fallback")
+                final_prompt = self._get_fallback_prompt(query)
 
             # 7. 토큰 수 최종 검증
             final_tokens = self._estimate_tokens(final_prompt)
@@ -1063,6 +1075,17 @@ class UnifiedPromptManager:
 
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
         """최종 프롬프트 구성 - 토큰 제한 적용"""
+        
+        # 🔥 스트리밍 모드 확인 (context 또는 metadata에서)
+        is_streaming = context.get("is_streaming", False) or context.get("metadata", {}).get("streaming_mode", False)
+        
+        # 🔥 스트리밍 모드 확인 (context 또는 metadata에서)
+        is_streaming = context.get("is_streaming", False) or (
+            isinstance(context.get("metadata"), dict) and context.get("metadata", {}).get("streaming_mode", False)
+        )
+        
+        # 🔥 개선: final_prompt 초기화 보장
+        final_prompt = ""
         
         # 토큰 제한 계산
         MAX_SAFE_TOKENS = int(self.MAX_INPUT_TOKENS * (1 - self.SAFE_MARGIN))  # 약 943,718 토큰
@@ -1962,8 +1985,94 @@ class UnifiedPromptManager:
 ---
 """
             
-            # 🔥 개선: Few-shot 예시 추가 (문단 끝 인용 방식)
-            few_shot_example = f"""## 📋 답변 형식 예시 (반드시 이 형식을 정확히 따르세요)
+            # 🔥 개선: Few-shot 예시 추가 (스트리밍 모드에 따라 분기)
+            # 스트리밍 모드 확인 (context에서)
+            is_streaming = context.get("is_streaming", False) or (
+                isinstance(context.get("metadata"), dict) and context.get("metadata", {}).get("streaming_mode", False)
+            )
+            
+            if is_streaming:
+                # 스트리밍 모드: [END] 키워드 사용, 표 제거
+                few_shot_example = f"""## 📋 답변 형식 예시 (반드시 이 형식을 정확히 따르세요)
+
+**질문**: 계약 해지 사유에 대해 알려주세요
+
+**검색된 문서**:
+- [문서 1] 대법원 부당이득금 (2020다231928): 계약의 불성립, 취소, 무효, 해제 등이 법률상의 원인 없는 사유로 주장 가능
+- [문서 2] 대법원 부당이득금 (2020다231928): 계약 해제는 유효하게 성립된 계약의 효력을 소급적으로 소멸
+- [문서 3] 수원지방법원 건물인도 (2021다257255): 임대차계약 종료 사례
+
+**답변** (반드시 이 형식을 따르세요):
+계약 해지는 다음과 같은 사유로 가능합니다.
+
+부당이득반환청구에서 법률상의 원인 없는 사유를 계약의 불성립, 취소, 무효, 해제 등으로 주장할 수 있습니다. [문서 1]
+
+계약의 해제는 유효하게 성립된 계약의 효력을 당사자 일방의 의사표시에 의해 소급적으로 소멸시키는 것을 의미합니다. [문서 2]
+
+임대차계약 사례에서도 확인할 수 있듯이, 계약 종료는 다양한 방식으로 이루어질 수 있습니다. [문서 3]
+
+[END]
+
+<metadata>
+{{
+    "document_usage": [
+        {{
+            "document_number": 1,
+            "source": "대법원 부당이득금 (2020다231928)",
+            "source_type": "precedent_content",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [150],
+            "usage_rationale": "계약의 불성립, 취소, 무효, 해제 등이 법률상의 원인 없는 사유로 주장 가능"
+        }},
+        {{
+            "document_number": 2,
+            "source": "대법원 부당이득금 (2020다231928)",
+            "source_type": "precedent_content",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [300],
+            "usage_rationale": "계약 해제는 유효하게 성립된 계약의 효력을 소급적으로 소멸"
+        }},
+        {{
+            "document_number": 3,
+            "source": "수원지방법원 건물인도 (2021다257255)",
+            "source_type": "precedent_content",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [450],
+            "usage_rationale": "임대차계약 종료 사례"
+        }}
+    ],
+    "coverage": {{
+        "keyword_coverage": 0.85,
+        "keyword_total": 20,
+        "keyword_matched": 17,
+        "citation_coverage": 1.0,
+        "citation_count": 3,
+        "citation_expected": 3,
+        "document_usage_rate": 1.0,
+        "documents_used": 3,
+        "documents_total": 3,
+        "documents_min_required": 2,
+        "overall_coverage": 0.90
+    }}
+}}
+</metadata>
+
+**⚠️ 중요**: 위 예시처럼:
+1. 답변 본문을 먼저 작성하고
+2. 문단 끝에 `[문서 N]`을 배치하세요
+3. 답변 본문이 끝나면 반드시 `[END]` 키워드를 작성하세요
+4. `[END]` 이후에 `<metadata>` 태그만 작성하세요 (문서 근거 섹션은 작성하지 마세요)
+5. `document_usage`의 각 항목에 `source`와 `usage_rationale`을 포함하세요 (이 정보로 문서 근거 목록이 자동 생성됩니다)
+6. 최소 {min_citations}개 이상의 문서를 반드시 인용하세요
+
+---
+"""
+            else:
+                # 일반 모드: 기존 예시 유지 (표 포함)
+                few_shot_example = f"""## 📋 답변 형식 예시 (반드시 이 형식을 정확히 따르세요)
 
 **질문**: 계약 해지 사유에 대해 알려주세요
 
@@ -2042,7 +2151,10 @@ class UnifiedPromptManager:
             else:
                 min_citations = 1  # 문서가 1개여도 최소 1개는 인용 필수
             
-            # 문서 인용 규칙 및 중요 사항 섹션 (표 작성 지침 포함)
+            # 문서 인용 규칙 및 중요 사항 섹션 (스트리밍 모드에 따라 조건부 처리)
+            # 🔥 개선: 스트리밍 모드에서는 표 관련 지시사항 제거
+            table_instruction = "" if is_streaming else "- **표의 문서 번호 열에 반드시 `[문서 N]` 형식을 포함하세요** - 빈 셀은 절대 허용되지 않습니다\n"
+            
             document_citation_section = f"""
 ## 문서 인용 규칙 및 중요 사항
 
@@ -2053,12 +2165,8 @@ class UnifiedPromptManager:
 - **🔥 CRITICAL: 답변 본문에 반드시 `[문서 N]` 형식으로 문서를 인용하세요** - 답변 본문에 인용이 없으면 답변이 거부됩니다
 - **🔥 중요: 각 문서는 답변 본문에서 정확히 한 번만 인용하세요** - 같은 문서를 여러 번 인용하면 신뢰도가 떨어집니다
 - **🔥 CRITICAL: 인용은 반드시 문단 끝에 배치하세요** - 문장 시작 부분(`[문서 1]은...`, `[문서 1]에 따르면...`)이나 문장 중간에 배치하지 마세요
-- **표의 문서 번호 열에 반드시 `[문서 N]` 형식을 포함하세요** - 빈 셀은 절대 허용되지 않습니다
-
+{table_instruction}
 ### 문서 인용 방법 (자연스러운 인용)
-- **🔥 CRITICAL: 답변 본문에 반드시 `[문서 N]` 형식으로 문서를 인용하세요** - 답변 본문에 인용이 없으면 답변이 거부됩니다
-- **각 문서는 답변 본문에서 한 번만 인용하세요** - 같은 문서 번호를 반복 사용하지 마세요
-- **인용은 반드시 문단 끝에 배치하세요** - 문장 중간이나 문장 끝에 끼워 넣지 마세요
 - 문서의 핵심 내용을 먼저 설명하고, 해당 내용이 나온 문서를 문단 끝에 자연스럽게 인용하세요
 - 여러 문서의 내용을 통합하여 설명한 경우, 관련 문서들을 문단 끝에 나란히 인용할 수 있습니다 (예: [문서 1] [문서 2])
 - **인용 없이 문서 내용만 설명하면 안 됩니다** - 반드시 `[문서 N]` 형식으로 인용해야 합니다
@@ -2137,7 +2245,37 @@ class UnifiedPromptManager:
 - **검색된 법령 조문을 적절히 인용**하세요 (최소 {min_citations}개 이상)
 - **각 법령/판례 문서는 한 번만 인용하세요**
 
-### 문서별 근거 비교 표 작성 (필수 - 절대 금지 사항)
+"""
+            
+            # 🔥 스트리밍 모드에 따라 문서 표 작성 지시를 조건부로 처리
+            if is_streaming:
+                # 스트리밍 모드: 문서 표 생성하지 않도록 지시, [END] 키워드 사용
+                table_section = f"""### ⚠️ 중요: 스트리밍 모드에서는 문서 표를 생성하지 마세요
+- **🔥 CRITICAL: 스트리밍 모드에서는 문서별 근거 비교 표를 생성하지 마세요**
+- **문서 표는 생성하지 말고, 답변 본문에만 `[문서 N]` 형식으로 인용하세요**
+- **답변 본문이 끝나면 반드시 `[END]` 키워드를 작성하세요**
+- **`[END]` 이후에 `<metadata>` 태그만 작성하세요** (문서 근거 섹션은 작성하지 마세요)
+- **문서 정보는 metadata에만 포함하세요** - 답변 본문에는 표를 포함하지 마세요
+
+**답변 구조 (스트리밍 모드)**:
+1. 답변 본문 작성 (각 문단 끝에 `[문서 N]` 인용)
+2. 답변 본문이 끝나면 `[END]` 키워드 작성
+3. `[END]` 이후에 `<metadata>` 태그만 작성 (문서 근거 섹션은 작성하지 마세요)
+
+**최종 체크리스트 (답변 작성 후 반드시 확인)**:
+1. ✅ **답변 본문에 `[문서 N]` 형식의 인용이 최소 {min_citations}개 이상 있는가?** - 없으면 답변이 거부됩니다
+2. ✅ **답변 본문이 끝나면 `[END]` 키워드를 작성했는가?** - 스트리밍 모드에서는 필수입니다
+3. ✅ **`[END]` 이후에 `<metadata>` 태그만 작성했는가?** - 문서 근거 섹션은 작성하지 마세요
+4. ✅ **문서 표를 생성하지 않았는가?** - 스트리밍 모드에서는 표를 생성하지 마세요
+5. ✅ **각 문서가 답변 본문에서 정확히 한 번만 인용되었는가?** - 중복 인용은 신뢰도를 떨어뜨립니다
+6. ✅ **인용이 문단 끝에 배치되었는가?** - 문장 중간에 끼워 넣지 않았는가?
+7. ✅ **최소 {min_citations}개 이상의 서로 다른 문서를 인용했는가?**
+
+**⚠️ 경고**: 위 체크리스트를 모두 통과하지 못하면 답변이 거부되고 재생성됩니다.
+"""
+            else:
+                # 일반 모드: 문서 표 작성 지시 포함
+                table_section = f"""### 문서별 근거 비교 표 작성 (필수 - 절대 금지 사항)
 - **🔥 CRITICAL: 표의 첫 번째 열('문서 번호' 열)에 반드시 [문서 1], [문서 2] 형식으로 번호를 포함하세요**
 - **빈 셀 절대 금지** - 문서 번호 열이 비어있으면 답변이 즉시 거부됩니다
 - 아래 '검색된 참고 문서' 섹션에 표시된 문서 번호를 그대로 사용하세요
@@ -2175,7 +2313,74 @@ class UnifiedPromptManager:
 5. ✅ **최소 {min_citations}개 이상의 서로 다른 문서를 인용했는가?**
 
 **⚠️ 경고**: 위 체크리스트를 모두 통과하지 못하면 답변이 거부되고 재생성됩니다.
+"""
+            
+            # 🔥 개선: 스트리밍 모드에 따라 메타데이터 위치 명확화
+            if is_streaming:
+                metadata_section = """
+### 출력 형식 (메타데이터)
 
+**⚠️ 중요: 스트리밍 모드에서는 메타데이터만 작성하세요. 문서 근거 섹션은 작성하지 마세요.**
+
+답변을 작성한 후, 다음 형식으로 메타데이터를 추가하세요:
+
+```
+<답변 본문>
+
+[END]
+
+<metadata>
+{{
+    "document_usage": [
+        {{
+            "document_number": 1,
+            "source": "민법 제750조",
+            "source_type": "statute_article",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [150],
+            "usage_rationale": "손해배상 책임에 대한 법적 근거로 사용"
+        }},
+        {{
+            "document_number": 2,
+            "source": "대법원 2020다12345",
+            "source_type": "precedent_content",
+            "used_in_answer": true,
+            "citation_count": 1,
+            "citation_positions": [300],
+            "usage_rationale": "계약 해지 관련 판례 인용"
+        }}
+    ],
+    "coverage": {{
+        "keyword_coverage": 0.85,
+        "keyword_total": 20,
+        "keyword_matched": 17,
+        "citation_coverage": 0.75,
+        "citation_count": 2,
+        "citation_expected": 3,
+        "document_usage_rate": 0.67,
+        "documents_used": 2,
+        "documents_total": 3,
+        "documents_min_required": 2,
+        "overall_coverage": 0.80
+    }}
+}}
+</metadata>
+```
+
+**중요 사항 (스트리밍 모드)**:
+- 답변 본문은 자연스러운 텍스트로 작성하세요
+- 답변 본문이 끝나면 `[END]` 키워드를 작성하세요
+- `[END]` 이후에 `<metadata>` 태그만 작성하세요 (문서 근거 섹션은 작성하지 마세요)
+- 메타데이터는 반드시 `<metadata>` 태그 안에 JSON 형식으로 작성하세요
+- `document_usage`의 각 항목에 `source`와 `usage_rationale`을 포함하세요 (이 정보로 문서 근거 목록이 자동 생성됩니다)
+- `document_usage`에는 검색된 모든 문서를 포함하세요 (사용 여부와 관계없이)
+- `used_in_answer`는 답변 본문에서 실제로 인용되었는지 여부를 나타냅니다
+- `citation_positions`는 답변 본문에서 인용이 나타난 문자 위치(인덱스)입니다
+- `usage_rationale`는 해당 문서를 사용한 이유를 간단히 설명하세요 (문서 근거 목록 생성에 사용됩니다)
+"""
+            else:
+                metadata_section = """
 ### 출력 형식 (메타데이터)
 
 답변을 작성한 후, 다음 형식으로 메타데이터를 추가하세요:
@@ -2232,6 +2437,8 @@ class UnifiedPromptManager:
 - `citation_positions`는 답변 본문에서 인용이 나타난 문자 위치(인덱스)입니다
 - `usage_rationale`는 해당 문서를 사용한 이유를 간단히 설명하세요
 """
+            
+            document_citation_section = document_citation_section.rstrip() + "\n\n" + table_section + metadata_section
             instruction_section = ""
         else:
             # 🔥 개선: 문서가 부족한 경우에도 메타데이터 출력 형식 포함
@@ -2351,14 +2558,14 @@ class UnifiedPromptManager:
         
         # 최종 프롬프트 구성: 핵심 지시 → Few-shot → 역할 정의 → 문서 인용 규칙 → 문서 → 질문
         # 🔥 중요: document_citation_section을 생성한 후에 최종 프롬프트 구성
-            final_prompt = (
-                core_instructions +
-                few_shot_example +
-                simplified_role +
+        final_prompt = (
+            core_instructions +
+            few_shot_example +
+            simplified_role +
             (document_citation_section if document_citation_section else "") +
-                (documents_section if documents_section else "") +
-                f"\n\n## 사용자 질문\n{query}\n\n답변을 시작하세요:\n"
-            )
+            (documents_section if documents_section else "") +
+            f"\n\n## 사용자 질문\n{query}\n\n답변을 시작하세요:\n"
+        )
         
         # 최종 토큰 수 검증
         final_tokens = self._estimate_tokens(final_prompt)
@@ -2378,6 +2585,11 @@ class UnifiedPromptManager:
             f"base: {base_tokens:,}, query: {query_tokens:,}, "
             f"docs: {current_doc_tokens if 'current_doc_tokens' in locals() else 0:,})"
         )
+        
+        # 🔥 개선: final_prompt가 비어있으면 기본 프롬프트 반환
+        if not final_prompt or len(final_prompt.strip()) == 0:
+            logger.warning("⚠️ [PROMPT BUILD] final_prompt is empty, using base prompt with query")
+            final_prompt = f"{base_prompt}\n\n## 사용자 질문\n{query}\n\n답변을 시작하세요:\n"
         
         return final_prompt
 
@@ -2589,24 +2801,23 @@ class UnifiedPromptManager:
         # 불필요한 메타데이터 제거
         content = self._clean_content(raw_content).strip()
         
+        # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+        try:
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+            doc = normalize_document_type(doc)
+        except ImportError:
+            try:
+                from core.utils.document_type_normalizer import normalize_document_type
+                doc = normalize_document_type(doc)
+            except ImportError:
+                pass
+        
         # 법률 정보가 있으면 content가 짧아도 포함 (개선: 10자 → 3자로 완화)
         # TASK 3 개선: statute_name, type 필드도 확인
-        # 🔥 개선: type 필드 확인 로직 강화 (여러 위치에서 확인)
-        doc_type = (
-            doc.get("type") or 
-            doc.get("source_type") or 
-            (doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None) or
-            (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None)
-        )
+        # 단일 소스 원칙: doc.type만 사용
+        doc_type = doc.get("type", "")
         # 🔥 개선: type 필드가 statute_article이면 무조건 has_law_info=True
-        # source_type도 확인 (검색 엔진에서 설정하는 필드)
-        source_type = doc.get("source_type") or (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None)
-        is_statute_type = (
-            doc_type in ["statute_article", "statute"] or
-            source_type in ["statute_article", "statute"] or
-            (isinstance(doc.get("metadata"), dict) and doc.get("metadata", {}).get("type") in ["statute_article", "statute"]) or
-            (isinstance(doc.get("metadata"), dict) and doc.get("metadata", {}).get("source_type") in ["statute_article", "statute"])
-        )
+        is_statute_type = doc_type in ["statute_article", "statute"]
         has_law_info = bool(
             doc.get("law_name") or 
             doc.get("statute_name") or  # TASK 3: statute_name 추가

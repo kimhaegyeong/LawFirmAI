@@ -110,6 +110,37 @@ class ResultMerger:
                         if result.get(key) and key not in metadata:
                             metadata[key] = result[key]
                     
+                    # 🔥 CRITICAL: type 정보 우선 사용, 없을 때만 normalize_document_type으로 추론
+                    # 1. result에 type이 있으면 우선 사용
+                    if result.get("type") and result.get("type").lower() != "unknown":
+                        metadata["type"] = result.get("type")
+                        metadata["source_type"] = result.get("type")
+                        result["type"] = result.get("type")  # 최상위 레벨에도 저장
+                    # 2. metadata에 type이 있으면 사용
+                    elif metadata.get("type") and metadata.get("type").lower() != "unknown":
+                        result["type"] = metadata.get("type")
+                        metadata["source_type"] = metadata.get("type")
+                    # 3. source_type이 있으면 type으로 사용
+                    elif result.get("source_type") and result.get("source_type").lower() != "unknown":
+                        result["type"] = result.get("source_type")
+                        metadata["type"] = result.get("source_type")
+                        metadata["source_type"] = result.get("source_type")
+                    # 4. 모두 없으면 normalize_document_type으로 추론
+                    else:
+                        try:
+                            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                            normalized_result = normalize_document_type(result.copy())
+                            inferred_type = normalized_result.get("type")
+                            if inferred_type and inferred_type.lower() != "unknown":
+                                result["type"] = inferred_type
+                                metadata["type"] = inferred_type
+                                metadata["source_type"] = inferred_type
+                        except (ImportError, Exception):
+                            pass
+                    
+                    # 🔥 개선: type 정보가 없으면 기본값 설정 방지 (unknown으로 설정하지 않음)
+                    # type이 없으면 metadata에서도 제거하지 않고 유지
+                    
                     # metadata에 query 저장
                     if query:
                         metadata['query'] = query
@@ -152,6 +183,48 @@ class ResultMerger:
                            "casenames", "precedent_id", "id", "chunk_id", "document_id"]:
                     if result.get(key) and key not in metadata:
                         metadata[key] = result[key]
+                
+                # 🔥 CRITICAL: type 정보 우선 사용, 없을 때만 normalize_document_type으로 추론
+                # 1. result에 type이 있으면 우선 사용
+                if result.get("type") and result.get("type").lower() != "unknown":
+                    metadata["type"] = result.get("type")
+                    metadata["source_type"] = result.get("type")
+                    result["type"] = result.get("type")  # 최상위 레벨에도 저장
+                # 2. metadata에 type이 있으면 사용
+                elif metadata.get("type") and metadata.get("type").lower() != "unknown":
+                    result["type"] = metadata.get("type")
+                    metadata["source_type"] = metadata.get("type")
+                # 3. source_type이 있으면 type으로 사용
+                elif result.get("source_type") and result.get("source_type").lower() != "unknown":
+                    result["type"] = result.get("source_type")
+                    metadata["type"] = result.get("source_type")
+                    metadata["source_type"] = result.get("source_type")
+                # 4. data_type 정보 활용 (검색 엔진에서 전달된 정보)
+                elif metadata.get("data_type"):
+                    data_type = metadata.get("data_type").lower()
+                    if data_type == "precedents":
+                        result["type"] = "precedent_content"
+                        metadata["type"] = "precedent_content"
+                        metadata["source_type"] = "precedent_content"
+                    elif data_type == "statutes":
+                        result["type"] = "statute_article"
+                        metadata["type"] = "statute_article"
+                        metadata["source_type"] = "statute_article"
+                # 5. 모두 없으면 normalize_document_type으로 추론
+                else:
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        normalized_result = normalize_document_type(result.copy())
+                        inferred_type = normalized_result.get("type")
+                        if inferred_type and inferred_type.lower() != "unknown":
+                            result["type"] = inferred_type
+                            metadata["type"] = inferred_type
+                            metadata["source_type"] = inferred_type
+                    except (ImportError, Exception):
+                        pass
+                
+                # 🔥 개선: type 정보가 없으면 기본값 설정 방지 (unknown으로 설정하지 않음)
+                # type이 없으면 metadata에서도 제거하지 않고 유지
                 
                 # metadata에 query 저장
                 if query:
@@ -427,16 +500,59 @@ class ResultRanker:
         elif already_reranked:
             self.logger.debug("⚡ [PERFORMANCE] Cross-Encoder reranking 스킵 (이미 reranking된 문서)")
         
-        # 🔥 개선: Dict로 변환하기 전에 MergedResult의 metadata에서 최상위 필드 복원
+        # 🔥 CRITICAL: Dict로 변환하기 전에 MergedResult의 metadata에서 type 정보 확인 및 복원
         for result in ranked_results[:top_k]:
             if isinstance(result, MergedResult):
                 metadata = result.metadata if isinstance(result.metadata, dict) else {}
-                # metadata에서 최상위 필드로 복원 (MergedResult 객체에 직접 설정 불가하므로, metadata에만 보존)
-                # 실제 복원은 _merged_result_to_dict에서 수행
-                pass
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    result.metadata = metadata
+                
+                # 🔥 CRITICAL: type 정보가 없거나 unknown인 경우에만 추론 시도
+                current_type = metadata.get("type", "").lower() if metadata.get("type") else ""
+                if not current_type or current_type == "unknown":
+                    # MergedResult를 임시 딕셔너리로 변환하여 normalize_document_type 호출
+                    temp_dict = {
+                        "text": result.text,
+                        "content": result.text,
+                        "metadata": metadata.copy() if isinstance(metadata, dict) else {}
+                    }
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        normalized_dict = normalize_document_type(temp_dict)
+                        inferred_type = normalized_dict.get("type")
+                        if inferred_type and inferred_type.lower() != "unknown":
+                            metadata["type"] = inferred_type
+                            metadata["source_type"] = inferred_type
+                            result.metadata = metadata
+                    except (ImportError, Exception):
+                        pass
+                
+                # 🔥 개선: metadata에서 최상위 필드로 type 복원 (이미 있는 경우에도 확인)
+                if metadata.get("type") and metadata.get("type").lower() != "unknown":
+                    # type 정보가 있으면 유지
+                    pass
+                elif metadata.get("source_type") and metadata.get("source_type").lower() != "unknown":
+                    # source_type이 있으면 type으로 사용
+                    metadata["type"] = metadata.get("source_type")
+                    result.metadata = metadata
         
         # Dict로 변환하여 반환 (호환성 유지)
-        return [self._merged_result_to_dict(r) for r in ranked_results[:top_k]]
+        # 🔥 CRITICAL: _merged_result_to_dict에서 type 정보가 제대로 복원되는지 확인
+        dict_results = []
+        for r in ranked_results[:top_k]:
+            dict_result = self._merged_result_to_dict(r)
+            # 🔥 추가 보강: _merged_result_to_dict 후 type 정보 최종 확인
+            if not dict_result.get("type") or dict_result.get("type", "").lower() == "unknown":
+                # metadata에서 type 복원 시도
+                metadata = dict_result.get("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata_type = metadata.get("type") or metadata.get("source_type")
+                    if metadata_type and metadata_type.lower() != "unknown":
+                        dict_result["type"] = metadata_type
+            dict_results.append(dict_result)
+        
+        return dict_results
     
     def cross_encoder_rerank(
         self,
@@ -685,7 +801,14 @@ class ResultRanker:
         
         # 🔥 개선: metadata에서 최상위 필드로 복원 (메타데이터 보존)
         # None이 아닌 값만 복원 (빈 문자열도 허용)
-        for key in ["type", "statute_name", "law_name", "article_no", 
+        # 🔥 CRITICAL: type 필드는 최우선으로 복원
+        if "type" in metadata and metadata["type"] is not None:
+            doc["type"] = metadata["type"]
+        elif "source_type" in metadata and metadata["source_type"] is not None:
+            doc["type"] = metadata["source_type"]
+            metadata["type"] = metadata["source_type"]
+        
+        for key in ["statute_name", "law_name", "article_no", 
                    "article_number", "clause_no", "item_no", "case_id", "court", 
                    "ccourt", "doc_id", "casenames", "precedent_id", "id", "chunk_id", 
                    "document_id", "source", "source_description", "source_url"]:
@@ -695,6 +818,65 @@ class ResultRanker:
             # 최상위 필드가 이미 있으면 metadata에도 복사 (일관성 유지)
             elif key in doc and doc[key] is not None and key not in metadata:
                 metadata[key] = doc[key]
+        
+        # 🔥 개선: metadata가 비어있거나 type이 없을 때 source 필드로 추론
+        if not doc.get("type") and result.source:
+            # source 필드에서 type 추론
+            source_lower = result.source.lower()
+            if "exact_semantic" in source_lower or "semantic" in source_lower:
+                # semantic 결과는 metadata에서 type 추론 시도
+                if metadata.get("type"):
+                    doc["type"] = metadata["type"]
+                elif metadata.get("source_type"):
+                    doc["type"] = metadata["source_type"]
+                # metadata에도 저장
+                if doc.get("type"):
+                    metadata["type"] = doc["type"]
+            elif "exact_keyword" in source_lower or "keyword" in source_lower:
+                doc["type"] = "keyword"
+                metadata["type"] = "keyword"
+        
+        # 🔥 CRITICAL: type 정보 우선 사용, 없을 때만 normalize_document_type으로 추론
+        # 1. doc에 type이 있으면 우선 사용
+        if doc.get("type") and doc.get("type").lower() != "unknown":
+            metadata["type"] = doc.get("type")
+            metadata["source_type"] = doc.get("type")
+        # 2. metadata에 type이 있으면 사용
+        elif metadata.get("type") and metadata.get("type").lower() != "unknown":
+            doc["type"] = metadata.get("type")
+            metadata["source_type"] = metadata.get("type")
+        # 3. source_type이 있으면 type으로 사용
+        elif metadata.get("source_type") and metadata.get("source_type").lower() != "unknown":
+            doc["type"] = metadata.get("source_type")
+            metadata["type"] = metadata.get("source_type")
+        # 4. data_type 정보 활용 (검색 엔진에서 전달된 정보)
+        elif metadata.get("data_type"):
+            data_type = metadata.get("data_type").lower()
+            if data_type == "precedents":
+                doc["type"] = "precedent_content"
+                metadata["type"] = "precedent_content"
+                metadata["source_type"] = "precedent_content"
+            elif data_type == "statutes":
+                doc["type"] = "statute_article"
+                metadata["type"] = "statute_article"
+                metadata["source_type"] = "statute_article"
+        # 5. 모두 없으면 normalize_document_type으로 추론
+        else:
+            try:
+                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                # 🔥 개선: text/content가 있으면 추론 시도
+                if doc.get("text") or doc.get("content"):
+                    normalized_doc = normalize_document_type(doc.copy())
+                    inferred_type = normalized_doc.get("type")
+                    if inferred_type and inferred_type.lower() != "unknown":
+                        doc["type"] = inferred_type
+                        metadata["type"] = inferred_type
+                        metadata["source_type"] = inferred_type
+            except (ImportError, Exception):
+                pass
+        
+        # 🔥 개선: type 정보가 여전히 없으면 최소한 metadata에 빈 값이라도 저장하지 않음
+        # (unknown으로 설정하지 않고 None으로 유지하여 이후 복원 시도 가능하도록)
         
         # metadata 업데이트 (복원된 필드 포함)
         doc["metadata"] = metadata

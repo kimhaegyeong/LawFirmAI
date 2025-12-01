@@ -21,6 +21,10 @@ try:
     from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
 except ImportError:
     from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.workflow.state.answer_helpers import parse_answer_with_metadata
+except ImportError:
+    from core.workflow.state.answer_helpers import parse_answer_with_metadata
 
 
 class AnswerQualityValidator:
@@ -75,7 +79,41 @@ class AnswerQualityValidator:
                         if source_info["source"]:
                             sources.append(source_info)
 
-        answer_str_for_check = answer if isinstance(answer, str) else str(answer) if answer else ""
+        # 🔥 개선: 답변에서 [END]와 [metadata] 섹션을 제거한 순수 답변 본문만 검증
+        answer_with_metadata = answer if isinstance(answer, str) else str(answer) if answer else ""
+        answer_body, extracted_metadata = parse_answer_with_metadata(answer_with_metadata)
+        
+        # 메타데이터 검증
+        metadata_valid = True
+        if extracted_metadata:
+            self.logger.debug(f"✅ [VALIDATION] Extracted metadata from answer (document_usage: {len(extracted_metadata.get('document_usage', []))}, coverage: {extracted_metadata.get('coverage', {})})")
+            
+            # 메타데이터 구조 검증
+            document_usage = extracted_metadata.get("document_usage", [])
+            coverage = extracted_metadata.get("coverage", {})
+            
+            # document_usage가 리스트인지 확인
+            if not isinstance(document_usage, list):
+                metadata_valid = False
+                self.logger.warning(f"⚠️ [METADATA VALIDATION] document_usage is not a list: {type(document_usage)}")
+            
+            # coverage가 딕셔너리인지 확인
+            if not isinstance(coverage, dict):
+                metadata_valid = False
+                self.logger.warning(f"⚠️ [METADATA VALIDATION] coverage is not a dict: {type(coverage)}")
+            
+            # state에 저장
+            if "metadata" not in state:
+                state["metadata"] = {}
+            state["metadata"]["extracted_metadata"] = extracted_metadata
+            state["metadata"]["metadata_valid"] = metadata_valid
+        else:
+            # 메타데이터가 없는 경우는 경고만 (필수는 아님)
+            self.logger.debug(f"ℹ️ [VALIDATION] No metadata found in answer (this is acceptable)")
+            metadata_valid = True  # 메타데이터가 없어도 답변은 유효할 수 있음
+        
+        # 답변 본문만 검증에 사용
+        answer_str_for_check = answer_body
 
         has_format_errors = self.detect_format_errors(answer_str_for_check)
 
@@ -210,6 +248,7 @@ class AnswerQualityValidator:
         llm_validation_result = None
         if self.validator_llm and answer_str_for_check and len(answer_str_for_check) > 50:
             try:
+                # 🔥 개선: LLM 검증도 답변 본문만 사용 (메타데이터 제외)
                 llm_validation_result = self.validate_with_llm(answer_str_for_check, state)
                 if llm_validation_result:
                     llm_quality_score = llm_validation_result.get("quality_score", 0.0)

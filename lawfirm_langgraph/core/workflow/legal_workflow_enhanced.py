@@ -392,6 +392,15 @@ class EnhancedLegalQuestionWorkflow(
             result_ranker=self.result_ranker
         )
         
+        # 🔥 개선: LangChain 사용 가능 여부 사전 체크
+        self._langchain_available = self._check_langchain_availability()
+        if not self._langchain_available:
+            self.logger.info(
+                "ℹ️ [LANGCHAIN] LangChain not installed. "
+                "Multi-query agent will use direct search. "
+                "To enable agentic mode: pip install langchain langchain-core langchain-google-genai"
+            )
+        
         # 워크플로우 문서 처리 프로세서 초기화
         from core.workflow.processors.workflow_document_processor import WorkflowDocumentProcessor
         semantic_search_engine = None
@@ -1395,6 +1404,20 @@ class EnhancedLegalQuestionWorkflow(
         """AnswerRoutes.should_retry_validation 사용"""
         return self.answer_routes.should_retry_validation(state, answer_generator=self.answer_generator)
 
+    def _check_langchain_availability(self) -> bool:
+        """
+        LangChain 패키지 사용 가능 여부 확인
+        
+        Returns:
+            LangChain 사용 가능 여부
+        """
+        try:
+            import langchain
+            import langchain_core
+            import langchain_google_genai
+            return True
+        except ImportError:
+            return False
 
     @with_state_optimization("agentic_decision", enable_reduction=False)
     def agentic_decision_node(self, state: LegalWorkflowState) -> LegalWorkflowState:
@@ -1412,6 +1435,15 @@ class EnhancedLegalQuestionWorkflow(
             if not self.config.use_agentic_mode or not self.legal_tools:
                 self.logger.warning("Agentic mode disabled or no tools available. Skipping agentic decision.")
                 # 기존 검색 노드로 라우팅하기 위해 빈 검색 결과 설정
+                state.setdefault("search", {})["results"] = []
+                return state
+            
+            # 🔥 개선: LangChain 사용 가능 여부 사전 체크
+            if not self._langchain_available:
+                self.logger.debug(
+                    "⏭️ [LANGCHAIN] Skipping agent initialization (LangChain not available)"
+                )
+                # 기존 플로우로 fallback (표준 검색 사용)
                 state.setdefault("search", {})["results"] = []
                 return state
             
@@ -1603,6 +1635,16 @@ class EnhancedLegalQuestionWorkflow(
         try:
             start_time = time.time()
             self._save_metadata_safely(state, "_last_executed_node", "multi_query_search_agent")
+            
+            # 🔥 개선: LangChain 사용 가능 여부 사전 체크
+            if not self._langchain_available:
+                self.logger.debug(
+                    "⏭️ [LANGCHAIN] Skipping multi-query agent (LangChain not available), using direct multi-query search"
+                )
+                # 직접 멀티 질의 검색으로 fallback
+                # (이미 fallback 로직이 있으므로 여기서는 빈 결과만 설정)
+                state.setdefault("search", {})["results"] = []
+                return state
             
             # 멀티 질의 검색 에이전트 인스턴스 가져오기 (지연 초기화)
             if not hasattr(self, '_multi_query_search_agent_instance'):
@@ -1878,6 +1920,12 @@ class EnhancedLegalQuestionWorkflow(
             # LangGraph의 자동 콜백 전달이 작동하지 않을 수 있으므로,
             # generate_answer_enhanced 내부에서 콜백을 처리하도록 해야 합니다.
             
+            # 🔥 스트리밍 모드 플래그 설정 (프롬프트에서 문서 표 생성을 막기 위해)
+            metadata = self._get_metadata_safely(state)
+            metadata["streaming_mode"] = True
+            metadata["is_streaming"] = True
+            self._set_state_value(state, "metadata", metadata)
+            
             # generate_answer_enhanced 실행 (답변 생성만)
             # callbacks=None으로 두면 generate_answer_enhanced 내부에서 처리
             state = self.generate_answer_enhanced(state, callbacks=None)
@@ -1927,8 +1975,207 @@ class EnhancedLegalQuestionWorkflow(
             if answer and len(answer.strip()) >= 10:
                 # 간단한 정규화만 수행 (비용이 낮음)
                 normalized_answer = WorkflowUtils.normalize_answer(answer)
-                if normalized_answer != answer:
-                    self._set_answer_safely(state, normalized_answer)
+                
+                # 🔥 스트리밍용: 답변 본문과 근거(문서 표/metadata) 명확하게 구분
+                # 참고: 문서 표와 metadata는 중복 정보이므로, 문서 표만 제거하고 metadata는 유지
+                try:
+                    # 1단계: metadata 분리 (parse_answer_with_metadata 활용)
+                    # 이 함수는 <metadata> 태그를 찾아서 분리하므로, 
+                    # 문서 표는 답변 본문에 남아있고 metadata는 별도로 분리됨
+                    answer_body, extracted_metadata = parse_answer_with_metadata(normalized_answer)
+                    
+                    # 2단계: 문서 표 제거 (metadata와 중복되므로 제거)
+                    # 문서 표 패턴: | 문서 번호 | 출처 | 핵심 근거 |
+                    # 표는 보통 헤더 행, 구분선, 데이터 행으로 구성됨
+                    
+                    # 표 헤더 감지
+                    table_header_pattern = r'(?:\n|^)\s*\|?\s*문서\s*번호\s*\|.*?출처.*?핵심\s*근거.*?\|'
+                    table_header_match = re.search(table_header_pattern, answer_body, re.MULTILINE | re.IGNORECASE)
+                    
+                    cleaned_answer = answer_body
+                    table_removed = False
+                    
+                    if table_header_match:
+                        # 표 시작 위치
+                        table_start = table_header_match.start()
+                        
+                        # 표 이전 부분 (답변 본문)
+                        answer_text_only = answer_body[:table_start].rstrip()
+                        
+                        # 표 이후 부분 확인
+                        table_end_pos = table_header_match.end()
+                        remaining_text = answer_body[table_end_pos:]
+                        
+                        # 표의 끝 찾기: 연속된 표 행이 끝나는 지점
+                        lines = remaining_text.split('\n')
+                        end_line_idx = 0
+                        
+                        for i, line in enumerate(lines):
+                            stripped = line.strip()
+                            # 빈 줄이 2개 연속이면 표 종료
+                            if i > 0 and not stripped and not lines[i-1].strip():
+                                end_line_idx = i
+                                break
+                            # | 로 시작하지 않는 행이 나오면 표 종료 (단, metadata 태그는 제외)
+                            if stripped and not stripped.startswith('|') and not re.match(r'<metadata>', stripped, re.IGNORECASE):
+                                end_line_idx = i
+                                break
+                            # metadata 태그가 나오면 표 종료
+                            if re.search(r'<metadata>', stripped, re.IGNORECASE):
+                                end_line_idx = i
+                                break
+                        
+                        # 표 제거: 표 이전 + 표 이후 (표 부분 제외)
+                        if end_line_idx > 0:
+                            after_table = '\n'.join(lines[end_line_idx:]).lstrip()
+                            cleaned_answer = answer_text_only
+                            if after_table and not re.match(r'<metadata>', after_table, re.IGNORECASE):
+                                # metadata가 아닌 경우에만 추가
+                                cleaned_answer += "\n\n" + after_table if after_table else ""
+                        else:
+                            # 표 끝을 찾지 못한 경우, 표 시작 이후 전체 제거
+                            cleaned_answer = answer_text_only
+                        
+                        table_removed = True
+                        self.logger.debug(
+                            f"✅ [STREAM CLEANUP] 문서 표 제거됨 "
+                            f"(시작 위치: {table_start}, 제거 길이: {len(answer_body) - len(cleaned_answer)}자)"
+                        )
+                    
+                    # 3단계: [END] 키워드 처리 및 추가 섹션 제거
+                    # 🔥 개선: [END] 키워드 이후 내용 제거 (스트리밍용)
+                    # [END] 키워드가 있으면 그 이후 내용은 문서 근거이므로 제거
+                    end_keyword_pos = cleaned_answer.find('[END]')
+                    if end_keyword_pos != -1:
+                        cleaned_answer = cleaned_answer[:end_keyword_pos].rstrip()
+                        self.logger.debug(f"✅ [STREAM CLEANUP] [END] 키워드 이후 내용 제거됨 (위치: {end_keyword_pos})")
+                    
+                    # 추가 섹션 제거 (### 관련 법령, ### 참고 판례 등)
+                    # 🔥 개선: 답변 끝에 있는 불필요한 섹션 제거
+                    additional_sections_pattern = r'\n*###\s*(관련\s*법령|참고\s*판례|관련\s*판례|참고\s*사항).*$'
+                    cleaned_answer = re.sub(additional_sections_pattern, '', cleaned_answer, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+                    
+                    # 🔥 개선: JSON 형식의 metadata가 답변 본문에 포함된 경우 제거
+                    # document_usage, coverage 등이 포함된 JSON 객체 제거
+                    # 답변 끝부분에서 JSON 패턴 찾기
+                    if '"document_usage"' in cleaned_answer or '"coverage"' in cleaned_answer:
+                        # 답변의 마지막 부분에서 JSON 시작 위치 찾기
+                        json_start_candidates = []
+                        for keyword in ['"document_usage"', '"coverage"']:
+                            pos = cleaned_answer.rfind(keyword)
+                            if pos > len(cleaned_answer) * 0.7:  # 마지막 30% 이내
+                                # 앞쪽으로 이동하여 { 찾기
+                                for i in range(pos, max(0, pos - 200), -1):
+                                    if cleaned_answer[i] == '{':
+                                        json_start_candidates.append(i)
+                                        break
+                        
+                        if json_start_candidates:
+                            json_start = min(json_start_candidates)
+                            # 중괄호 매칭을 위해 정확한 끝 위치 찾기
+                            brace_count = 0
+                            json_end = len(cleaned_answer)
+                            for i in range(json_start, len(cleaned_answer)):
+                                if cleaned_answer[i] == '{':
+                                    brace_count += 1
+                                elif cleaned_answer[i] == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        json_end = i + 1
+                                        break
+                            
+                            if json_end > json_start:
+                                # JSON 부분 제거
+                                before_json = cleaned_answer[:json_start].rstrip()
+                                after_json = cleaned_answer[json_end:].lstrip()
+                                cleaned_answer = before_json + (('\n\n' + after_json) if after_json else '')
+                                self.logger.debug(f"✅ [STREAM CLEANUP] JSON metadata 제거됨 (위치: {json_start}-{json_end}, 길이: {json_end - json_start}자)")
+                    
+                    # 🔥 개선: </metadata> 태그 이후의 모든 내용 제거
+                    metadata_tag_end = r'</metadata>.*$'
+                    cleaned_answer = re.sub(metadata_tag_end, '', cleaned_answer, flags=re.DOTALL | re.IGNORECASE)
+                    
+                    # 🔥 개선: 답변 정규화 강화 (숫자 오류, 불필요한 문자 제거)
+                    # 문장 끝의 잘못된 숫자와 쉼표 제거 (예: "결정됩니다.9," -> "결정됩니다.")
+                    cleaned_answer = re.sub(r'([가-힣a-zA-Z])\.(\d+),?\s*$', r'\1.', cleaned_answer, flags=re.MULTILINE)
+                    # 문장 끝의 잘못된 숫자 제거 (예: "결정됩니다9" -> "결정됩니다")
+                    cleaned_answer = re.sub(r'([가-힣a-zA-Z])(\d+),?\s*$', r'\1', cleaned_answer, flags=re.MULTILINE)
+                    # 연속된 쉼표나 마침표 정리
+                    cleaned_answer = re.sub(r'[,\.]{2,}', '.', cleaned_answer)
+                    
+                    # 4단계: 최종 정리
+                    # 연속된 빈 줄 정리
+                    cleaned_answer = re.sub(r'\n{3,}', '\n\n', cleaned_answer)
+                    # 각 줄 앞뒤 공백 제거
+                    cleaned_answer = re.sub(r'^\s+|\s+$', '', cleaned_answer, flags=re.MULTILINE)
+                    cleaned_answer = cleaned_answer.strip()
+                    
+                    # 🔥 개선: metadata에서 문서 근거 목록 자동 생성
+                    # extracted_metadata가 있으면 문서 근거 목록을 자동 생성
+                    if extracted_metadata and extracted_metadata.get("document_usage"):
+                        document_references_list = []
+                        for doc in extracted_metadata["document_usage"]:
+                            if doc.get("used_in_answer", False):
+                                source = doc.get("source", "")
+                                rationale = doc.get("usage_rationale", "")
+                                doc_num = doc.get("document_number", 0)
+                                if source and rationale:
+                                    document_references_list.append(
+                                        f"- [문서 {doc_num}] {source}: {rationale}"
+                                    )
+                        
+                        if document_references_list:
+                            document_references = "**문서 근거**:\n" + "\n".join(document_references_list)
+                            metadata_state = self._get_metadata_safely(state)
+                            if "document_references" not in metadata_state:
+                                metadata_state["document_references"] = document_references
+                                self._set_state_value(state, "metadata", metadata_state)
+                                self.logger.info(
+                                    f"✅ [STREAM CLEANUP] 문서 근거 목록 자동 생성 완료 "
+                                    f"(문서 수: {len(document_references_list)}개)"
+                                )
+                    
+                    # 4단계: 정리된 답변 저장
+                    if cleaned_answer != normalized_answer:
+                        self._set_answer_safely(state, cleaned_answer)
+                        
+                        # 로깅: 제거된 내용 요약
+                        removed_length = len(normalized_answer) - len(cleaned_answer)
+                        self.logger.debug(
+                            f"✅ [STREAM CLEANUP] 답변 정리 완료: "
+                            f"원본 {len(normalized_answer)}자 → 정리 {len(cleaned_answer)}자 "
+                            f"(제거: {removed_length}자, 표={'제거됨' if table_removed else '없음'})"
+                        )
+                        
+                        # metadata는 별도로 저장 (필요시 사용 가능, 스트리밍에는 포함하지 않음)
+                        # 참고: metadata는 이미 parse_answer_with_metadata에서 분리되었으므로,
+                        # 답변 본문에는 포함되지 않음. 별도 저장은 필요시에만.
+                        if extracted_metadata:
+                            metadata_state = self._get_metadata_safely(state)
+                            metadata_state["extracted_metadata"] = extracted_metadata
+                            self._set_state_value(state, "metadata", metadata_state)
+                            self.logger.info(
+                                f"✅ [STREAM CLEANUP] metadata 별도 저장 완료 "
+                                f"(keys: {list(extracted_metadata.keys())}, "
+                                f"document_usage: {len(extracted_metadata.get('document_usage', []))}개, "
+                                f"coverage: {extracted_metadata.get('coverage', {}).get('overall_coverage', 0.0):.2f})"
+                            )
+                        else:
+                            self.logger.debug("⚠️ [STREAM CLEANUP] extracted_metadata가 없습니다")
+                    else:
+                        # 정리할 내용이 없으면 원본 그대로
+                        if normalized_answer != answer:
+                            self._set_answer_safely(state, normalized_answer)
+                
+                except Exception as cleanup_error:
+                    # 정리 과정에서 오류가 발생해도 원본 답변은 유지
+                    self.logger.warning(
+                        f"⚠️ [STREAM CLEANUP] 답변 정리 중 오류 발생 (원본 답변 유지): {cleanup_error}",
+                        exc_info=True
+                    )
+                    # 원본 정규화된 답변 사용
+                    if normalized_answer != answer:
+                        self._set_answer_safely(state, normalized_answer)
                 
                 # 검증 완료 표시 (generate_answer_final 스킵 가능)
                 metadata = self._get_metadata_safely(state)
@@ -4505,6 +4752,16 @@ class EnhancedLegalQuestionWorkflow(
 
             context_dict = self._inject_search_results_into_context(state, context_dict, retrieved_docs, query)
             
+            # 🔥 스트리밍 모드 정보를 context_dict에 추가 (프롬프트에서 문서 표 생성을 막기 위해)
+            if isinstance(context_dict, dict):
+                metadata = self._get_metadata_safely(state)
+                if metadata.get("streaming_mode") or metadata.get("is_streaming"):
+                    context_dict["is_streaming"] = True
+                    if "metadata" not in context_dict:
+                        context_dict["metadata"] = {}
+                    context_dict["metadata"]["streaming_mode"] = True
+                    self.logger.debug("✅ [STREAMING MODE] 스트리밍 모드 플래그를 context_dict에 추가")
+            
             # 🔥 개선: context_dict에 retrieved_docs와 structured_documents가 명시적으로 포함되도록 보장
             if isinstance(context_dict, dict) and retrieved_docs:
                 if "retrieved_docs" not in context_dict:
@@ -6560,8 +6817,35 @@ class EnhancedLegalQuestionWorkflow(
         extracted_keywords: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """검색 결과 병합 (SearchHandler 사용, 개선 기능 포함)"""
+        # 🔥 CRITICAL: 원본 문서의 type 정보 백업 (병합 전)
+        original_docs_by_id = {}
+        original_docs_by_content = {}
+        for doc in semantic_results + keyword_results:
+            if isinstance(doc, dict):
+                doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                if doc_id:
+                    original_docs_by_id[doc_id] = doc
+                # content 기반 매칭도 추가
+                content = doc.get("text") or doc.get("content", "")
+                if content:
+                    import hashlib
+                    content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                    original_docs_by_content[content_hash] = doc
+        
+        # 입력 문서의 type 정보 로깅
+        input_types = [doc.get("type") if isinstance(doc, dict) else None for doc in semantic_results[:3]]
+        input_metadata_types = [
+            doc.get("metadata", {}).get("type") if isinstance(doc, dict) and isinstance(doc.get("metadata"), dict) else None
+            for doc in semantic_results[:3]
+        ]
+        self.logger.debug(
+            f"🔍 [TYPE TRACE] _merge_search_results_internal 입력: "
+            f"semantic_count={len(semantic_results)}, keyword_count={len(keyword_results)}, "
+            f"input_types (first 3)={input_types}, input_metadata_types (first 3)={input_metadata_types}"
+        )
+        
         if self.search_handler:
-            return self.search_handler.merge_search_results(
+            merged = self.search_handler.merge_search_results(
                 semantic_results=semantic_results,
                 keyword_results=keyword_results,
                 query=query,
@@ -6570,11 +6854,114 @@ class EnhancedLegalQuestionWorkflow(
             )
         else:
             # 폴백: SearchResultProcessor 사용
-            return self.search_result_processor.merge_search_results(
+            merged = self.search_result_processor.merge_search_results(
                 semantic_results=semantic_results,
                 keyword_results=keyword_results,
                 result_merger=self.result_merger
             )
+        
+        # merge_search_results 반환 직후 type 정보 로깅
+        merged_types = [doc.get("type") if isinstance(doc, dict) else None for doc in merged[:3]]
+        merged_metadata_types = [
+            doc.get("metadata", {}).get("type") if isinstance(doc, dict) and isinstance(doc.get("metadata"), dict) else None
+            for doc in merged[:3]
+        ]
+        self.logger.debug(
+            f"🔍 [TYPE TRACE] _merge_search_results_internal - merge_search_results 반환 직후: "
+            f"merged_count={len(merged)}, "
+            f"merged_types (first 3)={merged_types}, merged_metadata_types (first 3)={merged_metadata_types}"
+        )
+        
+        # 🔥 CRITICAL: merge_search_results 반환 후 type 정보 복원 강화
+        for merged_doc in merged:
+            if not isinstance(merged_doc, dict):
+                continue
+            
+            # ID 기반 매칭 시도
+            merged_id = merged_doc.get("id") or merged_doc.get("chunk_id") or merged_doc.get("document_id")
+            original_doc = None
+            
+            # 복원 전 type 정보 로깅
+            before_restore_type = merged_doc.get("type")
+            before_restore_metadata_type = merged_doc.get("metadata", {}).get("type") if isinstance(merged_doc.get("metadata"), dict) else None
+            
+            if merged_id and merged_id in original_docs_by_id:
+                original_doc = original_docs_by_id[merged_id]
+            else:
+                # content 기반 매칭 시도
+                content = merged_doc.get("text") or merged_doc.get("content", "")
+                if content:
+                    import hashlib
+                    content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                    if content_hash in original_docs_by_content:
+                        original_doc = original_docs_by_content[content_hash]
+            
+            if original_doc:
+                # 🔥 CRITICAL: type 정보 복원 (원본 문서에서)
+                current_type = merged_doc.get("type", "").lower() if merged_doc.get("type") else ""
+                original_type = original_doc.get("type", "").lower() if original_doc.get("type") else ""
+                
+                # type이 없거나 unknown인 경우 원본에서 복원
+                if original_type and original_type != "unknown":
+                    if not current_type or current_type == "unknown" or current_type == "":
+                        merged_doc["type"] = original_doc.get("type")
+                        # metadata에도 저장
+                        if "metadata" not in merged_doc:
+                            merged_doc["metadata"] = {}
+                        if not isinstance(merged_doc["metadata"], dict):
+                            merged_doc["metadata"] = {}
+                        merged_doc["metadata"]["type"] = original_doc.get("type")
+                        merged_doc["metadata"]["source_type"] = original_doc.get("type")
+                        self.logger.debug(
+                            f"🔍 [TYPE RESTORE IN _merge_search_results_internal] Doc ID={merged_id}: "
+                            f"타입 복원: {repr(before_restore_type)} → {original_type}"
+                        )
+            
+            # 복원 후 type 정보 로깅
+            after_restore_type = merged_doc.get("type")
+            after_restore_metadata_type = merged_doc.get("metadata", {}).get("type") if isinstance(merged_doc.get("metadata"), dict) else None
+            if before_restore_type != after_restore_type:
+                self.logger.debug(
+                    f"🔍 [TYPE TRACE] _merge_search_results_internal - type 복원 후: "
+                    f"doc_id={merged_id or 'unknown'}, "
+                    f"type: {repr(before_restore_type)} → {repr(after_restore_type)}, "
+                    f"metadata_type: {repr(before_restore_metadata_type)} → {repr(after_restore_metadata_type)}"
+                )
+                
+                # metadata에서도 타입 복원 시도
+                original_metadata = original_doc.get("metadata", {})
+                if isinstance(original_metadata, dict):
+                    metadata_type = original_metadata.get("type") or original_metadata.get("source_type")
+                    if metadata_type and metadata_type.lower() != "unknown":
+                        if not merged_doc.get("type") or merged_doc.get("type", "").lower() == "unknown":
+                            merged_doc["type"] = metadata_type
+                            if "metadata" not in merged_doc:
+                                merged_doc["metadata"] = {}
+                            if not isinstance(merged_doc["metadata"], dict):
+                                merged_doc["metadata"] = {}
+                            merged_doc["metadata"]["type"] = metadata_type
+                            merged_doc["metadata"]["source_type"] = metadata_type
+                            self.logger.debug(
+                                f"🔍 [TYPE RESTORE IN _merge_search_results_internal] Doc ID={merged_id}: "
+                                f"metadata에서 타입 복원: {repr(before_restore_type)} → {metadata_type}"
+                            )
+                
+                # 법령/판례 관련 필드 복원
+                for key in ["statute_name", "law_name", "article_no", "article_number", 
+                           "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
+                    if not merged_doc.get(key) and original_doc.get(key):
+                        merged_doc[key] = original_doc.get(key)
+                    
+                    # metadata에도 복원
+                    if "metadata" not in merged_doc:
+                        merged_doc["metadata"] = {}
+                    if not isinstance(merged_doc["metadata"], dict):
+                        merged_doc["metadata"] = {}
+                    if isinstance(original_metadata, dict) and original_metadata.get(key):
+                        if not merged_doc["metadata"].get(key):
+                            merged_doc["metadata"][key] = original_metadata.get(key)
+        
+        return merged
     
     def _apply_keyword_weights_to_docs(
         self,
@@ -7210,21 +7597,8 @@ class EnhancedLegalQuestionWorkflow(
                             if original_metadata.get(key) and not merged_doc["metadata"].get(key):
                                 merged_doc["metadata"][key] = original_metadata.get(key)
         else:
-            # 🔥 CRITICAL: _merge_search_results_internal 호출 전에 원본 문서의 타입 정보 백업
-            original_docs_by_id = {}
-            original_docs_by_content = {}
-            for doc in semantic_results + keyword_results:
-                if isinstance(doc, dict):
-                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
-                    if doc_id:
-                        original_docs_by_id[doc_id] = doc
-                    # content 기반 매칭도 추가
-                    content = doc.get("text") or doc.get("content", "")
-                    if content:
-                        import hashlib
-                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
-                        original_docs_by_content[content_hash] = doc
-            
+            # 🔥 CRITICAL: _merge_search_results_internal 호출 (내부에서 type 복원 처리)
+            # _merge_search_results_internal 내부에서 이미 type 복원 로직이 있으므로 추가 복원 불필요
             merged_docs = self._merge_search_results_internal(
                 semantic_results, 
                 keyword_results,
@@ -7234,10 +7608,29 @@ class EnhancedLegalQuestionWorkflow(
             )
             self.logger.debug(f"🔀 [MERGE] Using _merge_search_results_internal: {len(merged_docs)} docs")
             
-            # 🔥 CRITICAL: _merge_search_results_internal 호출 후 원본 문서에서 타입 복원
+            # 🔥 추가 보강: _merge_search_results_internal 반환 후 type 정보 최종 확인 및 복원
+            # 원본 문서 백업 (이중 보장)
+            original_docs_by_id = {}
+            original_docs_by_content = {}
+            for doc in semantic_results + keyword_results:
+                if isinstance(doc, dict):
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    if doc_id:
+                        original_docs_by_id[doc_id] = doc
+                    content = doc.get("text") or doc.get("content", "")
+                    if content:
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
+                        original_docs_by_content[content_hash] = doc
+            
             for merged_doc in merged_docs:
                 if not isinstance(merged_doc, dict):
                     continue
+                
+                # type이 없거나 unknown인 경우에만 복원 시도
+                current_type = merged_doc.get("type", "").lower() if merged_doc.get("type") else ""
+                if current_type and current_type != "unknown":
+                    continue  # 이미 type이 있으면 스킵
                 
                 # ID 기반 매칭 시도
                 merged_id = merged_doc.get("id") or merged_doc.get("chunk_id") or merged_doc.get("document_id")
@@ -7256,47 +7649,48 @@ class EnhancedLegalQuestionWorkflow(
                 
                 if original_doc:
                     # 🔥 CRITICAL: 타입 복원 (원본 문서에서)
-                    current_type = merged_doc.get("type", "").lower()
-                    original_type = original_doc.get("type", "").lower()
+                    original_type = original_doc.get("type", "").lower() if original_doc.get("type") else ""
                     
                     if original_type and original_type != "unknown":
-                        if (not merged_doc.get("type") or current_type == "unknown" or current_type == ""):
-                            merged_doc["type"] = original_doc.get("type")
-                            self.logger.info(
-                                f"🔍 [TYPE RESTORE AFTER MERGE] Doc ID={merged_id}: "
-                                f"타입 복원: {current_type} → {original_type}"
-                            )
+                        merged_doc["type"] = original_doc.get("type")
+                        if "metadata" not in merged_doc:
+                            merged_doc["metadata"] = {}
+                        if not isinstance(merged_doc["metadata"], dict):
+                            merged_doc["metadata"] = {}
+                        merged_doc["metadata"]["type"] = original_doc.get("type")
+                        merged_doc["metadata"]["source_type"] = original_doc.get("type")
+                        self.logger.debug(
+                            f"🔍 [TYPE RESTORE AFTER MERGE] Doc ID={merged_id}: "
+                            f"타입 복원: {current_type} → {original_type}"
+                        )
                     
                     # metadata에서도 타입 복원 시도
                     original_metadata = original_doc.get("metadata", {})
                     if isinstance(original_metadata, dict):
                         metadata_type = original_metadata.get("type") or original_metadata.get("source_type")
                         if metadata_type and metadata_type.lower() != "unknown":
-                            if (not merged_doc.get("type") or merged_doc.get("type", "").lower() == "unknown"):
+                            if not merged_doc.get("type") or merged_doc.get("type", "").lower() == "unknown":
                                 merged_doc["type"] = metadata_type
                                 if "metadata" not in merged_doc:
                                     merged_doc["metadata"] = {}
                                 if not isinstance(merged_doc["metadata"], dict):
                                     merged_doc["metadata"] = {}
                                 merged_doc["metadata"]["type"] = metadata_type
+                                merged_doc["metadata"]["source_type"] = metadata_type
                     
                     # 법령/판례 관련 필드 복원
                     for key in ["statute_name", "law_name", "article_no", "article_number", 
                                "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
                         if not merged_doc.get(key) and original_doc.get(key):
                             merged_doc[key] = original_doc.get(key)
-                    
-                    # metadata에도 복원
-                    if "metadata" not in merged_doc:
-                        merged_doc["metadata"] = {}
-                    if not isinstance(merged_doc["metadata"], dict):
-                        merged_doc["metadata"] = {}
-                    
-                    if isinstance(original_metadata, dict):
-                        for key in ["type", "statute_name", "law_name", "article_no", 
-                                   "article_number", "case_id", "court", "ccourt", "doc_id", 
-                                   "casenames", "precedent_id"]:
-                            if original_metadata.get(key) and not merged_doc["metadata"].get(key):
+                        
+                        # metadata에도 복원
+                        if "metadata" not in merged_doc:
+                            merged_doc["metadata"] = {}
+                        if not isinstance(merged_doc["metadata"], dict):
+                            merged_doc["metadata"] = {}
+                        if isinstance(original_metadata, dict) and original_metadata.get(key):
+                            if not merged_doc["metadata"].get(key):
                                 merged_doc["metadata"][key] = original_metadata.get(key)
         
         # 병합 후에도 search_type이 없는 문서에 대해 강화된 추론 로직 적용
@@ -7308,42 +7702,102 @@ class EnhancedLegalQuestionWorkflow(
                     doc["search_type"] = metadata["original_search_type"]
                     continue
             
-            # 🔥 개선: type 필드 정규화 (메타데이터 보존)
-            # type이 없거나 unknown이면 여러 위치에서 복원 시도
+            # 🔥 CRITICAL: normalize_document_type 호출 전에 type 정보 확인 및 복원
+            # type이 없거나 unknown인 경우 원본 문서에서 복원 시도
             current_type = doc.get("type", "").lower() if doc.get("type") else ""
-            if not doc.get("type") or current_type == "unknown":
+            current_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+            
+            # normalize_document_type 호출 전 type 정보 로깅
+            self.logger.debug(
+                f"🔍 [TYPE TRACE] _merge_and_rerank_results - normalize_document_type 호출 전: "
+                f"doc_id={doc.get('id', 'unknown')}, "
+                f"type={repr(doc.get('type'))}, metadata_type={repr(current_metadata_type)}"
+            )
+            
+            if not current_type or current_type == "unknown":
+                # metadata에서 type 복원 시도
                 metadata = doc.get("metadata", {})
                 if isinstance(metadata, dict):
-                    # 1단계: metadata에서 복원
-                    metadata_type = metadata.get("source_type") or metadata.get("type")
+                    metadata_type = metadata.get("type") or metadata.get("source_type")
                     if metadata_type and metadata_type.lower() != "unknown":
                         doc["type"] = metadata_type
-                        if not metadata.get("type"):
-                            metadata["type"] = metadata_type
-                    else:
-                        # 2단계: content.metadata에서 확인 (content가 딕셔너리인 경우)
-                        content = doc.get("content")
-                        if isinstance(content, dict):
-                            content_metadata = content.get("metadata", {})
-                            if isinstance(content_metadata, dict):
-                                content_type = content_metadata.get("source_type") or content_metadata.get("type")
-                                if content_type and content_type.lower() != "unknown":
-                                    doc["type"] = content_type
-                                    if not metadata.get("type"):
-                                        metadata["type"] = content_type
-                        # 3단계: DocumentType.from_metadata로 추론
-                        if not doc.get("type") or doc.get("type", "").lower() == "unknown":
-                            try:
-                                from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
-                                doc_type_enum = DocumentType.from_metadata(doc)
-                                if doc_type_enum != DocumentType.UNKNOWN:
-                                    doc["type"] = doc_type_enum.value
-                                    if not metadata.get("type"):
-                                        metadata["type"] = doc_type_enum.value
-                            except (ImportError, AttributeError):
-                                pass
+                        current_type = metadata_type.lower()
+                        self.logger.debug(
+                            f"🔍 [TYPE RESTORE] normalize_document_type 전 type 복원: "
+                            f"doc_id={doc.get('id', 'unknown')}, type={metadata_type}"
+                        )
             
-            # 2. type으로 추론
+            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+            # type이 이미 있으면 normalize_document_type을 건너뛰거나, type 보존하도록 수정
+            try:
+                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                # type이 이미 있으면 보존
+                existing_type = doc.get("type")
+                existing_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+                
+                doc = normalize_document_type(doc)
+                
+                # normalize_document_type 호출 후 type 정보 로깅
+                after_normalize_type = doc.get("type")
+                after_normalize_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+                if existing_type != after_normalize_type:
+                    self.logger.debug(
+                        f"🔍 [TYPE TRACE] _merge_and_rerank_results - normalize_document_type 호출 후 변경: "
+                        f"doc_id={doc.get('id', 'unknown')}, "
+                        f"type: {repr(existing_type)} → {repr(after_normalize_type)}, "
+                        f"metadata_type: {repr(existing_metadata_type)} → {repr(after_normalize_metadata_type)}"
+                    )
+                
+                # normalize_document_type이 type을 unknown으로 바꾸는 경우 방지
+                if existing_type and existing_type.lower() != "unknown":
+                    normalized_type = doc.get("type", "").lower()
+                    if not normalized_type or normalized_type == "unknown":
+                        doc["type"] = existing_type
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        doc["metadata"]["type"] = existing_type
+                        self.logger.debug(
+                            f"🔍 [TYPE RESTORE] normalize_document_type이 unknown으로 변경한 것을 복원: "
+                            f"doc_id={doc.get('id', 'unknown')}, type={existing_type}"
+                        )
+            except ImportError:
+                try:
+                    from core.utils.document_type_normalizer import normalize_document_type
+                    existing_type = doc.get("type")
+                    existing_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+                    
+                    doc = normalize_document_type(doc)
+                    
+                    # normalize_document_type 호출 후 type 정보 로깅
+                    after_normalize_type = doc.get("type")
+                    after_normalize_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+                    if existing_type != after_normalize_type:
+                        self.logger.debug(
+                            f"🔍 [TYPE TRACE] _merge_and_rerank_results - normalize_document_type 호출 후 변경 (fallback): "
+                            f"doc_id={doc.get('id', 'unknown')}, "
+                            f"type: {repr(existing_type)} → {repr(after_normalize_type)}, "
+                            f"metadata_type: {repr(existing_metadata_type)} → {repr(after_normalize_metadata_type)}"
+                        )
+                    
+                    if existing_type and existing_type.lower() != "unknown":
+                        normalized_type = doc.get("type", "").lower()
+                        if not normalized_type or normalized_type == "unknown":
+                            doc["type"] = existing_type
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = existing_type
+                            self.logger.debug(
+                                f"🔍 [TYPE RESTORE] normalize_document_type이 unknown으로 변경한 것을 복원 (fallback): "
+                                f"doc_id={doc.get('id', 'unknown')}, type={existing_type}"
+                            )
+                except ImportError:
+                    pass
+        
+            # 단일 소스 원칙: doc.type만 사용
             doc_type = doc.get("type", "").lower()
             
             # 법령/판례 관련 문서는 semantic으로 분류
@@ -7361,7 +7815,7 @@ class EnhancedLegalQuestionWorkflow(
             else:
                 # 기본적으로 keyword로 분류
                 doc["search_type"] = "keyword"
-            
+        
             # search_type이 있더라도 metadata에 원본 정보 보존
             if "metadata" not in doc:
                 doc["metadata"] = {}
@@ -7369,6 +7823,18 @@ class EnhancedLegalQuestionWorkflow(
                 doc["metadata"] = {}
             if "original_search_type" not in doc["metadata"]:
                 doc["metadata"]["original_search_type"] = doc.get("search_type", "unknown")
+        
+        # 최종 type 정보 로깅
+        final_types = [doc.get("type") if isinstance(doc, dict) else None for doc in merged_docs[:3]]
+        final_metadata_types = [
+            doc.get("metadata", {}).get("type") if isinstance(doc, dict) and isinstance(doc.get("metadata"), dict) else None
+            for doc in merged_docs[:3]
+        ]
+        self.logger.debug(
+            f"🔍 [TYPE TRACE] _merge_and_rerank_results 최종: "
+            f"merged_docs_count={len(merged_docs)}, "
+            f"final_types (first 3)={final_types}, final_metadata_types (first 3)={final_metadata_types}"
+        )
         
         # 🔥 개선: merged_docs에 메타데이터 보존 로직 추가
         # merge_search_results 또는 _merge_search_results_internal에서 반환된 문서의 메타데이터 보존
@@ -12723,6 +13189,15 @@ class EnhancedLegalQuestionWorkflow(
     
     def _normalize_retrieved_docs_to_structured(self, retrieved_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """retrieved_docs를 structured_documents 형태로 정규화"""
+        # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+        try:
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+        except ImportError:
+            try:
+                from core.utils.document_type_normalizer import normalize_document_type
+            except ImportError:
+                normalize_document_type = None
+        
         normalized_documents = []
         self.logger.debug(f"🔍 [NORMALIZE] Processing {len(retrieved_docs)} retrieved_docs")
         
@@ -12730,6 +13205,10 @@ class EnhancedLegalQuestionWorkflow(
             if not isinstance(doc, dict):
                 self.logger.warning(f"⚠️ [NORMALIZE] Doc {idx} is not a dict, skipping")
                 continue
+            
+            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+            if normalize_document_type:
+                doc = normalize_document_type(doc)
             
             # 멀티 질의 검색 결과의 다양한 필드명 지원
             content = (

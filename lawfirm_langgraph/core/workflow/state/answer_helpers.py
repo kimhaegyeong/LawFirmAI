@@ -148,7 +148,45 @@ def parse_answer_with_metadata(answer_text: str) -> Tuple[str, Optional[Dict[str
     if not answer_text:
         return answer_text, None
     
-    # <metadata> 태그로 감싸진 JSON 추출
+    # 🔥 개선: 새로운 형식 지원 - [END] + [metadata] 섹션
+    # 패턴 0: [END] 마커와 [metadata] 섹션 형식
+    # 형식: [답변 본문]\n\n[END]\n\n[metadata]\n{...}
+    end_marker_pattern = r'\[END\]'
+    metadata_section_pattern = r'\[metadata\]\s*(\{.*?\})'
+    
+    end_match = re.search(end_marker_pattern, answer_text, re.IGNORECASE)
+    if end_match:
+        # [END] 마커 이후에서 [metadata] 섹션 찾기
+        after_end = answer_text[end_match.end():]
+        metadata_match = re.search(metadata_section_pattern, after_end, re.DOTALL | re.IGNORECASE)
+        
+        if metadata_match:
+            try:
+                metadata_json = metadata_match.group(1)
+                metadata = json.loads(metadata_json)
+                
+                # [END] 마커 이전까지가 답변 본문
+                answer_body = answer_text[:end_match.start()].rstrip()
+                
+                logger.debug(f"✅ [METADATA PARSE] Successfully parsed [END] + [metadata] format")
+                return answer_body.strip(), metadata
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ [METADATA PARSE] Failed to parse JSON metadata from [metadata] section: {e}")
+                # JSON 파싱 실패 시 [END] 이전까지만 반환
+                answer_body = answer_text[:end_match.start()].rstrip()
+                return answer_body.strip(), None
+            except Exception as e:
+                logger.warning(f"⚠️ [METADATA PARSE] Unexpected error parsing [metadata] section: {e}")
+                answer_body = answer_text[:end_match.start()].rstrip()
+                return answer_body.strip(), None
+        else:
+            # [END] 마커는 있지만 [metadata] 섹션이 없는 경우
+            answer_body = answer_text[:end_match.start()].rstrip()
+            logger.debug(f"✅ [METADATA PARSE] Found [END] marker but no [metadata] section")
+            return answer_body.strip(), None
+    
+    # 🔥 개선: 여러 패턴으로 metadata 추출 시도
+    # 패턴 1: <metadata> 태그로 감싸진 JSON
     metadata_pattern = r'<metadata>\s*(\{.*?\})\s*</metadata>'
     match = re.search(metadata_pattern, answer_text, re.DOTALL | re.IGNORECASE)
     
@@ -163,6 +201,11 @@ def parse_answer_with_metadata(answer_text: str) -> Tuple[str, Optional[Dict[str
             # "---" 구분선 제거
             answer_body = re.sub(r'\n*---\s*\n*$', '', answer_body, flags=re.MULTILINE)
             
+            # 🔥 개선: </metadata> 태그 이후의 모든 내용 제거 (추가 섹션 포함)
+            metadata_end = match.end()
+            # </metadata> 이후의 모든 내용 제거
+            answer_body = answer_text[:match.start()].rstrip()
+            
             logger.debug(f"✅ [METADATA PARSE] Successfully parsed metadata from answer")
             return answer_body.strip(), metadata
         except json.JSONDecodeError as e:
@@ -170,10 +213,51 @@ def parse_answer_with_metadata(answer_text: str) -> Tuple[str, Optional[Dict[str
             # JSON 파싱 실패 시 메타데이터 부분만 제거
             answer_body = answer_text[:match.start()].rstrip()
             answer_body = re.sub(r'\n*---\s*\n*$', '', answer_body, flags=re.MULTILINE)
+            # </metadata> 이후의 모든 내용 제거
             return answer_body.strip(), None
         except Exception as e:
             logger.warning(f"⚠️ [METADATA PARSE] Unexpected error parsing metadata: {e}")
+            # 오류 발생 시에도 </metadata> 이후 내용 제거 시도
+            if match:
+                answer_body = answer_text[:match.start()].rstrip()
+                return answer_body.strip(), None
             return answer_text, None
+    
+    # 🔥 개선: 패턴 2: 답변 본문에 포함된 JSON 형식의 metadata 제거 (태그 없이)
+    # JSON 객체 패턴 찾기 (document_usage, coverage 등이 포함된 경우)
+    # 중첩된 중괄호를 처리하기 위해 더 정교한 패턴 사용
+    json_metadata_pattern = r'(\{[^{}]*"document_usage"[^{}]*(?:\{[^{}]*\}[^{}]*)*"coverage"[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
+    json_match = re.search(json_metadata_pattern, answer_text, re.DOTALL | re.IGNORECASE)
+    
+    if json_match:
+        try:
+            # JSON이 답변 끝부분에 있는지 확인
+            json_start = json_match.start()
+            # 답변의 마지막 30% 이내에 있으면 metadata로 간주
+            if json_start > len(answer_text) * 0.7:
+                # 중괄호 매칭을 위해 더 정확한 추출 시도
+                # 시작 위치부터 끝까지 찾아서 완전한 JSON 객체 추출
+                brace_count = 0
+                json_end = json_start
+                for i in range(json_start, len(answer_text)):
+                    if answer_text[i] == '{':
+                        brace_count += 1
+                    elif answer_text[i] == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            json_end = i + 1
+                            break
+                
+                if json_end > json_start:
+                    metadata_json = answer_text[json_start:json_end]
+                    metadata = json.loads(metadata_json)
+                    # JSON 부분 제거
+                    answer_body = answer_text[:json_start].rstrip()
+                    logger.debug(f"✅ [METADATA PARSE] Successfully parsed JSON metadata from answer body (position: {json_start}-{json_end})")
+                    return answer_body.strip(), metadata
+        except (json.JSONDecodeError, Exception) as e:
+            logger.debug(f"⚠️ [METADATA PARSE] JSON pattern found but failed to parse: {e}")
+            # 파싱 실패해도 계속 진행
     
     # 메타데이터가 없는 경우 원본 반환
     return answer_text, None

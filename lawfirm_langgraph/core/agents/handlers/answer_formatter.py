@@ -30,6 +30,11 @@ from .extractors.source_extractor import SourceExtractor
 from .cleaners.answer_cleaner import AnswerCleaner
 from .formatters.length_adjuster import AnswerLengthAdjuster
 
+try:
+    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+except ImportError:
+    from core.utils.document_type_normalizer import normalize_document_type
+
 # Constants for processing steps
 MAX_PROCESSING_STEPS = 50
 
@@ -645,8 +650,11 @@ class AnswerFormatterHandler:
                     if not isinstance(doc, dict):
                         continue
 
+                    # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                    doc = normalize_document_type(doc)
+                    
                     source = None
-                    source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                    source_type = doc.get("type", "")  # 단일 소스 원칙: doc.type만 사용
                     metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                     
                     # 통일된 포맷터로 상세 정보 생성
@@ -1378,7 +1386,9 @@ class AnswerFormatterHandler:
                 if not isinstance(doc, dict):
                     continue
                 
-                source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                doc = normalize_document_type(doc)
+                source_type = doc.get("type", "")  # 단일 소스 원칙: doc.type만 사용
                 metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                 
                 # source 생성 시도
@@ -1469,9 +1479,13 @@ class AnswerFormatterHandler:
     
     def _create_source_detail_dict(self, source_str: str, matching_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """source detail 딕셔너리 생성"""
+        # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+        if matching_doc:
+            matching_doc = normalize_document_type(matching_doc.copy())
+        
         detail_dict = {
             "name": source_str,
-            "type": matching_doc.get("type") or matching_doc.get("source_type") or "unknown" if matching_doc else "unknown",
+            "type": matching_doc.get("type", "unknown") if matching_doc else "unknown",  # 단일 소스 원칙: doc.type만 사용
             "url": "",
             "metadata": matching_doc.get("metadata", {}) if matching_doc else {}
         }
@@ -2013,9 +2027,12 @@ class AnswerFormatterHandler:
                 sources_failed_count += 1
                 continue
 
+            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+            doc = normalize_document_type(doc)
+            
             source = None
             source_created = False
-            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+            source_type = doc.get("type", "")  # 단일 소스 원칙: doc.type만 사용
             metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             # doc_id 추출: 여러 위치에서 확인 (우선순위 순)
             doc_id = (
@@ -2213,7 +2230,9 @@ class AnswerFormatterHandler:
             if not isinstance(doc, dict):
                 continue
             
-            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+            doc = normalize_document_type(doc)
+            source_type = doc.get("type", "")  # 단일 소스 원칙: doc.type만 사용
             metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             
             if source_type in ["precedent_content", "case_paragraph"]:
@@ -2391,11 +2410,13 @@ class AnswerFormatterHandler:
                     matching_doc = None
                     for doc in retrieved_docs_list:
                         if isinstance(doc, dict):
+                            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                            normalized_doc = normalize_document_type(doc.copy())
                             doc_source = self._create_source_from_doc(
-                                doc, 
-                                doc.get("metadata", {}), 
-                                doc.get("type") or doc.get("source_type", ""),
-                                doc.get("doc_id")
+                                normalized_doc, 
+                                normalized_doc.get("metadata", {}), 
+                                normalized_doc.get("type", ""),  # 단일 소스 원칙: doc.type만 사용
+                                normalized_doc.get("doc_id")
                             )
                             if doc_source and str(doc_source).strip() == source_str:
                                 matching_doc = doc
@@ -2759,8 +2780,10 @@ class AnswerFormatterHandler:
                     })
                     continue
                 
+                # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                doc = normalize_document_type(doc)
                 doc_id = doc.get("doc_id") or doc.get("metadata", {}).get("doc_id") or doc.get("metadata", {}).get("case_id") or ""
-                doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                doc_type = doc.get("type", "")  # 단일 소스 원칙: doc.type만 사용
                 doc_source = doc.get("source") or doc.get("title") or ""
                 
                 # sources_detail에서 매칭되는 항목 찾기

@@ -237,34 +237,82 @@ class WorkflowDocumentProcessor:
                 # 점수 분포에 따라 동적 임계값 계산 (개선된 로직 - 더 완화)
                 # 실제 점수 범위를 고려하여 threshold를 더 낮게 설정
                 # avg_score가 낮으면(0.2 미만) 임계값을 더 낮춤
+                
+                # 디버깅: 계산 경로 추적을 위한 변수
+                calculation_path = None
+                intermediate_calculation = None
+                
                 if avg_score < 0.20:
                     # 평균 점수가 매우 낮으면 최소값 기준으로 매우 낮게 설정
                     # 최소값의 85% 이상을 포함하도록 (더 많은 문서 포함)
-                    dynamic_threshold = max(0.05, min_score * 0.85 + threshold_adjustment)
-                    self.logger.debug(f"📊 [LOW SCORE] Average score is very low ({avg_score:.3f}), using minimum-based threshold: {dynamic_threshold:.3f}")
+                    calculation_path = "LOW_AVG_SCORE"
+                    intermediate_calculation = min_score * 0.85 + threshold_adjustment
+                    dynamic_threshold = max(0.05, intermediate_calculation)
+                    self.logger.debug(
+                        f"📊 [THRESHOLD CALC] Path={calculation_path}, "
+                        f"min_score={min_score:.3f}, formula=min_score*0.85+adj, "
+                        f"intermediate={intermediate_calculation:.3f}, final={dynamic_threshold:.3f}"
+                    )
                 elif score_range < 0.15:
                     # 점수가 매우 비슷하면 최소값 기준으로 낮춤 (최소값의 85% 이상)
-                    dynamic_threshold = max(0.08, min_score * 0.85 + threshold_adjustment)
+                    calculation_path = "NARROW_RANGE"
+                    intermediate_calculation = min_score * 0.85 + threshold_adjustment
+                    dynamic_threshold = max(0.08, intermediate_calculation)
+                    self.logger.debug(
+                        f"📊 [THRESHOLD CALC] Path={calculation_path}, "
+                        f"min_score={min_score:.3f}, formula=min_score*0.85+adj, "
+                        f"intermediate={intermediate_calculation:.3f}, final={dynamic_threshold:.3f}"
+                    )
                 elif score_range < 0.25:
                     # 점수가 비슷하면 25% 분위수 기준 (더 낮게)
-                    dynamic_threshold = max(0.10, q25 - 0.08 + threshold_adjustment)
+                    calculation_path = "Q25_BASED"
+                    intermediate_calculation = q25 - 0.08 + threshold_adjustment
+                    dynamic_threshold = max(0.10, intermediate_calculation)
+                    self.logger.debug(
+                        f"📊 [THRESHOLD CALC] Path={calculation_path}, "
+                        f"q25={q25:.3f}, formula=q25-0.08+adj, "
+                        f"intermediate={intermediate_calculation:.3f}, final={dynamic_threshold:.3f}"
+                    )
                 elif score_range < 0.4:
                     # 점수 차이가 중간이면 평균 기준 (표준편차 고려, 더 낮게)
                     if std_dev > 0.1:
                         # 분산이 크면 평균 - 표준편차 * 2.0 (더 완화)
-                        dynamic_threshold = max(0.10, avg_score - std_dev * 2.0 + threshold_adjustment)
+                        calculation_path = "AVG_STD_HIGH_VARIANCE"
+                        intermediate_calculation = avg_score - std_dev * 2.0 + threshold_adjustment
+                        dynamic_threshold = max(0.10, intermediate_calculation)
+                        self.logger.debug(
+                            f"📊 [THRESHOLD CALC] Path={calculation_path}, "
+                            f"avg={avg_score:.3f}, std={std_dev:.3f}, formula=avg-std*2.0+adj, "
+                            f"intermediate={intermediate_calculation:.3f}, final={dynamic_threshold:.3f}"
+                        )
                     else:
                         # 분산이 작으면 평균 - 0.15 (더 완화)
-                        dynamic_threshold = max(0.10, avg_score - 0.15 + threshold_adjustment)
+                        calculation_path = "AVG_STD_LOW_VARIANCE"
+                        intermediate_calculation = avg_score - 0.15 + threshold_adjustment
+                        dynamic_threshold = max(0.10, intermediate_calculation)
+                        self.logger.debug(
+                            f"📊 [THRESHOLD CALC] Path={calculation_path}, "
+                            f"avg={avg_score:.3f}, std={std_dev:.3f}, formula=avg-0.15+adj, "
+                            f"intermediate={intermediate_calculation:.3f}, final={dynamic_threshold:.3f}"
+                        )
                 else:
                     # 점수 차이가 크면 중위수 기준 (이상치 영향 최소화, 더 낮게)
-                    dynamic_threshold = max(0.15, q50 - 0.10 + threshold_adjustment)
+                    calculation_path = "MEDIAN_BASED"
+                    intermediate_calculation = q50 - 0.10 + threshold_adjustment
+                    dynamic_threshold = max(0.15, intermediate_calculation)
+                    self.logger.debug(
+                        f"📊 [THRESHOLD CALC] Path={calculation_path}, "
+                        f"q50={q50:.3f}, formula=q50-0.10+adj, "
+                        f"intermediate={intermediate_calculation:.3f}, final={dynamic_threshold:.3f}"
+                    )
                 
                 threshold_msg = (
-                    f"📊 [DYNAMIC THRESHOLD] avg={avg_score:.3f}, "
-                    f"std={std_dev:.3f}, range={score_range:.3f}, "
+                    f"📊 [DYNAMIC THRESHOLD] path={calculation_path}, "
+                    f"avg={avg_score:.3f}, std={std_dev:.3f}, range={score_range:.3f}, "
                     f"q25={q25:.3f}, q50={q50:.3f}, q75={q75:.3f}, "
-                    f"num_results={num_results}, threshold={dynamic_threshold:.3f}"
+                    f"min={min_score:.3f}, max={max_score:.3f}, "
+                    f"num_results={num_results}, adj={threshold_adjustment:.3f}, "
+                    f"intermediate={intermediate_calculation:.3f}, threshold={dynamic_threshold:.3f}"
                 )
                 print(threshold_msg, flush=True, file=sys.stdout)
                 self.logger.debug(threshold_msg)
@@ -382,28 +430,18 @@ class WorkflowDocumentProcessor:
                 
                 # 문서 타입 및 소스 타입 정의 (unknown 처리 개선)
                 # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+                # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
                 from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
-                normalize_document_type(doc)
-                doc_type = doc.get("type", "unknown")
-                source_type = doc.get("source_type", doc_type)
+                doc = normalize_document_type(doc)
                 
-                if not source_type:
-                    metadata = doc.get("metadata", {})
-                    if isinstance(metadata, dict):
-                        source_type = metadata.get("source_type") or metadata.get("type")
-                        if source_type == "unknown":
-                            source_type = None
-                if not source_type:
-                    source_type = doc_type  # doc_type을 source_type으로 사용
-                if not source_type:
-                    source_type = "unknown"
+                # 단일 소스 원칙: doc.type만 사용
+                doc_type = doc.get("type", "unknown")
                 is_legal_doc = (
                     "법" in content[:200] or
                     "조문" in content[:200] or
                     "판례" in content[:200] or
                     "대법원" in content[:200] or
-                    doc_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"] or
-                    source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]
+                    doc_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]
                 )
                 
                 # 개선 6: 키워드 매칭 점수 기반 필터링 (더욱 완화)
@@ -426,21 +464,25 @@ class WorkflowDocumentProcessor:
                         continue
                 
                 # 문서 타입 확인
+                # 🔥 레거시 호환: source_type은 doc_type과 동일하게 처리 (단일 소스 원칙)
+                source_type = doc.get("source_type") or doc_type  # doc_type과 동일하게 설정
                 is_statute_article = (
                     doc_type == "statute_article" or 
                     source_type == "statute_article" or
-                    "statute_article" in doc_type or
-                    "statute_article" in source_type or
+                    "statute_article" in (doc_type or "") or
+                    "statute_article" in (source_type or "") or
                     doc.get("direct_match", False) or
                     search_type == "direct_statute"
                 )
                 is_precedent = (
                     doc_type == "precedent" or
                     source_type == "precedent" or
-                    "precedent" in doc_type or
-                    "precedent" in source_type or
-                    "case_paragraph" in doc_type or
-                    "case_paragraph" in source_type or
+                    "precedent" in (doc_type or "") or
+                    "precedent" in (source_type or "") or
+                    "case_paragraph" in (doc_type or "") or
+                    "case_paragraph" in (source_type or "") or
+                    "precedent_content" in (doc_type or "") or
+                    "precedent_content" in (source_type or "") or
                     "판례" in content[:200] or
                     "대법원" in content[:200]
                 )
@@ -1351,15 +1393,17 @@ class WorkflowDocumentProcessor:
             # 🔥 개선: structured_documents 생성 시 원본 문서의 모든 필드 보존
             structured_documents_list = []
             for idx, doc in enumerate(sorted_docs, 1):
+                # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                doc = normalize_document_type(doc)
+                
                 structured_doc = {
                     "document_id": idx,
                     "source": doc.get("source", "Unknown"),
                     "relevance_score": doc.get("final_weighted_score") or doc.get("relevance_score", 0.0),
-                    "content": (doc.get("content") or doc.get("text") or doc.get("content_text", ""))[:2000]
+                    "content": (doc.get("content") or doc.get("text") or doc.get("content_text", ""))[:2000],
+                    "type": doc.get("type", "unknown")  # 정규화된 type 보장
                 }
-                # 🔥 개선: 법률 정보 필드 보존 (type, statute_name, law_name, article_no 등)
-                if doc.get("type"):
-                    structured_doc["type"] = doc.get("type")
+                # 🔥 개선: 법률 정보 필드 보존 (type은 이미 위에서 설정됨)
                 if doc.get("source_type"):
                     structured_doc["source_type"] = doc.get("source_type")
                 if doc.get("statute_name"):

@@ -617,7 +617,18 @@ class SearchHandler:
                 if not doc_content:
                     continue
 
-                source_type = doc.get("source_type") or doc.get("type", "")
+                # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                try:
+                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                    doc = normalize_document_type(doc)
+                except ImportError:
+                    try:
+                        from core.utils.document_type_normalizer import normalize_document_type
+                        doc = normalize_document_type(doc)
+                    except ImportError:
+                        pass
+                
+                source_type = doc.get("type", "")  # 단일 소스 원칙: doc.type만 사용
                 source_id = doc.get("metadata", {}).get("source_id") if isinstance(doc.get("metadata"), dict) else None
                 doc_id = doc.get("doc_id")
                 
@@ -1175,6 +1186,117 @@ class SearchHandler:
                     f"{len(keyword_results)} → {len(filtered_keyword)}"
                 )
 
+            # 🔥 CRITICAL: ResultMerger에 전달하기 전에 type 정보 보장
+            # 원본 문서를 ID와 content로 매핑하여 type 정보 복원
+            original_docs_by_id = {}
+            original_docs_by_content = {}
+            for doc in semantic_results + keyword_results:
+                if isinstance(doc, dict):
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    if doc_id:
+                        original_docs_by_id[doc_id] = doc
+                    # content 기반 매칭도 추가
+                    content = doc.get("text") or doc.get("content", "")
+                    if content:
+                        content_hash = str(hash(content[:200]))  # 처음 200자로 해시
+                        original_docs_by_content[content_hash] = doc
+            
+            try:
+                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+            except ImportError:
+                try:
+                    from core.utils.document_type_normalizer import normalize_document_type
+                except ImportError:
+                    normalize_document_type = None
+            
+            # filtered_semantic의 각 문서에 대해 type 정보 보장
+            for doc in filtered_semantic:
+                if isinstance(doc, dict):
+                    # 1. 원본 문서에서 type 정보 복원 시도
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    original_doc = None
+                    if doc_id and doc_id in original_docs_by_id:
+                        original_doc = original_docs_by_id[doc_id]
+                    else:
+                        # content 기반 매칭 시도
+                        content = doc.get("text") or doc.get("content", "")
+                        if content:
+                            content_hash = str(hash(content[:200]))
+                            if content_hash in original_docs_by_content:
+                                original_doc = original_docs_by_content[content_hash]
+                    
+                    # 원본 문서에서 type 정보 복원
+                    if original_doc:
+                        original_type = original_doc.get("type") or original_doc.get("source_type")
+                        if original_type and original_type.lower() != "unknown":
+                            doc["type"] = original_type
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = original_type
+                            doc["metadata"]["source_type"] = original_type
+                    
+                    # 2. type 정보가 여전히 없으면 normalize_document_type으로 추론
+                    if not doc.get("type") and normalize_document_type:
+                        try:
+                            normalized_doc = normalize_document_type(doc.copy())
+                            inferred_type = normalized_doc.get("type")
+                            if inferred_type and inferred_type.lower() != "unknown":
+                                doc["type"] = inferred_type
+                                if "metadata" not in doc:
+                                    doc["metadata"] = {}
+                                if not isinstance(doc["metadata"], dict):
+                                    doc["metadata"] = {}
+                                doc["metadata"]["type"] = inferred_type
+                                doc["metadata"]["source_type"] = inferred_type
+                        except Exception:
+                            pass
+            
+            # filtered_keyword의 각 문서에 대해 type 정보 보장
+            for doc in filtered_keyword:
+                if isinstance(doc, dict):
+                    # 1. 원본 문서에서 type 정보 복원 시도
+                    doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
+                    original_doc = None
+                    if doc_id and doc_id in original_docs_by_id:
+                        original_doc = original_docs_by_id[doc_id]
+                    else:
+                        # content 기반 매칭 시도
+                        content = doc.get("text") or doc.get("content", "")
+                        if content:
+                            content_hash = str(hash(content[:200]))
+                            if content_hash in original_docs_by_content:
+                                original_doc = original_docs_by_content[content_hash]
+                    
+                    # 원본 문서에서 type 정보 복원
+                    if original_doc:
+                        original_type = original_doc.get("type") or original_doc.get("source_type")
+                        if original_type and original_type.lower() != "unknown":
+                            doc["type"] = original_type
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = original_type
+                            doc["metadata"]["source_type"] = original_type
+                    
+                    # 2. type 정보가 여전히 없으면 normalize_document_type으로 추론
+                    if not doc.get("type") and normalize_document_type:
+                        try:
+                            normalized_doc = normalize_document_type(doc.copy())
+                            inferred_type = normalized_doc.get("type")
+                            if inferred_type and inferred_type.lower() != "unknown":
+                                doc["type"] = inferred_type
+                                if "metadata" not in doc:
+                                    doc["metadata"] = {}
+                                if not isinstance(doc["metadata"], dict):
+                                    doc["metadata"] = {}
+                                doc["metadata"]["type"] = inferred_type
+                                doc["metadata"]["source_type"] = inferred_type
+                        except Exception:
+                            pass
+
             # Step 1: 결과를 ResultMerger가 처리할 수 있는 형태로 변환
             exact_results = {"semantic": filtered_semantic}
 
@@ -1206,10 +1328,42 @@ class SearchHandler:
                 query=query
             )
 
+            # 🔥 개선: merge_results 후 MergedResult의 metadata에서 type 정보 확인 및 보존
+            for merged_result in merged:
+                if isinstance(merged_result, dict):
+                    # 이미 dict로 변환된 경우
+                    continue
+                elif hasattr(merged_result, 'metadata'):
+                    # MergedResult 객체인 경우 metadata 확인
+                    metadata = merged_result.metadata if isinstance(merged_result.metadata, dict) else {}
+                    if metadata.get("type") and metadata.get("type").lower() != "unknown":
+                        # type 정보가 있으면 유지
+                        pass
+                    else:
+                        # type 정보가 없으면 원본 문서에서 복원 시도
+                        merged_id = metadata.get("id") or metadata.get("chunk_id") or metadata.get("document_id")
+                        original_doc = None
+                        if merged_id and merged_id in original_docs_by_id:
+                            original_doc = original_docs_by_id[merged_id]
+                        else:
+                            # content 기반 매칭 시도
+                            content = merged_result.text if hasattr(merged_result, 'text') else ""
+                            if content:
+                                content_hash = str(hash(content[:200]))
+                                if content_hash in original_docs_by_content:
+                                    original_doc = original_docs_by_content[content_hash]
+                        
+                        if original_doc:
+                            original_type = original_doc.get("type") or original_doc.get("source_type")
+                            if original_type and original_type.lower() != "unknown":
+                                metadata["type"] = original_type
+                                metadata["source_type"] = original_type
+                                merged_result.metadata = metadata
+
             # Step 3: 순위 결정
             ranked = self.result_ranker.rank_results(merged, top_k=20, query=query)
             
-            # 🔥 개선: rank_results 후 메타데이터 복원 (원본 문서에서)
+            # 🔥 CRITICAL: rank_results 후 메타데이터 복원 강화 (원본 문서에서)
             # 원본 문서를 ID로 매핑 (text/content 기반 해시도 포함)
             original_docs_by_id = {}
             original_docs_by_content = {}
@@ -1218,18 +1372,23 @@ class SearchHandler:
                     doc_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
                     if doc_id:
                         original_docs_by_id[doc_id] = doc
-                    # content 기반 매칭도 추가
+                    # content 기반 매칭도 추가 (hashlib 사용으로 일관성 유지)
                     content = doc.get("text") or doc.get("content", "")
                     if content:
-                        content_hash = str(hash(content[:200]))  # 처음 200자로 해시
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
                         original_docs_by_content[content_hash] = doc
             
             # ranked 문서의 메타데이터를 원본 문서에서 복원
-            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
-            
             for doc in ranked:
                 if not isinstance(doc, dict):
                     continue
+                
+                # 🔥 CRITICAL: type이 이미 있으면 우선 사용, 없거나 unknown인 경우에만 복원
+                current_type = doc.get("type", "").lower() if doc.get("type") else ""
+                if current_type and current_type != "unknown":
+                    # 이미 type이 있으면 스킵 (하지만 metadata 확인은 계속)
+                    pass
                 
                 # ID 기반 매칭 시도
                 merged_id = doc.get("id") or doc.get("chunk_id") or doc.get("document_id")
@@ -1241,37 +1400,63 @@ class SearchHandler:
                     # content 기반 매칭 시도
                     content = doc.get("text") or doc.get("content", "")
                     if content:
-                        content_hash = str(hash(content[:200]))
+                        import hashlib
+                        content_hash = str(hashlib.md5(content[:200].encode('utf-8')).hexdigest())
                         if content_hash in original_docs_by_content:
                             original_doc = original_docs_by_content[content_hash]
                 
                 if original_doc:
-                    # 🔥 개선: 원본 문서의 타입 정보를 더 적극적으로 복원 (우선순위 높임)
-                    original_type = (
-                        original_doc.get("type") or
-                        original_doc.get("source_type") or
-                        (original_doc.get("metadata", {}).get("type") if isinstance(original_doc.get("metadata"), dict) else None) or
-                        (original_doc.get("metadata", {}).get("source_type") if isinstance(original_doc.get("metadata"), dict) else None)
-                    )
-                    if original_type and original_type.lower() != "unknown":
-                        doc["type"] = original_type
-                        # metadata에도 저장
-                        if "metadata" not in doc:
-                            doc["metadata"] = {}
-                        if not isinstance(doc["metadata"], dict):
-                            doc["metadata"] = {}
-                        doc["metadata"]["type"] = original_type
-                        doc["metadata"]["source_type"] = original_type
-                        # 🔥 개선: merged_id 타입 안전 처리
-                        if merged_id:
-                            merged_id_str = str(merged_id) if not isinstance(merged_id, str) else merged_id
-                            merged_id_display = merged_id_str[:20] if len(merged_id_str) > 20 else merged_id_str
-                        else:
-                            merged_id_display = 'unknown'
+                    # 🔥 CRITICAL: type 정보 복원 (원본 문서에서 우선)
+                    original_type = original_doc.get("type", "").lower() if original_doc.get("type") else ""
+                    original_source_type = original_doc.get("source_type", "").lower() if original_doc.get("source_type") else ""
+                    
+                    # type이 없거나 unknown인 경우에만 복원
+                    if not current_type or current_type == "unknown" or current_type == "":
+                        if original_type and original_type != "unknown":
+                            doc["type"] = original_doc.get("type")
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = original_doc.get("type")
+                            doc["metadata"]["source_type"] = original_doc.get("type")
+                        elif original_source_type and original_source_type != "unknown":
+                            doc["type"] = original_doc.get("source_type")
+                            if "metadata" not in doc:
+                                doc["metadata"] = {}
+                            if not isinstance(doc["metadata"], dict):
+                                doc["metadata"] = {}
+                            doc["metadata"]["type"] = original_doc.get("source_type")
+                            doc["metadata"]["source_type"] = original_doc.get("source_type")
+                    
+                    # metadata에서도 타입 복원 시도 (원본 문서의 metadata)
+                    original_metadata = original_doc.get("metadata", {})
+                    if isinstance(original_metadata, dict):
+                        metadata_type = original_metadata.get("type") or original_metadata.get("source_type")
+                        if metadata_type and metadata_type.lower() != "unknown":
+                            if not doc.get("type") or doc.get("type", "").lower() == "unknown":
+                                doc["type"] = metadata_type
+                                if "metadata" not in doc:
+                                    doc["metadata"] = {}
+                                if not isinstance(doc["metadata"], dict):
+                                    doc["metadata"] = {}
+                                doc["metadata"]["type"] = metadata_type
+                                doc["metadata"]["source_type"] = metadata_type
+                    
+                    # 🔥 개선: merged_id 타입 안전 처리
+                    if merged_id:
+                        merged_id_str = str(merged_id) if not isinstance(merged_id, str) else merged_id
+                        merged_id_display = merged_id_str[:20] if len(merged_id_str) > 20 else merged_id_str
+                    else:
+                        merged_id_display = 'unknown'
+                    
+                    # type 복원 로깅
+                    final_type = doc.get("type", "unknown")
+                    if final_type and final_type.lower() != "unknown":
                         self.logger.debug(
                             f"🔍 [TYPE RESTORE] 원본 문서에서 타입 복원: "
                             f"doc_id={merged_id_display}, "
-                            f"type={original_type}"
+                            f"type={final_type}"
                         )
                     
                     # 법령/판례 관련 필드 복원
@@ -1279,6 +1464,15 @@ class SearchHandler:
                                "case_id", "court", "ccourt", "doc_id", "casenames", "precedent_id"]:
                         if not doc.get(key) and original_doc.get(key):
                             doc[key] = original_doc.get(key)
+                        
+                        # metadata에도 복원
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        if isinstance(original_metadata, dict) and original_metadata.get(key):
+                            if not doc["metadata"].get(key):
+                                doc["metadata"][key] = original_metadata.get(key)
                     
                     # metadata에도 복원
                     if "metadata" not in doc:
@@ -1300,7 +1494,27 @@ class SearchHandler:
                                 doc["metadata"][key] = original_metadata.get(key)
                 
                 # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+                # normalize_document_type 호출 전 type 확인
+                before_normalize_type = doc.get("type")
+                before_normalize_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+                self.logger.debug(
+                    f"🔍 [TYPE TRACE] search_handler.merge_search_results - normalize_document_type 호출 전: "
+                    f"doc_id={merged_id_display if 'merged_id_display' in locals() else 'unknown'}, "
+                    f"type={repr(before_normalize_type)}, metadata_type={repr(before_normalize_metadata_type)}"
+                )
+                
                 normalize_document_type(doc)
+                
+                # normalize_document_type 호출 후 type 확인
+                after_normalize_type = doc.get("type")
+                after_normalize_metadata_type = doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None
+                if before_normalize_type != after_normalize_type:
+                    self.logger.debug(
+                        f"🔍 [TYPE TRACE] search_handler.merge_search_results - normalize_document_type 호출 후 변경: "
+                        f"doc_id={merged_id_display if 'merged_id_display' in locals() else 'unknown'}, "
+                        f"type: {repr(before_normalize_type)} → {repr(after_normalize_type)}, "
+                        f"metadata_type: {repr(before_normalize_metadata_type)} → {repr(after_normalize_metadata_type)}"
+                    )
                 
                 # metadata에서 최상위 필드로 복원 (백업)
                 metadata = doc.get("metadata", {})
@@ -1396,16 +1610,29 @@ class SearchHandler:
 
             # Step 4: 다양성 필터 적용 (개선 기능: MMR 사용)
             if self.use_improvements and hasattr(self, 'diversity_ranker'):
-                # MergedResult를 Dict로 변환
+                # MergedResult를 Dict로 변환 (메타데이터 보존)
                 ranked_dicts = []
                 for result in ranked:
-                    doc = {
-                        "text": result.text if hasattr(result, 'text') else str(result),
-                        "content": result.text if hasattr(result, 'text') else str(result),
-                        "relevance_score": result.score if hasattr(result, 'score') else 0.0,
-                        "source": result.source if hasattr(result, 'source') else "",
-                        "metadata": result.metadata if hasattr(result, 'metadata') else {}
-                    }
+                    if MergedResult and isinstance(result, MergedResult):
+                        # result_merger의 _merged_result_to_dict 사용 (메타데이터 보존)
+                        doc = self.result_merger._merged_result_to_dict(result)
+                    elif isinstance(result, dict):
+                        doc = result.copy()
+                    else:
+                        # 폴백: 직접 변환 (metadata에서 type 복원)
+                        metadata = result.metadata if hasattr(result, 'metadata') and isinstance(result.metadata, dict) else {}
+                        doc = {
+                            "text": result.text if hasattr(result, 'text') else str(result),
+                            "content": result.text if hasattr(result, 'text') else str(result),
+                            "relevance_score": result.score if hasattr(result, 'score') else 0.0,
+                            "source": result.source if hasattr(result, 'source') else "",
+                            "metadata": metadata
+                        }
+                        # 🔥 CRITICAL: metadata에서 type 복원
+                        if "type" in metadata and metadata["type"] is not None:
+                            doc["type"] = metadata["type"]
+                        elif "source_type" in metadata and metadata["source_type"] is not None:
+                            doc["type"] = metadata["source_type"]
                     ranked_dicts.append(doc)
                 
                 # MMR 기반 다양성 보장
@@ -1427,14 +1654,20 @@ class SearchHandler:
                     elif isinstance(result, dict):
                         doc = result.copy()
                     else:
-                        # 폴백: 직접 변환
+                        # 폴백: 직접 변환 (metadata에서 type 복원)
+                        metadata = result.metadata if hasattr(result, 'metadata') and isinstance(result.metadata, dict) else {}
                         doc = {
                             "text": result.text if hasattr(result, 'text') else str(result),
                             "content": result.text if hasattr(result, 'text') else str(result),
                             "relevance_score": result.score if hasattr(result, 'score') else 0.0,
                             "source": result.source if hasattr(result, 'source') else "",
-                            "metadata": result.metadata if hasattr(result, 'metadata') else {}
+                            "metadata": metadata
                         }
+                        # 🔥 CRITICAL: metadata에서 type 복원
+                        if "type" in metadata and metadata["type"] is not None:
+                            doc["type"] = metadata["type"]
+                        elif "source_type" in metadata and metadata["source_type"] is not None:
+                            doc["type"] = metadata["source_type"]
                     ranked_dicts.append(doc)
                 filtered = ranked_dicts
 

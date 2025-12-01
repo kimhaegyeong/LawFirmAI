@@ -2299,6 +2299,82 @@ class SemanticSearchEngineV2:
             raise RuntimeError("DatabaseAdapter is required. PostgreSQL database must be configured via DATABASE_URL.")
         return self._db_adapter.get_connection_context()
     
+    def _parse_embedding_vector(self, embedding_vector: Any, chunk_id: Optional[str] = None) -> Optional[np.ndarray]:
+        """
+        임베딩 벡터를 numpy array로 파싱
+        
+        Args:
+            embedding_vector: 파싱할 벡터 (다양한 형태 가능)
+            chunk_id: 청크 ID (로깅용, 선택)
+            
+        Returns:
+            파싱된 numpy array 또는 None
+        """
+        if embedding_vector is None:
+            return None
+        
+        try:
+            # 1. 이미 numpy array인 경우
+            if isinstance(embedding_vector, np.ndarray):
+                return embedding_vector.astype(np.float32)
+            
+            # 2. list/tuple인 경우
+            if isinstance(embedding_vector, (list, tuple)):
+                return np.array(embedding_vector, dtype=np.float32)
+            
+            # 3. 문자열 형태인 경우 (JSON 배열 문자열)
+            if isinstance(embedding_vector, str):
+                # JSON 파싱 시도
+                try:
+                    import json
+                    parsed = json.loads(embedding_vector)
+                    if isinstance(parsed, (list, tuple)):
+                        return np.array(parsed, dtype=np.float32)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                
+                # 대괄호로 감싸진 숫자 배열 문자열 파싱
+                # 예: "[0.1, 0.2, 0.3]" 또는 "[0.1,-0.2,0.3]"
+                if embedding_vector.strip().startswith('[') and embedding_vector.strip().endswith(']'):
+                    try:
+                        # 대괄호 제거 후 쉼표로 분리
+                        content = embedding_vector.strip()[1:-1]
+                        # 숫자 추출 (정규식 사용)
+                        import re
+                        numbers = re.findall(r'-?\d+\.?\d*(?:[eE][+-]?\d+)?', content)
+                        if numbers:
+                            return np.array([float(n) for n in numbers], dtype=np.float32)
+                    except (ValueError, IndexError) as e:
+                        if chunk_id:
+                            self.logger.debug(
+                                f"Failed to parse vector string for chunk_id {chunk_id}: {e}"
+                            )
+                
+                # 쉼표로 구분된 숫자 문자열 파싱 (대괄호 없음)
+                try:
+                    import re
+                    numbers = re.findall(r'-?\d+\.?\d*(?:[eE][+-]?\d+)?', embedding_vector)
+                    if numbers:
+                        return np.array([float(n) for n in numbers], dtype=np.float32)
+                except (ValueError, IndexError):
+                    pass
+            
+            # 4. tolist() 메서드가 있는 경우 (pgvector Vector 등)
+            if hasattr(embedding_vector, 'tolist'):
+                return np.array(embedding_vector.tolist(), dtype=np.float32)
+            
+            # 5. 마지막 시도: 직접 변환
+            return np.array(embedding_vector, dtype=np.float32)
+            
+        except Exception as parse_error:
+            chunk_info = f"chunk_id {chunk_id}: " if chunk_id else ""
+            self.logger.debug(
+                f"Failed to parse vector for {chunk_info}{parse_error}, "
+                f"type: {type(embedding_vector).__name__}, "
+                f"preview: {str(embedding_vector)[:100]}"
+            )
+            return None
+    
     def _safe_close_connection(self, conn):
         """연결을 안전하게 풀에 반환 (DatabaseAdapter 사용 시)"""
         if not self._db_adapter:
@@ -2438,8 +2514,34 @@ class SemanticSearchEngineV2:
 
                         # ⚠️ 중요: article_id를 키로 사용 (pgvector 검색 결과와 일치)
                         chunk_vectors[article_id] = vector
+                        
+                        # 🔥 개선: metadata JSON에서 type/source_type 추출하여 source_type 보장
+                        source_type_from_metadata = None
+                        if metadata:
+                            if isinstance(metadata, dict):
+                                source_type_from_metadata = (
+                                    metadata.get('type') or 
+                                    metadata.get('source_type')
+                                )
+                            elif isinstance(metadata, str):
+                                try:
+                                    import json
+                                    metadata_dict = json.loads(metadata)
+                                    source_type_from_metadata = (
+                                        metadata_dict.get('type') or 
+                                        metadata_dict.get('source_type')
+                                    )
+                                except Exception:
+                                    pass
+                        
+                        # source_type 결정: metadata에서 추출한 값 우선, 없으면 기본값
+                        source_type = source_type_from_metadata or 'statute_article'
+                        # "unknown"은 기본값으로 대체
+                        if source_type == 'unknown':
+                            source_type = 'statute_article'
+                        
                         chunk_metadata[article_id] = {
-                            'source_type': 'statute_article',
+                            'source_type': source_type,  # metadata에서 추출한 값 사용
                             'source_id': article_id,
                             'metadata': metadata,
                             'embedding_version_id': embedding_version
@@ -2642,8 +2744,35 @@ class SemanticSearchEngineV2:
                             continue
 
                         chunk_vectors[chunk_id] = vector
+                        
+                        # 🔥 개선: metadata JSON에서 type/source_type 추출하여 source_type 보장
+                        metadata_json = row_dict.get('metadata')
+                        source_type_from_metadata = None
+                        if metadata_json:
+                            if isinstance(metadata_json, dict):
+                                source_type_from_metadata = (
+                                    metadata_json.get('type') or 
+                                    metadata_json.get('source_type')
+                                )
+                            elif isinstance(metadata_json, str):
+                                try:
+                                    import json
+                                    metadata_dict = json.loads(metadata_json)
+                                    source_type_from_metadata = (
+                                        metadata_dict.get('type') or 
+                                        metadata_dict.get('source_type')
+                                    )
+                                except Exception:
+                                    pass
+                        
+                        # source_type 결정: metadata에서 추출한 값 우선, 없으면 기본값
+                        source_type = source_type_from_metadata or 'precedent_content'
+                        # "unknown"은 기본값으로 대체
+                        if source_type == 'unknown':
+                            source_type = 'precedent_content'
+                        
                         chunk_metadata[chunk_id] = {
-                            'source_type': 'precedent_content',
+                            'source_type': source_type,  # metadata에서 추출한 값 사용
                             # 🔥 최적화: chunk_content는 큰 텍스트 필드이므로 벡터 로드 시 제외
                             # 필요시 별도 쿼리로 로드 (성능 향상)
                             'text': None,  # chunk_content는 필요시 별도 로드
@@ -3437,6 +3566,18 @@ class SemanticSearchEngineV2:
                     relevance_score=avg_relevance
                 )
             
+            # 🔥 개선: 검색 결과에 data_type 정보 추가 (type 추론에 활용)
+            if data_type and results:
+                for result in results:
+                    if isinstance(result, dict):
+                        if "metadata" not in result:
+                            result["metadata"] = {}
+                        if not isinstance(result["metadata"], dict):
+                            result["metadata"] = {}
+                        # data_type 정보가 없을 때만 추가
+                        if "data_type" not in result["metadata"]:
+                            result["metadata"]["data_type"] = data_type
+            
             return results
 
         # 재시도 로직 개선: 결과가 부족하면 search_k를 증가시켜 재시도
@@ -3532,6 +3673,18 @@ class SemanticSearchEngineV2:
                             relevance_score=avg_relevance
                         )
                     
+                    # 🔥 개선: 검색 결과에 data_type 정보 추가 (type 추론에 활용)
+                    if data_type and results:
+                        for result in results:
+                            if isinstance(result, dict):
+                                if "metadata" not in result:
+                                    result["metadata"] = {}
+                                if not isinstance(result["metadata"], dict):
+                                    result["metadata"] = {}
+                                # data_type 정보가 없을 때만 추가
+                                if "data_type" not in result["metadata"]:
+                                    result["metadata"]["data_type"] = data_type
+                    
                     return results
                 
                 # 마지막 시도인 경우 무조건 반환
@@ -3582,6 +3735,18 @@ class SemanticSearchEngineV2:
                             latency_ms=latency_ms,
                             relevance_score=avg_relevance
                         )
+                    
+                    # 🔥 개선: 검색 결과에 data_type 정보 추가 (type 추론에 활용)
+                    if data_type and results:
+                        for result in results:
+                            if isinstance(result, dict):
+                                if "metadata" not in result:
+                                    result["metadata"] = {}
+                                if not isinstance(result["metadata"], dict):
+                                    result["metadata"] = {}
+                                # data_type 정보가 없을 때만 추가
+                                if "data_type" not in result["metadata"]:
+                                    result["metadata"]["data_type"] = data_type
                     
                     return results
                     
@@ -5440,7 +5605,31 @@ class SemanticSearchEngineV2:
                                     metadata = row[3] if len(row) > 3 else None
                                     embedding_version = row[4] if len(row) > 4 else None
                                 
-                                source_type = 'precedent_content'
+                                # 🔥 개선: metadata JSON에서 type/source_type 추출하여 source_type 보장
+                                source_type_from_metadata = None
+                                if metadata:
+                                    if isinstance(metadata, dict):
+                                        source_type_from_metadata = (
+                                            metadata.get('type') or 
+                                            metadata.get('source_type')
+                                        )
+                                    elif isinstance(metadata, str):
+                                        try:
+                                            import json
+                                            metadata_dict = json.loads(metadata)
+                                            source_type_from_metadata = (
+                                                metadata_dict.get('type') or 
+                                                metadata_dict.get('source_type')
+                                            )
+                                        except Exception:
+                                            pass
+                                
+                                # source_type 결정: metadata에서 추출한 값 우선, 없으면 기본값
+                                source_type = source_type_from_metadata or 'precedent_content'
+                                # "unknown"은 기본값으로 대체
+                                if source_type == 'unknown':
+                                    source_type = 'precedent_content'
+                                
                                 source_id = precedent_content_id
                                 self.logger.debug(f"Loaded from DB: chunk_id={chunk_id}, source_type={source_type}")
                                 
@@ -5452,7 +5641,7 @@ class SemanticSearchEngineV2:
                                         version_id = active_version_id
                                 
                                 self._chunk_metadata[chunk_id] = {
-                                    'source_type': source_type,
+                                    'source_type': source_type,  # metadata에서 추출한 값 사용
                                     'source_id': source_id,
                                     'text': text,
                                     'chunk_index': chunk_index,
@@ -5557,8 +5746,22 @@ class SemanticSearchEngineV2:
                                         except Exception as e:
                                             self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
                                 
+                                # 🔥 개선: metadata JSON에서 type/source_type 추출 (병합 전에 확인)
+                                source_type_from_metadata = None
+                                if chunk_meta_json:
+                                    source_type_from_metadata = (
+                                        chunk_meta_json.get('type') or 
+                                        chunk_meta_json.get('source_type')
+                                    )
+                                
+                                # source_type 결정: metadata에서 추출한 값 우선, 없으면 기본값
+                                source_type = source_type_from_metadata or 'precedent_content'
+                                # "unknown"은 기본값으로 대체
+                                if source_type == 'unknown':
+                                    source_type = 'precedent_content'
+                                
                                 chunk_metadata = {
-                                    'source_type': 'precedent_content',
+                                    'source_type': source_type,  # metadata에서 추출한 값 사용
                                     'source_id': precedent_content_id,
                                     'text': chunk_content if chunk_content else '',
                                     'chunk_index': chunk_index,
@@ -5568,6 +5771,8 @@ class SemanticSearchEngineV2:
                                 # precedent_chunks.metadata의 메타데이터를 chunk_metadata에 병합
                                 if chunk_meta_json:
                                     chunk_metadata.update(chunk_meta_json)
+                                    # source_type은 이미 설정했으므로 덮어쓰지 않도록 보장
+                                    chunk_metadata['source_type'] = source_type
                                 
                                 # self._chunk_metadata에도 저장
                                 self._chunk_metadata[chunk_id] = chunk_metadata
@@ -5804,6 +6009,32 @@ class SemanticSearchEngineV2:
                     source_name = self._format_source(source_type, source_meta)
                     source_url = ""
                 
+                # source_name이 빈 문자열이거나 None인 경우 기본값 설정
+                if not source_name or not source_name.strip():
+                    if source_type == "statute_article":
+                        statute_name = source_meta.get("statute_name") or "법령"
+                        article_no = source_meta.get("article_no") or ""
+                        source_name = f"{statute_name} {article_no}".strip() if article_no else statute_name
+                    elif source_type in ["case_paragraph", "precedent_content"]:
+                        doc_id = source_meta.get("doc_id") or ""
+                        casenames = source_meta.get("casenames") or ""
+                        if doc_id:
+                            source_name = f"{casenames} ({doc_id})".strip() if casenames else doc_id
+                        elif casenames:
+                            source_name = casenames
+                        else:
+                            source_name = "판례"
+                    elif source_type == "decision_paragraph":
+                        doc_id = source_meta.get("doc_id") or ""
+                        org = source_meta.get("org") or ""
+                        source_name = f"{org} {doc_id}".strip() if org and doc_id else (doc_id or org or "결정례")
+                    elif source_type == "interpretation_paragraph":
+                        title = source_meta.get("title") or ""
+                        org = source_meta.get("org") or ""
+                        source_name = f"{org} {title}".strip() if org and title else (title or org or "해석례")
+                    else:
+                        source_name = source_type or "알 수 없음"
+                
                 # embedding_version_id 조회 (메타데이터에서 먼저 확인)
                 result_embedding_version_id = chunk_metadata.get('embedding_version_id')
                 if result_embedding_version_id is None and conn:
@@ -5900,22 +6131,19 @@ class SemanticSearchEngineV2:
                                     if row:
                                         embedding_vector = row[0] if isinstance(row, tuple) else row.get('embedding_vector')
                                         if embedding_vector:
-                                            # 벡터 파싱
-                                            try:
-                                                if isinstance(embedding_vector, (list, tuple)):
-                                                    doc_vec = np.array(embedding_vector, dtype=np.float32)
-                                                elif hasattr(embedding_vector, 'tolist'):
-                                                    doc_vec = np.array(embedding_vector.tolist(), dtype=np.float32)
-                                                else:
-                                                    doc_vec = np.array(embedding_vector, dtype=np.float32)
-                                                
+                                            # 🔥 개선: 전용 파싱 함수 사용
+                                            doc_vec = self._parse_embedding_vector(embedding_vector, chunk_id)
+                                            
+                                            if doc_vec is not None:
                                                 # _chunk_vectors에 캐시
                                                 if not hasattr(self, '_chunk_vectors'):
                                                     self._chunk_vectors = {}
                                                 self._chunk_vectors[chunk_id] = doc_vec
-                                            except Exception as parse_error:
-                                                self.logger.debug(f"Failed to parse vector for chunk_id {chunk_id}: {parse_error}")
-                                                doc_vec = None
+                                            else:
+                                                self.logger.debug(
+                                                    f"Could not parse embedding vector for chunk_id {chunk_id}, "
+                                                    f"will use fallback search method"
+                                                )
                                         else:
                                             doc_vec = None
                                     else:
@@ -6148,8 +6376,19 @@ class SemanticSearchEngineV2:
                 seen_source_ids = {}  # 소스 ID 기반 중복 제거 (추가 개선)
                 deduplicated_results = []
                 for result in results:
+                    # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        result = normalize_document_type(result)
+                    except ImportError:
+                        try:
+                            from core.utils.document_type_normalizer import normalize_document_type
+                            result = normalize_document_type(result)
+                        except ImportError:
+                            pass
+                    
                     # 우선순위 1: 소스 ID 기반 중복 제거 (최우선)
-                    source_type = result.get("source_type") or result.get("type", "")
+                    source_type = result.get("type", "")  # 단일 소스 원칙: doc.type만 사용
                     source_id = result.get("metadata", {}).get("source_id") if isinstance(result.get("metadata"), dict) else None
                     if source_id and source_type:
                         source_key = f"{source_type}_{source_id}"
@@ -6179,7 +6418,18 @@ class SemanticSearchEngineV2:
                 seen_source_ids = {}
                 deduplicated_results = []
                 for result in results:
-                    source_type = result.get("source_type") or result.get("type", "")
+                    # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        result = normalize_document_type(result)
+                    except ImportError:
+                        try:
+                            from core.utils.document_type_normalizer import normalize_document_type
+                            result = normalize_document_type(result)
+                        except ImportError:
+                            pass
+                    
+                    source_type = result.get("type", "")  # 단일 소스 원칙: doc.type만 사용
                     source_id = result.get("metadata", {}).get("source_id") if isinstance(result.get("metadata"), dict) else None
                     if source_id and source_type:
                         source_key = f"{source_type}_{source_id}"
@@ -6271,7 +6521,18 @@ class SemanticSearchEngineV2:
                         # 🔥 개선: 폴백 결과의 타입을 확인하고 원래 요청된 타입과 다르면 경고
                         fallback_types = {}
                         for doc in fallback_results:
-                            doc_type = doc.get("type") or doc.get("metadata", {}).get("type", "unknown")
+                            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                            try:
+                                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                                doc = normalize_document_type(doc)
+                            except ImportError:
+                                try:
+                                    from core.utils.document_type_normalizer import normalize_document_type
+                                    doc = normalize_document_type(doc)
+                                except ImportError:
+                                    pass
+                            
+                            doc_type = doc.get("type", "unknown")  # 단일 소스 원칙: doc.type만 사용
                             fallback_types[doc_type] = fallback_types.get(doc_type, 0) + 1
                         
                         requested_types = set(source_types)
@@ -6321,9 +6582,74 @@ class SemanticSearchEngineV2:
                 self.logger.info(top_results_msg)
                 for i, result in enumerate(top_results, 1):
                     score = result.get("similarity", result.get("score", 0.0))
+                    # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        result = normalize_document_type(result)
+                    except ImportError:
+                        try:
+                            from core.utils.document_type_normalizer import normalize_document_type
+                            result = normalize_document_type(result)
+                        except ImportError:
+                            pass
+                    
                     chunk_id = result.get("chunk_id") or result.get("id") or "unknown"
-                    source_type = result.get("type") or result.get("source_type", "unknown")
-                    source = result.get("source", "")[:100] or "unknown"
+                    source_type = result.get("type", "unknown")  # 단일 소스 원칙: doc.type만 사용
+                    # source 필드가 빈 문자열이거나 None인 경우 source_type 기반 기본값 사용
+                    source = result.get("source", "")
+                    # 🔥 개선: "Unknown" (대문자)도 체크하고, 메타데이터에서도 확인
+                    if not source or not source.strip() or source.lower() in ["unknown", "알 수 없음"]:
+                        # 메타데이터에서 source 정보 확인
+                        metadata = result.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            # metadata에서 source 관련 필드 확인
+                            if source_type == "statute_article":
+                                source = (
+                                    metadata.get("statute_name") or 
+                                    metadata.get("law_name") or 
+                                    result.get("statute_name") or 
+                                    result.get("law_name") or 
+                                    "법령"
+                                )
+                            elif source_type in ["case_paragraph", "precedent_content"]:
+                                source = (
+                                    metadata.get("casenames") or 
+                                    metadata.get("doc_id") or 
+                                    result.get("casenames") or 
+                                    result.get("doc_id") or 
+                                    "판례"
+                                )
+                            elif source_type == "decision_paragraph":
+                                source = (
+                                    metadata.get("org") or 
+                                    metadata.get("doc_id") or 
+                                    result.get("org") or 
+                                    result.get("doc_id") or 
+                                    "결정례"
+                                )
+                            elif source_type == "interpretation_paragraph":
+                                source = (
+                                    metadata.get("title") or 
+                                    metadata.get("org") or 
+                                    result.get("title") or 
+                                    result.get("org") or 
+                                    "해석례"
+                                )
+                            else:
+                                source = source_type or "알 수 없음"
+                        else:
+                            # metadata가 없으면 result에서 직접 확인
+                            if source_type == "statute_article":
+                                source = result.get("statute_name") or result.get("law_name") or "법령"
+                            elif source_type in ["case_paragraph", "precedent_content"]:
+                                source = result.get("casenames") or result.get("doc_id") or "판례"
+                            elif source_type == "decision_paragraph":
+                                source = result.get("org") or result.get("doc_id") or "결정례"
+                            elif source_type == "interpretation_paragraph":
+                                source = result.get("title") or result.get("org") or "해석례"
+                            else:
+                                source = source_type or "알 수 없음"
+                    source = source[:100] if source and source.lower() not in ["unknown", "알 수 없음"] else (source_type or "알 수 없음")
                     content_preview = (result.get("content", result.get("text", ""))[:100] or "").replace("\n", " ")
                     result_detail = (
                         f"   {i}. score={score:.3f}, chunk_id={chunk_id}, "
@@ -7197,37 +7523,73 @@ class SemanticSearchEngineV2:
                         # decision_paragraph의 경우: org, doc_id 복원
                         # 참고: text_chunks 테이블은 PostgreSQL 환경에서 사용되지 않으므로 제거됨
                         elif source_type == 'decision_paragraph':
-                            # decision_paragraphs와 decisions를 직접 조회하도록 변경 필요
-                            pass
-                            decision_row = cursor_decision.fetchone()
-                            if decision_row:
-                                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
-                                if hasattr(decision_row, 'keys'):
-                                    org_val = decision_row.get('org')
-                                    doc_id_val = decision_row.get('doc_id')
+                            # decision_paragraphs와 decisions를 직접 조회
+                            try:
+                                cursor_decision = conn.cursor()
+                                if source_id:
+                                    cursor_decision.execute("""
+                                        SELECT d.org, d.doc_id
+                                        FROM decision_paragraphs dp
+                                        JOIN decisions d ON dp.decision_id = d.id
+                                        WHERE dp.id = %s
+                                    """, (source_id,))
                                 else:
-                                    org_val = decision_row[1] if len(decision_row) > 1 else None
-                                    doc_id_val = decision_row[2] if len(decision_row) > 2 else None
+                                    # source_id가 없으면 chunk_id로 직접 조회 시도
+                                    cursor_decision.execute("""
+                                        SELECT d.org, d.doc_id
+                                        FROM decision_paragraphs dp
+                                        JOIN decisions d ON dp.decision_id = d.id
+                                        WHERE dp.id = (SELECT decision_paragraph_id FROM embeddings WHERE chunk_id = %s LIMIT 1)
+                                    """, (chunk_id,))
                                 
-                                if 'org' in missing_fields and org_val:
-                                    result['org'] = org_val
-                                    if 'metadata' not in result:
-                                        result['metadata'] = {}
-                                    result['metadata']['org'] = org_val
-                                if 'doc_id' in missing_fields and doc_id_val:
-                                    result['doc_id'] = doc_id_val
-                                    if 'metadata' not in result:
-                                        result['metadata'] = {}
-                                    result['metadata']['doc_id'] = doc_id_val
-                                self.logger.debug(f"✅ Restored decision metadata for chunk_id={chunk_id} (org, doc_id)")
+                                decision_row = cursor_decision.fetchone()
+                                if decision_row:
+                                    # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                    if hasattr(decision_row, 'keys'):
+                                        org_val = decision_row.get('org')
+                                        doc_id_val = decision_row.get('doc_id')
+                                    else:
+                                        org_val = decision_row[0] if len(decision_row) > 0 else None
+                                        doc_id_val = decision_row[1] if len(decision_row) > 1 else None
+                                    
+                                    if 'org' in missing_fields and org_val:
+                                        result['org'] = org_val
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['org'] = org_val
+                                    if 'doc_id' in missing_fields and doc_id_val:
+                                        result['doc_id'] = doc_id_val
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['doc_id'] = doc_id_val
+                                    self.logger.debug(f"✅ Restored decision metadata for chunk_id={chunk_id} (org, doc_id)")
+                            except Exception as e:
+                                self.logger.debug(f"Failed to restore decision metadata for chunk_id={chunk_id}: {e}")
                         
                         # interpretation_paragraph의 경우: interpretation_id, doc_id 복원
                         # 참고: text_chunks 테이블은 PostgreSQL 환경에서 사용되지 않으므로 제거됨
                         elif source_type == 'interpretation_paragraph':
-                            # interpretation_paragraphs와 interpretations를 직접 조회하도록 변경 필요
-                            pass
-                            interp_row = cursor_interp.fetchone()
-                            if interp_row:
+                            # interpretation_paragraphs와 interpretations를 직접 조회
+                            try:
+                                cursor_interp = conn.cursor()
+                                if source_id:
+                                    cursor_interp.execute("""
+                                        SELECT i.interpretation_id, i.doc_id
+                                        FROM interpretation_paragraphs ip
+                                        JOIN interpretations i ON ip.interpretation_id = i.interpretation_id
+                                        WHERE ip.id = %s
+                                    """, (source_id,))
+                                else:
+                                    # source_id가 없으면 chunk_id로 직접 조회 시도
+                                    cursor_interp.execute("""
+                                        SELECT i.interpretation_id, i.doc_id
+                                        FROM interpretation_paragraphs ip
+                                        JOIN interpretations i ON ip.interpretation_id = i.interpretation_id
+                                        WHERE ip.id = (SELECT interpretation_paragraph_id FROM embeddings WHERE chunk_id = %s LIMIT 1)
+                                    """, (chunk_id,))
+                                
+                                interp_row = cursor_interp.fetchone()
+                                if interp_row:
                                     # PostgreSQL의 경우 dict-like row 또는 tuple 반환
                                     if hasattr(interp_row, 'keys'):
                                         interpretation_id_val = interp_row.get('interpretation_id')
@@ -7247,6 +7609,8 @@ class SemanticSearchEngineV2:
                                             result['metadata'] = {}
                                         result['metadata']['doc_id'] = doc_id_val
                                     self.logger.debug(f"✅ Restored interpretation metadata for chunk_id={chunk_id} (interpretation_id, doc_id)")
+                            except Exception as e:
+                                self.logger.debug(f"Failed to restore interpretation metadata for chunk_id={chunk_id}: {e}")
                     except Exception as e:
                         self.logger.debug(f"Failed to restore metadata via chunk_id for chunk_id={chunk_id}: {e}")
                 

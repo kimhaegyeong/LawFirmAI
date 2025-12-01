@@ -43,9 +43,10 @@ class WorkflowConstants:
 
 class RetryConfig:
     """재시도 설정 상수"""
-    MAX_GENERATION_RETRIES = 4
+    # 🔥 Stream API: LLM 호출 최대 2회 제한 (초기 1회 + 재시도 1회)
+    MAX_GENERATION_RETRIES = 1
     MAX_VALIDATION_RETRIES = 1
-    MAX_TOTAL_RETRIES = 6
+    MAX_TOTAL_RETRIES = 2  # generation 1회 + validation 1회
 
 
 class QualityThresholds:

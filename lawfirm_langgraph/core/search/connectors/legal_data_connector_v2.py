@@ -37,6 +37,14 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
+try:
+    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+except ImportError:
+    try:
+        from core.utils.document_type_normalizer import normalize_document_type
+    except ImportError:
+        normalize_document_type = None
+
 logger = get_logger(__name__)
 
 
@@ -226,17 +234,36 @@ class LegalDataConnectorV2:
         try:
             with self._db_adapter.get_connection_context() as conn:
                 cursor = conn.cursor()
+                # 🔥 개선: 컬럼명을 직접 반환하도록 쿼리 변경 (RealDictRow 지원)
                 cursor.execute("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_schema = 'public' 
-                        AND table_name = %s 
-                        AND column_name = %s
-                    )
+                    SELECT column_name
+                    FROM information_schema.columns 
+                    WHERE table_schema = 'public' 
+                    AND table_name = %s 
+                    AND column_name = %s
+                    LIMIT 1
                 """, (table_name, column_name))
                 row = cursor.fetchone()
-                result = row[0] if row else False
-                return bool(result)
+                
+                # row가 존재하면 컬럼이 존재함
+                if row is None:
+                    return False
+                
+                # 🔥 개선: 다양한 형태의 row 처리 (RealDictRow, tuple 등)
+                if isinstance(row, dict):
+                    # RealDictRow 등 딕셔너리 형태
+                    return bool(row.get('column_name'))
+                elif isinstance(row, tuple):
+                    # 일반 tuple
+                    return len(row) > 0 and bool(row[0])
+                else:
+                    # 기타 형태 (인덱스 접근 시도)
+                    try:
+                        return bool(row[0])
+                    except (KeyError, TypeError, IndexError):
+                        # 딕셔너리 접근 시도
+                        return bool(row.get('column_name', False)) if hasattr(row, 'get') else False
+                
         except Exception as e:
             self.logger.warning(f"Error checking column existence for {table_name}.{column_name}: {e}")
             return False
@@ -2413,7 +2440,10 @@ class LegalDataConnectorV2:
         type_counts = {}
         type_docs = {}
         for doc in results:
-            doc_type = doc.get("type") or doc.get("source_type", "unknown")
+            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+            if normalize_document_type:
+                doc = normalize_document_type(doc)
+            doc_type = doc.get("type", "unknown")  # 단일 소스 원칙: doc.type만 사용
             if doc_type not in type_docs:
                 type_docs[doc_type] = []
             type_docs[doc_type].append(doc)
