@@ -108,7 +108,7 @@ def mock_search_results():
 @pytest.fixture
 def mock_workflow_service(mock_config):
     """Mock LangGraphWorkflowService 픽스처"""
-    with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.LangGraphWorkflowService') as MockService:
+    with patch('lawfirm_langgraph.core.workflow.workflow_service.LangGraphWorkflowService') as MockService:
         service = MockService.return_value
         service.config = mock_config
         service.process_query_async = Mock(return_value={
@@ -175,7 +175,7 @@ def mock_chat_service():
 
 @pytest.fixture
 def mock_database():
-    """Mock DatabaseManager 픽스처"""
+    """Mock LegalDataConnectorV2 픽스처 (DatabaseManager 호환)"""
     db = MagicMock()
     db.execute_query = Mock(return_value=[])
     db.execute_update = Mock(return_value=1)
@@ -263,3 +263,228 @@ def setup_test_environment(monkeypatch):
     langgraph_logger.setLevel(log_level)
     langgraph_logger.propagate = True
 
+
+@pytest.fixture
+def workflow_config():
+    """EnhancedLegalQuestionWorkflow용 설정 픽스처"""
+    from lawfirm_langgraph.config.langgraph_config import LangGraphConfig, CheckpointStorageType
+    
+    return LangGraphConfig(
+        enable_checkpoint=True,
+        checkpoint_storage=CheckpointStorageType.MEMORY,
+        langgraph_enabled=True,
+        use_agentic_mode=False,
+        llm_provider="google",
+        google_model="gemini-2.5-flash-lite",
+        google_api_key="test_api_key",
+        max_iterations=10,
+        recursion_limit=25,
+    )
+
+
+@pytest.fixture
+def workflow_instance(workflow_config):
+    """EnhancedLegalQuestionWorkflow 인스턴스 픽스처"""
+    with patch('core.services.semantic_search_engine_v2.SemanticSearchEngineV2'):
+        with patch('core.services.multi_turn_handler.MultiTurnQuestionHandler'):
+            with patch('core.services.ai_keyword_generator.AIKeywordGenerator'):
+                with patch('core.agents.handlers.direct_answer_handler.DirectAnswerHandler'):
+                    with patch('core.agents.handlers.classification_handler.ClassificationHandler'):
+                        with patch('core.agents.handlers.answer_generator.AnswerGenerator'):
+                            with patch('core.agents.handlers.answer_formatter.AnswerFormatterHandler'):
+                                from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+                                return EnhancedLegalQuestionWorkflow(workflow_config)
+
+
+@pytest.fixture
+def workflow_state():
+    """표준 워크플로우 State 픽스처"""
+    return {
+        "input": {
+            "query": "전세금 반환 보증에 대해 설명해주세요",
+            "session_id": "test_session_123"
+        },
+        "query": "전세금 반환 보증에 대해 설명해주세요",
+        "query_type": "legal_advice",
+        "query_complexity": "moderate",
+        "needs_search": True,
+        "retrieved_docs": [
+            {
+                "content": "전세금 반환 보증 관련 내용입니다.",
+                "type": "statute_article",
+                "source": "주택임대차보호법",
+                "relevance_score": 0.9,
+                "source_type": "statute_article",
+                "source_id": "test-1"
+            }
+        ],
+        "semantic_results": [],
+        "keyword_results": [],
+        "semantic_count": 0,
+        "keyword_count": 0,
+        "search_params": {},
+        "extracted_keywords": ["전세금", "반환", "보증"],
+        "legal_field": "부동산법",
+        "legal_domain": "real_estate",
+        "confidence": 0.85,
+        "metadata": {},
+        "common": {
+            "metadata": {}
+        },
+        "search": {},
+        "processing_steps": [],
+        "errors": []
+    }
+
+
+@pytest.fixture
+def simple_query_state():
+    """간단한 질문용 State 픽스처"""
+    return {
+        "input": {
+            "query": "계약이란 무엇인가요?",
+            "session_id": "test_session_456"
+        },
+        "query": "계약이란 무엇인가요?",
+        "query_type": "definition",
+        "query_complexity": "simple",
+        "needs_search": False,
+        "processing_steps": [],
+        "errors": [],
+        "common": {
+            "metadata": {}
+        }
+    }
+
+
+@pytest.fixture
+def complex_query_state():
+    """복잡한 질문용 State 픽스처"""
+    return {
+        "input": {
+            "query": "전세 계약 시 발생할 수 있는 법적 분쟁과 해결 방법은?",
+            "session_id": "test_session_789"
+        },
+        "query": "전세 계약 시 발생할 수 있는 법적 분쟁과 해결 방법은?",
+        "query_type": "legal_advice",
+        "query_complexity": "complex",
+        "needs_search": True,
+        "retrieved_docs": [],
+        "semantic_results": [],
+        "keyword_results": [],
+        "extracted_keywords": ["전세", "계약", "법적", "분쟁"],
+        "legal_field": "부동산법",
+        "processing_steps": [],
+        "errors": [],
+        "common": {
+            "metadata": {}
+        }
+    }
+
+
+# 노드 클래스용 픽스처 (리팩토링된 구조)
+@pytest.fixture
+def mock_workflow_instance():
+    """Mock 워크플로우 인스턴스 (노드 클래스용)"""
+    workflow = MagicMock()
+    workflow.logger = Mock()
+    
+    # ClassificationNodes용 메서드
+    workflow.classify_query_and_complexity = Mock(return_value={"query": "test"})
+    workflow.classification_parallel = Mock(return_value={"query": "test"})
+    workflow.assess_urgency = Mock(return_value={"query": "test"})
+    workflow.resolve_multi_turn = Mock(return_value={"query": "test"})
+    workflow.route_expert = Mock(return_value={"query": "test"})
+    workflow.direct_answer_node = Mock(return_value={"answer": "test"})
+    
+    # SearchNodes용 메서드
+    workflow.expand_keywords = Mock(return_value={"extracted_keywords": ["test"]})
+    workflow.prepare_search_query = Mock(return_value={"search_params": {}})
+    workflow.execute_searches_parallel = Mock(return_value={"semantic_results": []})
+    workflow.process_search_results_combined = Mock(return_value={"retrieved_docs": []})
+    
+    # DocumentNodes용 메서드
+    workflow.analyze_document = Mock(return_value={"document_analysis": {}})
+    workflow.prepare_documents_and_terms = Mock(return_value={"prepared_docs": []})
+    
+    # AnswerNodes용 메서드
+    workflow.generate_and_validate_answer = Mock(return_value={"answer": "test answer"})
+    workflow.generate_answer_stream = Mock(return_value={"answer": "streaming answer"})
+    workflow.generate_answer_final = Mock(return_value={"answer": "final answer"})
+    workflow.continue_answer_generation = Mock(return_value={"answer": "continued answer"})
+    
+    # AgenticNodes용 메서드
+    workflow.agentic_decision_node = Mock(return_value={"agentic_decision": "test"})
+    
+    return workflow
+
+
+@pytest.fixture
+def classification_nodes(mock_workflow_instance):
+    """ClassificationNodes 인스턴스"""
+    from core.workflow.nodes.classification_nodes import ClassificationNodes
+    return ClassificationNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def search_nodes(mock_workflow_instance):
+    """SearchNodes 인스턴스"""
+    from core.workflow.nodes.search_nodes import SearchNodes
+    return SearchNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def document_nodes(mock_workflow_instance):
+    """DocumentNodes 인스턴스"""
+    from core.workflow.nodes.document_nodes import DocumentNodes
+    return DocumentNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def answer_nodes(mock_workflow_instance):
+    """AnswerNodes 인스턴스"""
+    from core.workflow.nodes.answer_nodes import AnswerNodes
+    return AnswerNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def agentic_nodes(mock_workflow_instance):
+    """AgenticNodes 인스턴스"""
+    from core.workflow.nodes.agentic_nodes import AgenticNodes
+    return AgenticNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def ethical_rejection_node():
+    """EthicalRejectionNode 인스턴스"""
+    from core.workflow.nodes.ethical_rejection_node import EthicalRejectionNode
+    return EthicalRejectionNode(logger_instance=Mock())
+
+
+@pytest.fixture
+def node_registry():
+    """NodeRegistry 인스턴스"""
+    from core.workflow.registry.node_registry import NodeRegistry
+    return NodeRegistry()
+
+
+@pytest.fixture
+def subgraph_registry():
+    """SubgraphRegistry 인스턴스"""
+    from core.workflow.registry.subgraph_registry import SubgraphRegistry
+    return SubgraphRegistry()

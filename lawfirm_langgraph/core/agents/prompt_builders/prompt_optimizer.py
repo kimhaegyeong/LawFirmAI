@@ -7,6 +7,10 @@
 import os
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 import asyncio
 from datetime import datetime, timedelta
@@ -16,9 +20,16 @@ import statistics
 from dataclasses import dataclass
 from enum import Enum
 
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType, QuestionType
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+except ImportError:
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+try:
+    from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    from core.classification.classifiers.question_classifier import QuestionType
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OptimizationMetric(Enum):

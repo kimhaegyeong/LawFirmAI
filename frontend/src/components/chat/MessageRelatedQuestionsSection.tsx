@@ -56,14 +56,16 @@ export function MessageRelatedQuestionsSection({
         </button>
       </div>
 
-      {isExpanded && (
-        <div className="animate-fadeIn">
-          <RelatedQuestions
-            questions={questionsArray}
-            onQuestionClick={onQuestionClick}
-          />
-        </div>
-      )}
+      <div className={`overflow-hidden transition-all duration-300 ${isExpanded ? 'max-h-[5000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+        {isExpanded && (
+          <div className="animate-fadeIn">
+            <RelatedQuestions
+              questions={questionsArray}
+              onQuestionClick={onQuestionClick}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

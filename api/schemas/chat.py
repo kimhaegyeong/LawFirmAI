@@ -141,6 +141,7 @@ class SourceInfo(BaseModel):
     name: str = Field(..., description="출처명")
     type: str = Field(..., description="출처 타입 (statute_article, case_paragraph 등)")
     url: Optional[str] = Field(None, description="출처 URL")
+    original_url: Optional[str] = Field(None, description="원본 문서 조회 URL")
     metadata: Optional[Dict[str, Any]] = Field(None, description="추가 메타데이터")
 
 
@@ -155,12 +156,14 @@ class AnswerChunkInfo(BaseModel):
 class ChatResponse(BaseModel):
     """채팅 응답 스키마"""
     answer: str = Field(..., description="AI 답변")
-    sources_by_type: Optional[Dict[str, List[SourceInfo]]] = Field(default_factory=lambda: {
-        "statute_article": [],
-        "case_paragraph": [],
-        "decision_paragraph": [],
-        "interpretation_paragraph": []
-    }, description="참고 출처 타입별 그룹화 (유일한 필요한 필드)")
+    sources_by_type: Optional[Dict[str, List[SourceInfo]]] = Field(
+        default_factory=lambda: {
+            "statutes_articles": [],
+            "precedent_contents": [],
+            "precedent_chunks": []
+        },
+        description="참고 출처 타입별 그룹화 (실제 PostgreSQL 테이블명 기반)"
+    )
     confidence: float = Field(..., description="신뢰도 (0.0 ~ 1.0)")
     # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
     sources: List[str] = Field(default_factory=list, description="참고 출처 (deprecated: sources_by_type에서 재구성 가능)")

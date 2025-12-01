@@ -4,23 +4,28 @@
 리팩토링: legal_workflow_enhanced.py에서 상수 분리
 """
 
+import os
+
 
 class WorkflowConstants:
     """워크플로우 상수 정의"""
 
     # LLM 설정
     # Gemini 2.5 Flash Lite 최대 출력 토큰: 65,536
-    # 실제 사용 시 성능을 고려하여 적절한 값으로 설정 가능
-    MAX_OUTPUT_TOKENS = 8192  # 실용적인 값 (약 32,000자, 법률 답변에 충분)
-    # MAX_OUTPUT_TOKENS = 65536  # 최대값 (매우 긴 답변을 위한 경우)
+    # 환경 변수로 설정 가능, 기본값: 65,536 (Gemini 2.5 Flash Lite 최대값)
+    MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "65536"))  # 최대값 (약 260,000자, 한국어 기준 1토큰≈4자)
     TEMPERATURE = 0.3
-    TIMEOUT = 15
+    
+    # Timeout 설정 (Google Gemini 가이드라인 기준)
+    TIMEOUT = 30  # RAG QA용 기본 timeout (20~30초 권장)
+    TIMEOUT_RAG_QA = 30  # RAG QA: 20~30초
+    TIMEOUT_LONG_TEXT = 120  # 긴 글/코드 생성: 60~120초 (504 오류 방지를 위해 증가)
 
-    # 검색 설정 (개선: 검색 결과 수 증가)
-    SEMANTIC_SEARCH_K = 15  # 10 -> 15 (더 많은 결과 검색)
-    KEYWORD_SEARCH_K = 10  # 키워드 검색 결과 수
-    MAX_DOCUMENTS = 10  # 5 -> 10 (최종 문서 수 증가)
-    CATEGORY_SEARCH_LIMIT = 5  # 3 -> 5 (카테고리별 검색 결과 증가)
+    # 검색 설정 (성능 최적화: 결과 수 제한)
+    SEMANTIC_SEARCH_K = 12  # 15 -> 12 (성능 최적화)
+    KEYWORD_SEARCH_K = 8  # 10 -> 8 (성능 최적화)
+    MAX_DOCUMENTS = 10  # 최종 문서 수
+    CATEGORY_SEARCH_LIMIT = 4  # 5 -> 4 (성능 최적화)
 
     # 재시도 설정
     MAX_RETRIES = 3
@@ -38,9 +43,10 @@ class WorkflowConstants:
 
 class RetryConfig:
     """재시도 설정 상수"""
-    MAX_GENERATION_RETRIES = 4
+    # 🔥 Stream API: LLM 호출 최대 2회 제한 (초기 1회 + 재시도 1회)
+    MAX_GENERATION_RETRIES = 1
     MAX_VALIDATION_RETRIES = 1
-    MAX_TOTAL_RETRIES = 6
+    MAX_TOTAL_RETRIES = 2  # generation 1회 + validation 1회
 
 
 class QualityThresholds:

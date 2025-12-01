@@ -45,10 +45,7 @@ except ImportError as e:
 try:
     from core.search.handlers.search_service import SearchService
 except ImportError:
-    try:
-        from .search_service import SearchService
-    except ImportError:
-        SearchService = None
+    SearchService = None
 
 # AnalysisService removed - not implemented yet
 # try:
@@ -60,37 +57,15 @@ AnalysisService = None
 
 # TASK 3.2 하이브리드 검색 시스템 모듈들 - 도메인별 경로로 re-export
 try:
-    from core.search.engines.exact_search_engine import ExactSearchEngine
-except ImportError:
-    try:
-        from .exact_search_engine import ExactSearchEngine
-    except ImportError:
-        ExactSearchEngine = None
-
-try:
     from core.search.engines.semantic_search_engine import SemanticSearchEngine
 except ImportError:
-    try:
-        from .semantic_search_engine import SemanticSearchEngine
-    except ImportError:
-        SemanticSearchEngine = None
+    SemanticSearchEngine = None
 
 try:
     from core.search.processors.result_merger import ResultMerger, ResultRanker
 except ImportError:
-    try:
-        from .result_merger import ResultMerger, ResultRanker
-    except ImportError:
-        ResultMerger = None
-        ResultRanker = None
-
-try:
-    from core.search.engines.hybrid_search_engine import HybridSearchEngine
-except ImportError:
-    try:
-        from .hybrid_search_engine import HybridSearchEngine
-    except ImportError:
-        HybridSearchEngine = None
+    ResultMerger = None
+    ResultRanker = None
 
 # Generation 관련 re-export
 try:
@@ -122,11 +97,16 @@ except ImportError:
     ConversationFlowTracker = None
 
 try:
-    from core.agents.prompt_builders.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+    # 새로운 경로 우선 시도
+    from core.services.prompts import UnifiedPromptManager, LegalDomain, ModelType
 except ImportError:
-    UnifiedPromptManager = None
-    LegalDomain = None
-    ModelType = None
+    try:
+        # 호환성을 위한 fallback
+        from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+    except ImportError:
+        UnifiedPromptManager = None
+        LegalDomain = None
+        ModelType = None
 
 try:
     from core.processing.integration.term_integration_system import TermIntegrator
@@ -152,11 +132,9 @@ __all__ = [
     "ChatService",
     "SearchService",
     # "AnalysisService",  # Not implemented yet
-    "ExactSearchEngine",
     "SemanticSearchEngine",
     "ResultMerger",
     "ResultRanker",
-    "HybridSearchEngine",
     # Re-exported for compatibility
     "ConversationFlowTracker",
     "UnifiedPromptManager",

@@ -7,9 +7,18 @@ Classification Mixin
 import time
 from typing import Any, Dict, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.workflow_types import QueryComplexity
-from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.workflow_types import QueryComplexity
+except ImportError:
+    from core.workflow.state.workflow_types import QueryComplexity
+try:
+    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import with_state_optimization
+except ImportError:
+    from core.shared.wrappers.node_wrappers import with_state_optimization
 
 # Mock observe decorator (Langfuse 제거됨)
 def observe(**kwargs):
@@ -183,7 +192,15 @@ class ClassificationMixin:
         state["metadata"]["needs_search"] = needs_search
         
         try:
-            from core.agents import node_wrappers
+            # 여러 import 방법 시도 (모듈 경로 오류 방지)
+            try:
+                from lawfirm_langgraph.core.agents import node_wrappers
+            except ImportError:
+                try:
+                    from core.agents import node_wrappers
+                except ImportError:
+                    # 현재 파일이 core.agents 내부에 있으므로 상대 import 시도
+                    from .. import node_wrappers
             if not hasattr(node_wrappers, '_global_search_results_cache') or node_wrappers._global_search_results_cache is None:
                 node_wrappers._global_search_results_cache = {}
             node_wrappers._global_search_results_cache["query_complexity"] = complexity.value

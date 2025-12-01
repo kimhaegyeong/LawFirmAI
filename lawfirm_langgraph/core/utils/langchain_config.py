@@ -6,6 +6,10 @@ LangChain 설정 관리 모듈
 
 import os
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
@@ -14,7 +18,7 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VectorStoreType(Enum):
@@ -39,7 +43,23 @@ class LangChainConfig:
     # 벡터 저장소 설정
     vector_store_type: VectorStoreType = VectorStoreType.FAISS
     vector_store_path: str = "./data/embeddings/faiss_index"
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: str = ""  # 환경 변수에서 읽음
+    
+    def __post_init__(self):
+        """초기화 후 환경 변수에서 embedding_model 읽기"""
+        if not self.embedding_model:
+            embedding_model_env = os.getenv("EMBEDDING_MODEL")
+            if embedding_model_env:
+                self.embedding_model = embedding_model_env.strip().strip('"').strip("'")
+            else:
+                # 환경 변수가 없으면 Config 클래스에서 가져오기
+                try:
+                    from lawfirm_langgraph.core.utils.config import Config
+                    core_config = Config()
+                    self.embedding_model = core_config.embedding_model
+                except Exception:
+                    # 최후의 수단: 기본값 사용
+                    self.embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     
     # 문서 처리 설정
     chunk_size: int = 1000
@@ -90,7 +110,19 @@ class LangChainConfig:
             config.vector_store_type = VectorStoreType.PINECONE
         
         config.vector_store_path = os.getenv("VECTOR_STORE_PATH", config.vector_store_path)
-        config.embedding_model = os.getenv("EMBEDDING_MODEL", config.embedding_model)
+        # embedding_model은 __post_init__에서 처리되므로 여기서는 환경 변수만 확인
+        embedding_model_env = os.getenv("EMBEDDING_MODEL")
+        if embedding_model_env:
+            config.embedding_model = embedding_model_env.strip().strip('"').strip("'")
+        elif not config.embedding_model:
+            # 환경 변수가 없고 __post_init__에서도 설정되지 않은 경우 Config에서 가져오기
+            try:
+                from lawfirm_langgraph.core.utils.config import Config
+                core_config = Config()
+                config.embedding_model = core_config.embedding_model
+            except Exception:
+                # 최후의 수단: 기본값 사용
+                config.embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
         
         # 문서 처리 설정
         config.chunk_size = int(os.getenv("CHUNK_SIZE", config.chunk_size))

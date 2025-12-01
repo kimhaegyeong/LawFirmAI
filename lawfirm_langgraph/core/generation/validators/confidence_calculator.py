@@ -5,11 +5,15 @@ Confidence Calculator
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ConfidenceLevel(Enum):
@@ -50,7 +54,7 @@ class ConfidenceCalculator:
     
     def __init__(self):
         """계산기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("ConfidenceCalculator initialized")
         
         # 신뢰도 계산 가중치 (개선된 버전)

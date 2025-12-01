@@ -1,17 +1,21 @@
 ﻿import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Set, Optional
 from collections import defaultdict
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class KeywordDatabaseLoader:
     """데이터베이스에서 키워드를 로드하는 클래스"""
     
     def __init__(self, data_dir: str = "data"):
         self.data_dir = Path(data_dir)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 데이터베이스 파일 경로들
         self.database_files = {

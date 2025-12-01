@@ -69,13 +69,24 @@ model_cache/
 *.onnx
 
 # Logs
-logs/
+# Allow specific log directories first (exceptions must come before general patterns)
+!logs/test/
+!logs/test/**
+!logs/test/**/*.log
+# Ignore all other log files
 *.log
+# Ignore logs directories except the allowed ones (use logs/** not logs/ to allow exceptions)
+logs/**
 api/logs/
+data/performance_logs/
+*.metrics.json
 
 # Vector Store
 chroma_db/
 faiss_index/
+
+# MLflow
+mlflow/mlruns/
 
 # Benchmark Results
 benchmark_results/
@@ -142,9 +153,12 @@ chroma_db/
 .cursor/
 
 # personal data
-data/
+# Ignore root data/ directory only (not subdirectories)
+/data/
+# Allow specific data directories in lawfirm_langgraph
 !lawfirm_langgraph/langgraph_core/data/  # Allow langgraph_core/data module (source code)
 !lawfirm_langgraph/core/data/  # Allow core/data directory
+!lawfirm_langgraph/core/data/**  # Allow all files in core/data directory
 reports/
 results/
 debug/
@@ -152,3 +166,8 @@ test_outputs/
 
 # Portfolio documents (not for version control)
 portfolio/
+
+*.pkl
+*.pyc
+
+mlruns/

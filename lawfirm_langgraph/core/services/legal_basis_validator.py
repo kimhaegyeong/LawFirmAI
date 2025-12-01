@@ -6,15 +6,19 @@
 
 import sqlite3
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
 from .legal_citation_enhancer import LegalCitationEnhancer, LegalCitation
-from ..data.database import DatabaseManager
+from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -43,11 +47,11 @@ class LegalSource:
 class LegalBasisValidator:
     """법적 근거 검증 시스템"""
     
-    def __init__(self, db_manager: Optional[DatabaseManager] = None):
+    def __init__(self, db_manager: Optional[LegalDataConnectorV2] = None):
         """초기화"""
-        self.db_manager = db_manager or DatabaseManager()
+        self.db_manager = db_manager or LegalDataConnectorV2()
         self.citation_enhancer = LegalCitationEnhancer()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 검증 규칙 로드
         self.validation_rules = self._load_validation_rules()

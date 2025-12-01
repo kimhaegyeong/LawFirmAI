@@ -7,9 +7,22 @@ Classification Mixin
 import time
 from typing import Any, Dict, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.workflow_types import QueryComplexity
-from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.workflow_types import QueryComplexity
+except ImportError:
+    from core.workflow.state.workflow_types import QueryComplexity
+try:
+    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import with_state_optimization
+except ImportError:
+    from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.workflow.utils.ethical_checker import EthicalChecker
+except ImportError:
+    from core.workflow.utils.ethical_checker import EthicalChecker
 
 # Mock observe decorator (Langfuse 제거됨)
 def observe(**kwargs):
@@ -69,7 +82,7 @@ class ClassificationMixin:
                 try:
                     classified_type, confidence, complexity, needs_search = self._classify_query_with_chain(query)
                     self.logger.info(
-                        f"✅ [CHAIN CLASSIFICATION] "
+                        f"✅ [UNIFIED CLASSIFICATION] "
                         f"QuestionType={classified_type.value}, complexity={complexity.value}, "
                         f"needs_search={needs_search}, confidence={confidence:.2f}"
                     )
@@ -212,13 +225,31 @@ class ClassificationMixin:
         state["metadata"]["needs_search"] = needs_search
         
         try:
-            from core.agents import node_wrappers
+            # 여러 import 방법 시도 (모듈 경로 오류 방지)
+            try:
+                from lawfirm_langgraph.core.agents import node_wrappers
+            except ImportError:
+                try:
+                    from core.agents import node_wrappers
+                except ImportError:
+                    import sys
+                    from pathlib import Path
+                    # 상대 경로로 직접 import
+                    agents_dir = Path(__file__).parent.parent.parent / "agents"
+                    if str(agents_dir.parent) not in sys.path:
+                        sys.path.insert(0, str(agents_dir.parent))
+                    from core.agents import node_wrappers
             if not hasattr(node_wrappers, '_global_search_results_cache') or node_wrappers._global_search_results_cache is None:
                 node_wrappers._global_search_results_cache = {}
             node_wrappers._global_search_results_cache["query_complexity"] = complexity.value
             node_wrappers._global_search_results_cache["needs_search"] = needs_search
+            self.logger.debug(f"✅ Global cache 저장 완료: query_complexity={complexity.value}, needs_search={needs_search}")
         except Exception as e:
-            self.logger.warning(f"Global cache 저장 실패: {e}")
+            # Global cache 저장 실패는 치명적이지 않으므로 경고만 출력
+            self.logger.debug(f"⚠️ Global cache 저장 실패 (비치명적): {e}")
+            # 모듈 경로 오류인 경우 더 명확한 메시지
+            if "modular_states" in str(e) or "No module named" in str(e):
+                self.logger.debug(f"   → 모듈 경로 오류로 인한 것으로 보입니다. 기능에는 영향 없습니다.")
     
     # ============================================================================
     # Classification 노드들
@@ -318,6 +349,39 @@ class ClassificationMixin:
             query_start_time = time.time()
 
             query = self._restore_and_validate_query(state)
+            
+            # 윤리적 검사 수행
+            ethical_checker = EthicalChecker(logger_instance=self.logger)
+            is_problematic, rejection_reason, severity = ethical_checker.check_query(query)
+            
+            if is_problematic:
+                # 윤리적 문제 감지 시 플래그 설정 및 거부 사유 저장
+                self._set_state_value(state, "is_ethically_problematic", True)
+                self._set_state_value(state, "ethical_rejection_reason", rejection_reason)
+                
+                # 메타데이터에 윤리 검사 결과 저장
+                metadata = self._get_state_value(state, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["ethical_check"] = {
+                    "rejected": True,
+                    "reason": rejection_reason,
+                    "severity": severity
+                }
+                self._set_state_value(state, "metadata", metadata)
+                
+                # 기본 분류 결과는 설정하되, 윤리적 문제 플래그로 라우팅에서 처리
+                self._set_state_value(state, "query_type", "ethical_rejection")
+                self._set_state_value(state, "query_complexity", QueryComplexity.SIMPLE.value)
+                self._set_state_value(state, "needs_search", False)
+                
+                self.logger.warning(
+                    f"윤리적 문제 감지: {rejection_reason} (심각도: {severity})"
+                )
+                
+                self._preserve_metadata_and_common_state(state)
+                return state
+            
             classified_type, confidence, complexity, needs_search = self._execute_classification(query)
 
             query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
@@ -363,5 +427,198 @@ class ClassificationMixin:
 
         self._preserve_metadata_and_common_state(state)
 
+        return state
+    
+    @with_state_optimization("classify_query_simple", enable_reduction=False)
+    def classify_query_simple(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """질의 타입만 빠르게 분류 (검색 필터링에 필수)"""
+        try:
+            start_time = time.time()
+            query = self._restore_and_validate_query(state)
+            
+            # 윤리적 검사 수행
+            ethical_checker = EthicalChecker(logger_instance=self.logger)
+            is_problematic, rejection_reason, severity = ethical_checker.check_query(query)
+            
+            if is_problematic:
+                # 윤리적 문제 감지 시 플래그 설정 및 거부 사유 저장
+                self._set_state_value(state, "is_ethically_problematic", True)
+                self._set_state_value(state, "ethical_rejection_reason", rejection_reason)
+                
+                # 메타데이터에 윤리 검사 결과 저장
+                metadata = self._get_state_value(state, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["ethical_check"] = {
+                    "rejected": True,
+                    "reason": rejection_reason,
+                    "severity": severity
+                }
+                self._set_state_value(state, "metadata", metadata)
+                
+                # 기본 분류 결과는 설정하되, 윤리적 문제 플래그로 라우팅에서 처리
+                self._set_state_value(state, "query_type", "ethical_rejection")
+                self._set_state_value(state, "query_complexity", QueryComplexity.SIMPLE.value)
+                self._set_state_value(state, "needs_search", False)
+                
+                self.logger.warning(
+                    f"윤리적 문제 감지: {rejection_reason} (심각도: {severity})"
+                )
+                
+                self._preserve_metadata_and_common_state(state)
+                return state
+            
+            # 질의 타입만 빠르게 분류
+            if self.classification_handler:
+                try:
+                    classified_type, confidence = self.classification_handler.classify_with_llm(query)
+                    self.logger.info(
+                        f"✅ [QUERY TYPE CLASSIFICATION] "
+                        f"QuestionType={classified_type.value}, confidence={confidence:.2f}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"LLM 질의 타입 분류 실패, 폴백 사용: {e}")
+                    classified_type, confidence = self._fallback_classification(query)
+            else:
+                classified_type, confidence = self._fallback_classification(query)
+            
+            query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
+            legal_field = self._extract_legal_field(query_type_str, query)
+            
+            self._save_classification_results(state, query_type_str, confidence, legal_field)
+            
+            # 초기 complexity는 기본값 설정 (나중에 재평가)
+            initial_complexity = QueryComplexity.MODERATE
+            self._save_complexity_results(state, initial_complexity, True)
+            
+            self._update_processing_time(state, start_time)
+            self._add_step(state, "질의 타입 분류 완료",
+                         f"질의 타입: {query_type_str}, 법률분야: {legal_field}, 신뢰도: {confidence:.2f}")
+            
+            self._preserve_metadata_and_common_state(state)
+            
+        except Exception as e:
+            self._handle_error(state, str(e), "질의 타입 분류 중 오류 발생")
+            try:
+                query = self._get_state_value(state, "query", "")
+                classified_type, confidence = self._fallback_classification(query)
+                query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
+                legal_field = self._extract_legal_field(query_type_str, query)
+                self._set_state_value(state, "query_type", query_type_str)
+                self._set_state_value(state, "confidence", confidence)
+                self._set_state_value(state, "legal_field", legal_field)
+                self._set_state_value(state, "legal_domain", self._map_to_legal_domain(legal_field))
+            except Exception:
+                self._set_state_value(state, "query_type", "general_question")
+                self._set_state_value(state, "confidence", 0.5)
+                self._set_state_value(state, "legal_field", "general")
+                self._set_state_value(state, "legal_domain", "general")
+            
+            self._set_state_value(state, "query_complexity", QueryComplexity.MODERATE.value)
+            self._set_state_value(state, "needs_search", True)
+        
+        self._preserve_metadata_and_common_state(state)
+        return state
+    
+    @with_state_optimization("classify_complexity_after_keywords", enable_reduction=False)
+    def classify_complexity_after_keywords(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """키워드 확장 결과를 반영하여 복잡도 재평가"""
+        try:
+            start_time = time.time()
+            query = self._get_state_value(state, "query", "")
+            # 🔥 수정: expanded_keywords 대신 extracted_keywords 사용 (expand_keywords 노드에서 저장하는 필드명)
+            expanded_keywords = self._get_state_value(state, "extracted_keywords", [])
+            # expanded_keywords도 확인 (하위 호환성)
+            if not expanded_keywords:
+                expanded_keywords = self._get_state_value(state, "expanded_keywords", [])
+            query_type = self._get_state_value(state, "query_type", "")
+            query_type_confidence = self._get_state_value(state, "confidence", 0.0)
+            
+            if not query:
+                self.logger.warning("⚠️ [COMPLEXITY RE-EVAL] Query is empty, using default complexity")
+                self._set_state_value(state, "query_complexity", QueryComplexity.MODERATE.value)
+                self._set_state_value(state, "needs_search", True)
+                return state
+            
+            # 키워드 확장 결과를 반영하여 복잡도 평가
+            if self.classification_handler:
+                try:
+                    # query_type을 문자열로 변환
+                    query_type_str = query_type
+                    if hasattr(query_type, 'value'):
+                        query_type_str = query_type.value
+                    elif not isinstance(query_type, str):
+                        query_type_str = str(query_type)
+                    
+                    # 복잡도만 재평가
+                    complexity, needs_search = self.classification_handler.classify_complexity_with_llm(
+                        query, query_type_str
+                    )
+                    
+                    # 키워드 확장 결과를 반영하여 복잡도 조정
+                    if expanded_keywords and isinstance(expanded_keywords, list):
+                        keyword_count = len(expanded_keywords)
+                        # 키워드가 많으면 복잡도 상향 조정
+                        if keyword_count > 10 and complexity == QueryComplexity.SIMPLE:
+                            complexity = QueryComplexity.MODERATE
+                            self.logger.debug(
+                                f"🔍 [COMPLEXITY RE-EVAL] 키워드 수({keyword_count})에 따라 복잡도 상향 조정: "
+                                f"SIMPLE → MODERATE"
+                            )
+                        elif keyword_count > 15 and complexity == QueryComplexity.MODERATE:
+                            complexity = QueryComplexity.COMPLEX
+                            self.logger.debug(
+                                f"🔍 [COMPLEXITY RE-EVAL] 키워드 수({keyword_count})에 따라 복잡도 상향 조정: "
+                                f"MODERATE → COMPLEX"
+                            )
+                    
+                    self.logger.info(
+                        f"✅ [COMPLEXITY RE-EVAL] "
+                        f"complexity={complexity.value}, needs_search={needs_search}, "
+                        f"keywords={len(expanded_keywords) if expanded_keywords else 0}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"LLM 복잡도 재평가 실패, 폴백 사용: {e}")
+                    complexity, needs_search = self._fallback_complexity_classification(query)
+            else:
+                complexity, needs_search = self._fallback_complexity_classification(query)
+            
+            # query_type 재평가 (신뢰도 낮을 때만)
+            if query_type_confidence < 0.7 and expanded_keywords:
+                try:
+                    if self.classification_handler:
+                        new_classified_type, new_confidence = self.classification_handler.classify_with_llm(query)
+                        if new_confidence > query_type_confidence:
+                            query_type_str = new_classified_type.value if hasattr(new_classified_type, 'value') else str(new_classified_type)
+                            legal_field = self._extract_legal_field(query_type_str, query)
+                            self._save_classification_results(state, query_type_str, new_confidence, legal_field)
+                            self.logger.info(
+                                f"✅ [QUERY TYPE RE-EVAL] "
+                                f"QuestionType={query_type_str}, confidence={new_confidence:.2f} "
+                                f"(이전: {query_type_confidence:.2f})"
+                            )
+                except Exception as e:
+                    self.logger.debug(f"query_type 재평가 실패 (무시): {e}")
+            
+            # 복잡도 결과 저장
+            self._save_complexity_results(state, complexity, needs_search)
+            
+            self._update_processing_time(state, start_time)
+            self._add_step(
+                state,
+                "복잡도 재평가",
+                f"질문 복잡도: {complexity.value}, 검색 필요: {needs_search}, "
+                f"키워드 수: {len(expanded_keywords) if expanded_keywords else 0}"
+            )
+            
+            self._preserve_metadata_and_common_state(state)
+            
+        except Exception as e:
+            self._handle_error(state, str(e), "복잡도 재평가 중 오류 발생")
+            # 폴백: 기본 복잡도 설정
+            self._set_state_value(state, "query_complexity", QueryComplexity.MODERATE.value)
+            self._set_state_value(state, "needs_search", True)
+        
+        self._preserve_metadata_and_common_state(state)
         return state
 

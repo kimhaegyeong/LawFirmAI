@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 
 
 @dataclass

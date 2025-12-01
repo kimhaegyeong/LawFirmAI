@@ -11,6 +11,7 @@ import logger from '../utils/logger';
 import type { AxiosError } from 'axios';
 import type { ChatMessage, FileAttachment } from '../types/chat';
 import type { StreamError } from '../types/error';
+import { ErrorType } from '../types/error';
 
 interface MessageSearchResult {
   messageIndex: number;
@@ -166,6 +167,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
   const tokenBufferRef = useRef<Map<string, string>>(new Map());
   const tokenBufferTimeoutRef = useRef<Map<string, number>>(new Map());
   const sourcesWaitTimeoutRef = useRef<Map<string, number>>(new Map());
+  const doneEventTimeoutRef = useRef<Map<string, number>>(new Map());
 
   const handleStreamingMessage = useCallback(
     async (
@@ -214,15 +216,48 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
       let isFirstChunk = true;
       let isFinalReceived = false;
       let fullContent = '';
+      const streamStartTime = Date.now();
+      let lastEventTime = Date.now();
 
       try {
         setCurrentProgress(null);
         setProgressHistory([]);
 
+        // done 이벤트 타임아웃 설정 (5분 = 300000ms)
+        // 타임아웃 발생 시에도 사용자에게 메시지를 표시하지 않음
+        const DONE_EVENT_TIMEOUT = 300000;
+        const timeoutId = setTimeout(() => {
+          const elapsed = Date.now() - streamStartTime;
+          const timeSinceLastEvent = Date.now() - lastEventTime;
+          
+          if (import.meta.env.DEV) {
+            logger.warn('[Stream] Done event timeout (silent):', {
+              assistantMessageId,
+              elapsed,
+              timeSinceLastEvent,
+            });
+          }
+
+          // 타임아웃 발생 시 사용자에게 메시지를 표시하지 않음
+          // 스트리밍 상태만 해제
+          if (streamingMessageId === assistantMessageId) {
+            setStreamingId(null);
+          }
+
+          // 타임아웃 ref 정리
+          doneEventTimeoutRef.current.delete(assistantMessageId);
+        }, DONE_EVENT_TIMEOUT);
+
+        // 타임아웃 ID 저장
+        doneEventTimeoutRef.current.set(assistantMessageId, timeoutId);
+
         await sendStreamingMessage(
           message,
           sessionId,
           (chunk) => {
+            // 마지막 이벤트 시간 업데이트
+            lastEventTime = Date.now();
+
             if (import.meta.env.DEV) {
               logger.debug('[Stream] Chunk received:', JSON.stringify(chunk));
             }
@@ -660,6 +695,16 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                 }
               }
             } else if (parsed.type === 'done') {
+              // done 이벤트 수신 시 타임아웃 취소
+              if (doneEventTimeoutRef.current.has(assistantMessageId)) {
+                clearTimeout(doneEventTimeoutRef.current.get(assistantMessageId)!);
+                doneEventTimeoutRef.current.delete(assistantMessageId);
+                
+                if (import.meta.env.DEV) {
+                  logger.debug('[Stream] Done event timeout cancelled');
+                }
+              }
+
               const finalContent = parsed.content && parsed.content.trim() ? parsed.content : fullContent;
 
               if (import.meta.env.DEV) {
@@ -702,10 +747,9 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                           relatedQuestionsCount: parsedSources.relatedQuestions.length,
                           sourcesByTypeKeys: Object.keys(parsedSources.sourcesByType),
                           sourcesByTypeCounts: {
-                            statute: parsedSources.sourcesByType.statute_article.length,
-                            case: parsedSources.sourcesByType.case_paragraph.length,
-                            decision: parsedSources.sourcesByType.decision_paragraph.length,
-                            interpretation: parsedSources.sourcesByType.interpretation_paragraph.length,
+                            statutes_articles: parsedSources.sourcesByType?.statutes_articles?.length ?? 0,
+                            precedent_contents: parsedSources.sourcesByType?.precedent_contents?.length ?? 0,
+                            precedent_chunks: parsedSources.sourcesByType?.precedent_chunks?.length ?? 0,
                           },
                           parsedSources,
                         });
@@ -768,10 +812,9 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                         legalReferences: [],
                         sourcesDetail: [],
                         sourcesByType: {
-                          statute_article: [],
-                          case_paragraph: [],
-                          decision_paragraph: [],
-                          interpretation_paragraph: [],
+                          statutes_articles: [],
+                          precedent_contents: [],
+                          precedent_chunks: [],
                         },
                         relatedQuestions: [],
                         messageId: undefined,
@@ -856,6 +899,98 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                   return prev;
                 });
               }
+            } else if (parsed.type === 'error') {
+              // Error 이벤트 처리 (CancelledError 등)
+              isFinalReceived = true; // 에러 발생 시 스트리밍 종료
+              
+              if (streamingMessageId === assistantMessageId) {
+                setStreamingId(null);
+                if (import.meta.env.DEV) {
+                  logger.debug('[Stream] Error event: stopping typing effect');
+                }
+              }
+              
+              // 에러 메시지로 답변 업데이트
+              const errorContent = parsed.content || '작업이 취소되었습니다. 다시 시도해주세요.';
+              const isCancelled = parsed.metadata?.cancelled || false;
+              
+              // 에러 상태로 메시지 업데이트
+              updateMessages((prev) => {
+                const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                
+                if (messageIndex !== -1) {
+                  const updated = [...prev];
+                  const existingMsg = updated[messageIndex];
+                  if (existingMsg) {
+                    // 에러 메시지로 교체하되, 원래 질문은 보존
+                    updated[messageIndex] = {
+                      ...existingMsg,
+                      content: errorContent,
+                      metadata: {
+                        ...existingMsg.metadata,
+                        error: true,
+                        cancelled: isCancelled,
+                        error_type: parsed.metadata?.error_type || 'unknown',
+                        // 원래 질문 정보 보존 (재시도 시 사용)
+                        original_question: existingMsg.metadata?.original_question || 
+                                          (messageIndex > 0 ? prev[messageIndex - 1]?.content : undefined),
+                      },
+                    };
+                  }
+                  return updated;
+                } else {
+                  // 메시지가 없으면 에러 메시지로 생성
+                  return [...prev, {
+                    ...assistantMessage,
+                    content: errorContent,
+                    metadata: {
+                      error: true,
+                      cancelled: isCancelled,
+                      error_type: parsed.metadata?.error_type || 'unknown',
+                    },
+                  }];
+                }
+              });
+              
+              // StreamError 추가 (재시도 버튼 표시용)
+              const streamError: StreamError = {
+                type: isCancelled ? ErrorType.ABORTED : ErrorType.SERVER,
+                message: errorContent,
+                canRetry: true, // 재시도 가능
+              };
+              addError(assistantMessageId, streamError);
+              
+              // 토스트 알림 표시
+              showToast({
+                message: errorContent,
+                type: 'error',
+                action: {
+                  label: '다시 시도',
+                  onClick: () => {
+                    // 재시도 로직은 onRetryMessage 핸들러에서 처리
+                    if (import.meta.env.DEV) {
+                      logger.debug('[Stream] Retry requested after error');
+                    }
+                  }
+                },
+              });
+              
+              // 스트림 정리
+              tokenBufferRef.current.delete(assistantMessageId);
+              if (tokenBufferTimeoutRef.current.has(assistantMessageId)) {
+                clearTimeout(tokenBufferTimeoutRef.current.get(assistantMessageId)!);
+                tokenBufferTimeoutRef.current.delete(assistantMessageId);
+              }
+              
+              if (import.meta.env.DEV) {
+                logger.warn('[Stream] Error event received:', {
+                  content: errorContent,
+                  metadata: parsed.metadata,
+                  isCancelled,
+                });
+              }
+              
+              return; // 에러 발생 시 더 이상 처리하지 않음
             } else if (parsed.type === 'final') {
               isFinalReceived = true;
 
@@ -948,10 +1083,9 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                     legalReferences: [],
                     sourcesDetail: [],
                     sourcesByType: {
-                      statute_article: [],
-                      case_paragraph: [],
-                      decision_paragraph: [],
-                      interpretation_paragraph: [],
+                      statutes_articles: [],
+                      precedent_contents: [],
+                      precedent_chunks: [],
                     },
                     relatedQuestions: [],
                     messageId: undefined,
@@ -1091,11 +1225,23 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
           filename
         );
 
+        // 스트림 완료 후 타임아웃 정리 (done 이벤트가 이미 왔을 수도 있음)
+        if (doneEventTimeoutRef.current.has(assistantMessageId)) {
+          clearTimeout(doneEventTimeoutRef.current.get(assistantMessageId)!);
+          doneEventTimeoutRef.current.delete(assistantMessageId);
+        }
+
         setCurrentProgress(null);
         if (import.meta.env.DEV) {
           logger.debug('[Stream] Streaming completed. Final content length:', fullContent.length);
         }
       } catch (error) {
+        // 에러 발생 시 타임아웃 정리
+        if (doneEventTimeoutRef.current.has(assistantMessageId)) {
+          clearTimeout(doneEventTimeoutRef.current.get(assistantMessageId)!);
+          doneEventTimeoutRef.current.delete(assistantMessageId);
+        }
+
         logger.error('[Stream] Streaming error:', error);
 
         if (streamingMessageId === assistantMessageId || streamingMessageId !== null) {
@@ -1168,12 +1314,18 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
 
         let errorMessage = error instanceof Error ? error.message : String(error);
 
+        // fetch API 에러인 경우 (chatService.ts에서 이미 detail 추출됨)
+        // 또는 AxiosError인 경우 detail 추출
         if (error && typeof error === 'object' && 'response' in error) {
           const axiosError = error as AxiosError<{ detail?: string }>;
           if (axiosError.response?.data?.detail) {
             errorMessage = axiosError.response.data.detail;
           }
         }
+
+        // Error 메시지에서 이미 detail이 추출되었을 수 있음
+        // chatService.ts에서 detail을 추출하여 Error 메시지에 포함시켰으므로
+        // errorMessage에 이미 detail이 포함되어 있을 수 있음
 
         if (isAuthenticated && (
           errorMessage.includes('무료 질의 3회를 모두 사용하셨습니다') ||
@@ -1182,12 +1334,22 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
           errorMessage = '요청이 너무 많습니다. 잠시 후 다시 시도하세요.';
         }
 
+        // ERR_INCOMPLETE_CHUNKED_ENCODING 오류에 대한 특별 처리
+        if (errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
+            errorMessage.includes('incomplete')) {
+          errorMessage = '스트리밍 연결이 완료되지 않았습니다. 잠시 후 다시 시도해주세요.';
+        }
+
         const streamError = toStreamError(error, isAuthenticated);
+        
+        // errorMessage가 있으면 우선 사용 (detail이 포함되어 있을 수 있음)
+        const finalErrorMessage = errorMessage || streamError.message;
 
         if (fullContent || error) {
           updateMessages((prev) => {
             const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-            const errorContent = fullContent || streamError.message;
+            // fullContent가 있으면 사용, 없으면 에러 메시지 사용
+            const errorContent = fullContent || finalErrorMessage;
 
             if (messageIndex === -1) {
               const errorMessage: ChatMessage = {
@@ -1218,11 +1380,16 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
           });
         }
 
-        addError(assistantMessageId, streamError);
+        // streamError의 message를 finalErrorMessage로 업데이트
+        const updatedStreamError = {
+          ...streamError,
+          message: finalErrorMessage,
+        };
+        addError(assistantMessageId, updatedStreamError);
 
-        if (!isAuthenticated || !streamError.message.includes('무료 질의 3회를 모두 사용하셨습니다')) {
+        if (!isAuthenticated || !finalErrorMessage.includes('무료 질의 3회를 모두 사용하셨습니다')) {
           showToast({
-            message: streamError.message,
+            message: finalErrorMessage,
             type: 'error',
             action: streamError.canRetry ? {
               label: '다시 시도',

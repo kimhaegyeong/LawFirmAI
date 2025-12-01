@@ -9,12 +9,30 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants, RetryConfig
-from core.workflow.state.workflow_types import QueryComplexity
-from core.shared.wrappers.node_wrappers import with_state_optimization
-from core.generation.validators.quality_validators import SearchValidator
-from core.workflow.state.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants, RetryConfig
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants, RetryConfig
+try:
+    from lawfirm_langgraph.core.workflow.state.workflow_types import QueryComplexity
+except ImportError:
+    from core.workflow.state.workflow_types import QueryComplexity
+try:
+    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import with_state_optimization
+except ImportError:
+    from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.generation.validators.quality_validators import SearchValidator
+except ImportError:
+    from core.generation.validators.quality_validators import SearchValidator
+try:
+    from lawfirm_langgraph.core.workflow.state.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
+except ImportError:
+    from core.workflow.state.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
 
 # Mock observe decorator (Langfuse 제거됨)
 def observe(**kwargs):

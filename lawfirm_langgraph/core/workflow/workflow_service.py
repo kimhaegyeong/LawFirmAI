@@ -5,6 +5,7 @@ LangGraph Workflow Service
 """
 
 import asyncio
+import gc
 import logging
 import os
 import sys
@@ -13,6 +14,13 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
 
 # 프로젝트 루트를 sys.path에 추가 (lawfirm_langgraph 구조에 맞게 수정)
 # lawfirm_langgraph/langgraph_core/services/ 에서 프로젝트 루트까지의 경로
@@ -75,7 +83,7 @@ except ImportError:
     except ImportError:
         from core.utils.langgraph_config import LangGraphConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 안전한 로깅 유틸리티 import (멀티스레딩 안전)
 # 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
@@ -154,30 +162,31 @@ except NameError:
 
 # CheckpointManager import
 try:
-    from core.agents.checkpoint_manager import CheckpointManager
+    from core.workflow.checkpoint_manager import CheckpointManager
 except ImportError:
     CheckpointManager = None
     safe_log_warning(logger, "CheckpointManager not available")
-
-# state_definitions import (상대 import 사용 - 같은 패키지 내부)
-try:
-    from ..state.state_definitions import create_initial_legal_state
-except ImportError:
-    # Fallback: 프로젝트 루트 기준 import
-    try:
-        from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
-    except ImportError:
-        # Fallback: 프로젝트 루트 기준 import
-        from core.workflow.state.state_definitions import create_initial_legal_state
 
 
 class LangGraphWorkflowService:
     """LangGraph 워크플로우 서비스"""
     
     # 상수 정의
-    SLOW_NODE_THRESHOLD = 5.0  # 노드 실행 시간 임계값 (초)
     DEFAULT_RECURSION_LIMIT = 200  # 기본 재귀 제한
     MAX_PARAMETER_CHECK_COUNT = 5  # 모델 검증 시 확인할 파라미터 개수
+    
+    # LLM 호출 노드 목록 (더 긴 임계값 사용)
+    LLM_NODES = {
+        'expand_keywords', 'prepare_search_query', 'generate_answer', 
+        'generate_answer_final', 'classify_query_and_complexity', 
+        'generate_answer_stream', 'refine_answer'
+    }
+    
+    # 검색/처리 노드 목록 (가장 긴 임계값 사용)
+    SEARCH_NODES = {
+        'execute_searches_parallel', 'process_search_results_combined',
+        'process_search_results', 'merge_search_results'
+    }
 
     def __init__(self, config: Optional[LangGraphConfig] = None):
         """
@@ -187,13 +196,22 @@ class LangGraphWorkflowService:
             config: LangGraph 설정 객체
         """
         self.config = config or LangGraphConfig.from_env()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
+        
+        # 성능 임계값 설정 (config에서 가져오기)
+        self.slow_node_threshold = self.config.slow_node_threshold
+        self.slow_llm_node_threshold = self.config.slow_llm_node_threshold
+        self.slow_search_node_threshold = self.config.slow_search_node_threshold
 
         # 초기 input 보존을 위한 인스턴스 변수
         self._initial_input: Optional[Dict[str, str]] = None
 
         # 검색 결과 보존을 위한 캐시 (LangGraph reducer 문제 우회)
         self._search_results_cache: Optional[Dict[str, Any]] = None
+
+        # 메모리 관리: 요청 카운터 및 정리 주기
+        self._request_count = 0
+        self._memory_cleanup_interval = int(os.getenv("MEMORY_CLEANUP_INTERVAL", "10"))  # 기본 10회마다 정리
 
         # ConversationFlowTracker 초기화 (추천 질문 생성용)
         self.conversation_flow_tracker = None
@@ -210,10 +228,26 @@ class LangGraphWorkflowService:
         if self.config.enable_checkpoint and CheckpointManager is not None:
             try:
                 storage_type = self.config.checkpoint_storage.value
-                db_path = self.config.checkpoint_db_path if storage_type == "sqlite" else None
+                # PostgreSQL만 지원: database_url 사용
+                # CheckpointManager가 자동으로 환경 변수에서 가져오므로 None 전달 가능
+                database_url = None
+                if storage_type == "postgres":
+                    # Config에서 database_url 가져오기 (선택적)
+                    try:
+                        from lawfirm_langgraph.config.app_config import Config as AppConfig
+                        app_config = AppConfig()
+                        database_url = app_config.database_url
+                        # PostgreSQL URL이 아니면 None (CheckpointManager가 환경 변수에서 가져옴)
+                        if database_url and not database_url.startswith("postgresql://") and not database_url.startswith("postgres://"):
+                            database_url = None
+                            safe_log_info(self.logger, "database_url is not PostgreSQL, checkpoint manager will use environment variable")
+                    except Exception as e:
+                        safe_log_info(self.logger, f"Using environment variable for checkpoint database URL: {e}")
+                
+                # database_url=None이면 CheckpointManager가 환경 변수에서 자동으로 가져옴
                 self.checkpoint_manager = CheckpointManager(
                     storage_type=storage_type,
-                    db_path=db_path
+                    database_url=database_url
                 )
                 if self.checkpoint_manager.is_enabled():
                     safe_log_info(self.logger, f"Checkpoint manager initialized with {storage_type} storage")
@@ -255,9 +289,6 @@ class LangGraphWorkflowService:
                 checkpointer = None
                 if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
                     checkpointer = self.checkpoint_manager.get_checkpointer()
-                    safe_log_info(self.logger, f"Using checkpoint: {self.config.checkpoint_storage.value}")
-                else:
-                    safe_log_info(self.logger, "Compiling workflow without checkpoint")
                 
                 # 워크플로우 컴파일
                 self.app = self.legal_workflow.graph.compile(
@@ -321,24 +352,10 @@ class LangGraphWorkflowService:
                 interrupt_after=None,
                 debug=False,
             )
-            checkpoint_info = f" with checkpoint({self.config.checkpoint_storage.value})" if checkpointer else " without checkpoint"
-            safe_log_info(self.logger, f"워크플로우가 LangSmith 추적으로 컴파일되었습니다{checkpoint_info} (State Reduction 적용됨)")
-
+            
         if self.app is None:
             safe_log_error(self.logger, "Failed to compile workflow")
             raise RuntimeError("워크플로우 컴파일에 실패했습니다")
-
-        # A/B 테스트 관리자 초기화
-        self.ab_test_manager = None
-        enable_ab_testing = os.environ.get("ENABLE_AB_TESTING", "false").lower() == "true"
-        if enable_ab_testing:
-            try:
-                from lawfirm_langgraph.core.services.ab_test_manager import ABTestManager
-                self.ab_test_manager = ABTestManager()
-                safe_log_info(self.logger, "ABTestManager initialized")
-            except Exception as e:
-                safe_log_warning(self.logger, f"Failed to initialize ABTestManager: {e}")
-                self.ab_test_manager = None
 
         # 스트리밍 콜백 핸들러 초기화 (스트리밍 모드 활성화 시)
         self.streaming_callback_handler = None
@@ -403,7 +420,9 @@ class LangGraphWorkflowService:
         self,
         query: str,
         session_id: Optional[str] = None,
-        enable_checkpoint: bool = True
+        enable_checkpoint: bool = True,
+        use_astream_events: bool = False,
+        stream_queue: Optional[asyncio.Queue] = None
     ) -> Dict[str, Any]:
         # 검색 결과 캐시 초기화 (각 쿼리마다 새로 시작)
         self._search_results_cache = None
@@ -415,12 +434,37 @@ class LangGraphWorkflowService:
             query: 사용자 질문
             session_id: 세션 ID (없으면 자동 생성)
             enable_checkpoint: 체크포인트 사용 여부
+            use_astream_events: astream_events() 사용 여부 (stream API와 동일한 로직)
 
         Returns:
             Dict[str, Any]: 처리 결과
         """
         try:
             start_time = time.time()
+
+            # 메모리 관리: 주기적 정리
+            self._request_count += 1
+            if self._request_count % self._memory_cleanup_interval == 0:
+                try:
+                    # 가비지 컬렉션 실행
+                    collected = gc.collect()
+                    if collected > 0:
+                        self.logger.debug(f"[MEMORY] Periodic cleanup: {collected} objects collected (request #{self._request_count})")
+                    
+                    # 메모리 사용량이 높으면 추가 정리
+                    try:
+                        import psutil
+                        process = psutil.Process()
+                        memory_mb = process.memory_info().rss / 1024 / 1024
+                        if memory_mb > 1024:  # 1GB 이상
+                            self.logger.warning(f"[MEMORY] High memory usage detected: {memory_mb:.1f}MB - performing aggressive cleanup")
+                            # 추가 가비지 컬렉션
+                            for _ in range(2):
+                                gc.collect()
+                    except ImportError:
+                        pass  # psutil이 없으면 무시
+                except Exception as e:
+                    self.logger.debug(f"[MEMORY] Error during periodic cleanup: {e}")
 
             # 세션 ID 생성
             if not session_id:
@@ -429,6 +473,10 @@ class LangGraphWorkflowService:
             # A/B 테스트 변형 할당
             cache_variant = None
             parallel_variant = None
+            
+            # ab_test_manager가 없으면 None으로 초기화 (선택적 기능)
+            if not hasattr(self, 'ab_test_manager'):
+                self.ab_test_manager = None
             
             if self.ab_test_manager:
                 cache_variant = self.ab_test_manager.assign_variant(session_id, "cache_enabled")
@@ -480,7 +528,7 @@ class LangGraphWorkflowService:
                 tracked_processing_steps = []
 
                 self.logger.info("🔄 워크플로우 실행 시작...")
-                print("🔄 워크플로우 실행 시작...", flush=True)
+                self.logger.debug("🔄 워크플로우 실행 시작...")
 
                 # 초기 state 최종 검증
                 if not self._validate_initial_state_before_execution(initial_state, query):
@@ -514,67 +562,549 @@ class LangGraphWorkflowService:
                 node_durations = {}  # 각 노드의 실행 시간 저장
                 total_start_time = time.time()
                 
-                async for event in self.app.astream(initial_state, enhanced_config, stream_mode="updates"):
-                    # 각 이벤트는 {node_name: updated_state} 형태
-                    for node_name, node_state in event.items():
-                        # 새로 실행된 노드인 경우에만 카운트
-                        if node_name not in executed_nodes:
-                            node_count += 1
-                            executed_nodes.append(node_name)
+                if use_astream_events:
+                    # astream_events() 사용 (stream API와 동일한 로직)
+                    # 🔥 개선: 스트리밍을 위해 콜백 설정
+                    # ⚠️ 주의: state에 콜백을 저장하면 LangGraph 체크포인트 직렬화 시 오류 발생
+                    # config의 callbacks만 사용하고 state에는 저장하지 않음
+                    callback_queue = asyncio.Queue()
+                    callback_handler = self.create_streaming_callback_handler(queue=callback_queue)
+                    if callback_handler:
+                        enhanced_config = self.get_config_with_callbacks(
+                            session_id=session_id,
+                            callbacks=[callback_handler]
+                        )
+                        # state에 콜백 저장하지 않음 (직렬화 오류 방지)
+                        self.logger.debug(f"✅ [STREAMING] 콜백이 config에 설정됨: {len([callback_handler])}개 (state에는 저장하지 않음)")
+                    
+                    last_node_name = None
+                    last_node_output = None
+                    accumulated_state = initial_state.copy() if isinstance(initial_state, dict) else {}
+                    # 🔥 generate_answer_stream 노드가 실행 중인지 추적
+                    is_generating_answer = False
+                    
+                    try:
+                        async for event in self.app.astream_events(initial_state, enhanced_config, version="v2"):
+                            event_type = event.get("event", "")
+                            event_name = event.get("name", "")
+                            event_data = event.get("data", {})
                             
-                            # 노드 시작 시간 기록 (이벤트가 발생하면 해당 노드가 완료된 것으로 간주)
-                            current_time = time.time()
-                            if node_name in node_start_times:
-                                # 노드 실행 시간 계산 (시작 시간부터 현재까지)
-                                node_duration = current_time - node_start_times[node_name]
-                                node_durations[node_name] = node_duration
-                            else:
-                                # 첫 실행 시 이전 노드 완료 시간으로 계산
-                                node_duration = current_time - last_node_time if node_count > 1 else 0
-                                node_durations[node_name] = node_duration
+                            # 🔥 generate_answer_stream 노드 시작/종료 추적
+                            if event_type == "on_chain_start" and "generate_answer_stream" in event_name:
+                                is_generating_answer = True
+                                self.logger.info(f"[process_query] ✅ generate_answer_stream 노드 시작, is_generating_answer=True")
+                            elif event_type == "on_chain_end" and "generate_answer_stream" in event_name:
+                                is_generating_answer = False
+                                self.logger.info(f"[process_query] ✅ generate_answer_stream 노드 종료, is_generating_answer=False")
                             
-                            # 다음 노드 시작 시간 기록 (이벤트 발생 시점)
-                            node_start_times[node_name] = current_time
-                            last_node_time = current_time
-
-                            # 진행상황 표시 (실행 시간 포함)
-                            if node_count == 1:
-                                progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
-                            else:
-                                progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (실행 시간: {node_duration:.2f}초)"
-
-                            self.logger.info(progress_msg)
-                            print(progress_msg, flush=True)
+                            # 🔥 스트리밍 큐에 이벤트 전달 (stream_queue가 있는 경우)
+                            if stream_queue:
+                                try:
+                                    # 스트리밍 이벤트만 큐에 넣기 (on_chat_model_stream, on_llm_stream, on_chain_stream)
+                                    # on_chain_stream도 포함: generate_answer_stream 노드에서 발생할 수 있음
+                                    if event_type in ["on_chat_model_stream", "on_llm_stream", "on_chain_stream"]:
+                                        # generate_answer_stream 노드의 이벤트만 처리
+                                        parent_name = event.get("parent", {}).get("name", "") if isinstance(event.get("parent"), dict) else ""
+                                        parent_id = event.get("parent", {}).get("id", "") if isinstance(event.get("parent"), dict) else ""
+                                        
+                                        # 노드 필터링: generate_answer_stream 노드 또는 그 하위 이벤트
+                                        # 더 관대한 필터링: answer 생성 관련 노드면 모두 처리
+                                        is_target_node = (
+                                            "generate_answer_stream" in event_name or 
+                                            "generate_answer_stream" in parent_name or
+                                            "generate_answer_stream" in parent_id or
+                                            last_node_name == "generate_answer_stream" or
+                                            "generate_answer" in event_name.lower() or
+                                            "generate_answer" in parent_name.lower()
+                                        )
+                                        
+                                        # 🔥 디버그: generate_answer_stream 노드 실행 중 모든 스트리밍 이벤트 로깅
+                                        if is_generating_answer:
+                                            # is_generating_answer가 True일 때는 모든 이벤트 로깅 (처음 20개)
+                                            if not hasattr(self, '_stream_event_log_count_generating'):
+                                                self._stream_event_log_count_generating = 0
+                                            self._stream_event_log_count_generating += 1
+                                            
+                                            if self._stream_event_log_count_generating <= 20:
+                                                # event_data 구조 상세 로깅 (처음 3개만)
+                                                event_data_info = ""
+                                                if self._stream_event_log_count_generating <= 3:
+                                                    if isinstance(event_data, dict):
+                                                        event_data_info = f", event_data_keys={list(event_data.keys())}"
+                                                        if "chunk" in event_data:
+                                                            chunk_obj = event_data["chunk"]
+                                                            event_data_info += f", chunk_type={type(chunk_obj).__name__}"
+                                                            if hasattr(chunk_obj, "content"):
+                                                                event_data_info += f", chunk_has_content=True"
+                                                self.logger.info(
+                                                    f"[process_query] 📡 [GENERATING] 스트리밍 이벤트 수신: "
+                                                    f"event_type={event_type}, event_name={event_name}, "
+                                                    f"parent_name={parent_name}, last_node={last_node_name}, "
+                                                    f"is_target={is_target_node}, is_generating={is_generating_answer}"
+                                                    f"{event_data_info}"
+                                                )
+                                        else:
+                                            # 일반 스트리밍 이벤트 로깅 (처음 10개만)
+                                            if not hasattr(self, '_stream_event_log_count'):
+                                                self._stream_event_log_count = 0
+                                            self._stream_event_log_count += 1
+                                            
+                                            if self._stream_event_log_count <= 10:
+                                                self.logger.info(
+                                                    f"[process_query] 📡 스트리밍 이벤트 수신: "
+                                                    f"event_type={event_type}, event_name={event_name}, "
+                                                    f"parent_name={parent_name}, last_node={last_node_name}, "
+                                                    f"is_target={is_target_node}"
+                                                )
+                                        
+                                        # stream_queue가 있으면 타겟 노드의 스트리밍 이벤트 처리
+                                        # 🔥 CRITICAL: is_generating_answer 플래그가 True이면 모든 스트리밍 이벤트 처리
+                                        if is_target_node or is_generating_answer:
+                                            # TokenExtractor를 사용하여 토큰 추출
+                                            try:
+                                                from api.services.streaming.token_extractor import TokenExtractor
+                                                token_extractor = TokenExtractor()
+                                                chunk_content = token_extractor.extract_from_event(event_data)
+                                                
+                                                # 🔥 디버그: chunk_content 추출 실패 시 event_data 구조 로깅
+                                                if not chunk_content and is_generating_answer:
+                                                    # 처음 몇 개만 상세 로깅
+                                                    if not hasattr(self, '_chunk_extract_debug_count'):
+                                                        self._chunk_extract_debug_count = 0
+                                                    self._chunk_extract_debug_count += 1
+                                                    
+                                                    if self._chunk_extract_debug_count <= 3:
+                                                        self.logger.warning(
+                                                            f"[process_query] ⚠️ chunk_content 추출 실패: "
+                                                            f"event_type={event_type}, event_name={event_name}, "
+                                                            f"event_data_keys={list(event_data.keys()) if isinstance(event_data, dict) else type(event_data)}, "
+                                                            f"event_data_type={type(event_data)}"
+                                                        )
+                                                        # event_data의 chunk 필드 확인
+                                                        if isinstance(event_data, dict):
+                                                            chunk_obj = event_data.get("chunk")
+                                                            if chunk_obj is not None:
+                                                                self.logger.warning(
+                                                                    f"[process_query] chunk_obj type={type(chunk_obj)}, "
+                                                                    f"has_content={hasattr(chunk_obj, 'content') if chunk_obj else False}, "
+                                                                    f"is_str={isinstance(chunk_obj, str)}, "
+                                                                    f"is_dict={isinstance(chunk_obj, dict)}"
+                                                                )
+                                                
+                                                if chunk_content:
+                                                    await stream_queue.put({
+                                                        "type": "stream",
+                                                        "content": chunk_content,
+                                                        "event_type": event_type,
+                                                        "event_name": event_name
+                                                    })
+                                                    # 🔥 INFO 레벨로 변경하여 큐 추가 확인
+                                                    self.logger.info(
+                                                        f"[process_query] ✅ 스트리밍 이벤트 큐에 추가: "
+                                                        f"event_type={event_type}, event_name={event_name}, "
+                                                        f"parent_name={parent_name}, chunk_length={len(chunk_content)}, "
+                                                        f"chunk_preview={chunk_content[:50]}..."
+                                                    )
+                                            except ImportError:
+                                                # TokenExtractor를 사용할 수 없는 경우 직접 추출
+                                                chunk_obj = event_data.get("chunk") if isinstance(event_data, dict) else None
+                                                chunk_content = None
+                                                
+                                                if chunk_obj:
+                                                    if hasattr(chunk_obj, "content"):
+                                                        content = chunk_obj.content
+                                                        chunk_content = content if isinstance(content, str) else str(content) if content else None
+                                                    elif isinstance(chunk_obj, str):
+                                                        chunk_content = chunk_obj
+                                                    elif isinstance(chunk_obj, dict):
+                                                        chunk_content = chunk_obj.get("content") or chunk_obj.get("text")
+                                                    else:
+                                                        chunk_content = str(chunk_obj) if chunk_obj else None
+                                                
+                                                # 🔥 디버그: chunk_content 추출 실패 시 event_data 구조 로깅
+                                                if not chunk_content and is_generating_answer:
+                                                    if not hasattr(self, '_chunk_extract_fallback_debug_count'):
+                                                        self._chunk_extract_fallback_debug_count = 0
+                                                    self._chunk_extract_fallback_debug_count += 1
+                                                    
+                                                    if self._chunk_extract_fallback_debug_count <= 3:
+                                                        self.logger.warning(
+                                                            f"[process_query] ⚠️ chunk_content 추출 실패 (fallback): "
+                                                            f"event_type={event_type}, event_name={event_name}, "
+                                                            f"chunk_obj_type={type(chunk_obj) if chunk_obj else None}, "
+                                                            f"event_data_keys={list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}"
+                                                        )
+                                                
+                                                if chunk_content:
+                                                    await stream_queue.put({
+                                                        "type": "stream",
+                                                        "content": chunk_content,
+                                                        "event_type": event_type,
+                                                        "event_name": event_name
+                                                    })
+                                                    # 🔥 INFO 레벨로 변경하여 큐 추가 확인
+                                                    self.logger.info(
+                                                        f"[process_query] ✅ 스트리밍 이벤트 큐에 추가 (fallback): "
+                                                        f"event_type={event_type}, chunk_length={len(chunk_content)}, "
+                                                        f"chunk_preview={chunk_content[:50]}..."
+                                                    )
+                                        else:
+                                            # 디버그: 왜 필터링되었는지 로깅 (처음 몇 개만)
+                                            if hasattr(self, '_stream_debug_count'):
+                                                self._stream_debug_count += 1
+                                            else:
+                                                self._stream_debug_count = 1
+                                            
+                                            if self._stream_debug_count <= 3:
+                                                self.logger.debug(
+                                                    f"[process_query] ⚠️ 스트리밍 이벤트 필터링됨: "
+                                                    f"event_type={event_type}, event_name={event_name}, "
+                                                    f"parent_name={parent_name}, last_node={last_node_name}"
+                                                )
+                                except Exception as queue_error:
+                                    self.logger.warning(f"[process_query] ⚠️ 스트리밍 큐에 이벤트 추가 실패: {queue_error}", exc_info=True)
                             
-                            # 병목 지점 감지: 느린 노드에 대한 경고
-                            if node_duration > self.SLOW_NODE_THRESHOLD:
-                                self.logger.warning(
-                                    f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
-                                    f"(임계값: {self.SLOW_NODE_THRESHOLD}초)"
-                                )
+                            if event_type == "on_chain_start":
+                                node_name = event_name
+                                if node_name not in executed_nodes:
+                                    node_count += 1
+                                    executed_nodes.append(node_name)
+                                    current_time = time.time()
+                                    node_start_times[node_name] = current_time
+                                    last_node_name = node_name
+                                    
+                                    progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
+                                    self.logger.info(progress_msg)
+                                    self.logger.debug(progress_msg)
+                                    
+                                    node_display_name = self._get_node_display_name(node_name)
+                                    if node_display_name != node_name:
+                                        detail_msg = f"      → {node_display_name}"
+                                        self.logger.info(detail_msg)
+                                        self.logger.debug(detail_msg)
+                                    
+                                    # 🔥 디버그: generate_answer_stream 노드 시작 시 로깅
+                                    if "generate_answer_stream" in node_name:
+                                        self.logger.info(f"[process_query] ✅ generate_answer_stream 노드 시작, last_node_name={last_node_name}")
+                            
+                            elif event_type == "on_chain_end":
+                                node_name = event_name
+                                if node_name in node_start_times:
+                                    current_time = time.time()
+                                    node_duration = current_time - node_start_times[node_name]
+                                    node_durations[node_name] = node_duration
+                                    
+                                    threshold = self._get_node_threshold(node_name)
+                                    if node_duration > threshold:
+                                        self.logger.warning(
+                                            f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
+                                            f"(임계값: {threshold}초)"
+                                        )
+                                
+                                # 🔥 개선: astream 경로와 동일하게 검색 결과 처리
+                                # 검색 결과 노드의 경우 특별 처리하여 캐시에 저장
+                                if node_name in ["merge_and_rerank_with_keyword_weights", "process_search_results_combined"]:
+                                    try:
+                                        # event_data에서 검색 결과 추출
+                                        if event_data and isinstance(event_data, dict):
+                                            # 🔥 DEBUG: event_data 구조 로깅
+                                            self.logger.debug(f"astream_events: {node_name} event_data keys: {list(event_data.keys())[:20]}")
+                                            
+                                            # search 그룹 확인
+                                            search_group = event_data.get("search", {})
+                                            if isinstance(search_group, dict):
+                                                retrieved_docs = search_group.get("retrieved_docs", [])
+                                                if retrieved_docs:
+                                                    # 🔥 CRITICAL: 캐시 저장 전에 type 정보 정규화
+                                                    try:
+                                                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                                                        normalized_docs = []
+                                                        type_normalized_count = 0
+                                                        for doc in retrieved_docs:
+                                                            if isinstance(doc, dict):
+                                                                normalized_doc = normalize_document_type(doc.copy())
+                                                                # type 정보가 정규화되었는지 확인
+                                                                if not doc.get("type") and normalized_doc.get("type"):
+                                                                    type_normalized_count += 1
+                                                                normalized_docs.append(normalized_doc)
+                                                            else:
+                                                                normalized_docs.append(doc)
+                                                        retrieved_docs = normalized_docs
+                                                        if type_normalized_count > 0:
+                                                            self.logger.info(f"astream_events: 캐시 저장 전 {type_normalized_count}개 문서의 type 정보 정규화 완료")
+                                                    except (ImportError, Exception) as norm_error:
+                                                        self.logger.debug(f"astream_events: type 정규화 실패 (무시): {norm_error}")
+                                                    
+                                                    # 캐시에 저장
+                                                    if not self._search_results_cache:
+                                                        self._search_results_cache = {}
+                                                    self._search_results_cache["retrieved_docs"] = retrieved_docs
+                                                    # search 그룹도 정규화된 문서로 업데이트
+                                                    search_group_copy = search_group.copy()
+                                                    search_group_copy["retrieved_docs"] = retrieved_docs
+                                                    self._search_results_cache["search"] = search_group_copy
+                                                    self.logger.info(f"astream_events: 검색 결과 캐시 저장: {len(retrieved_docs)}개 (type 정규화 완료)")
+                                                    
+                                                    # 🔥 DEBUG: 첫 번째 문서의 type 정보 확인
+                                                    if retrieved_docs and len(retrieved_docs) > 0:
+                                                        first_doc = retrieved_docs[0]
+                                                        if isinstance(first_doc, dict):
+                                                            doc_type = first_doc.get("type") or first_doc.get("source_type")
+                                                            metadata = first_doc.get("metadata", {})
+                                                            metadata_type = metadata.get("type") if isinstance(metadata, dict) else None
+                                                            self.logger.debug(f"astream_events: 첫 번째 문서 type 정보: doc.type={doc_type}, metadata.type={metadata_type}")
+                                            else:
+                                                self.logger.debug(f"astream_events: {node_name} event_data에 search 그룹이 없음 (type: {type(search_group)})")
+                                            
+                                            # 최상위 레벨에서도 확인 (legacy 호환)
+                                            top_retrieved_docs = event_data.get("retrieved_docs", [])
+                                            if top_retrieved_docs and not retrieved_docs:
+                                                # 🔥 CRITICAL: 최상위 레벨 검색 결과도 type 정보 정규화
+                                                try:
+                                                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                                                    normalized_docs = []
+                                                    type_normalized_count = 0
+                                                    for doc in top_retrieved_docs:
+                                                        if isinstance(doc, dict):
+                                                            normalized_doc = normalize_document_type(doc.copy())
+                                                            if not doc.get("type") and normalized_doc.get("type"):
+                                                                type_normalized_count += 1
+                                                            normalized_docs.append(normalized_doc)
+                                                        else:
+                                                            normalized_docs.append(doc)
+                                                    top_retrieved_docs = normalized_docs
+                                                    if type_normalized_count > 0:
+                                                        self.logger.info(f"astream_events: 최상위 레벨 {type_normalized_count}개 문서의 type 정보 정규화 완료")
+                                                except (ImportError, Exception) as norm_error:
+                                                    self.logger.debug(f"astream_events: 최상위 레벨 type 정규화 실패 (무시): {norm_error}")
+                                                
+                                                if not self._search_results_cache:
+                                                    self._search_results_cache = {}
+                                                self._search_results_cache["retrieved_docs"] = top_retrieved_docs
+                                                self.logger.info(f"astream_events: 검색 결과 캐시 저장 (최상위 레벨): {len(top_retrieved_docs)}개 (type 정규화 완료)")
+                                        else:
+                                            self.logger.debug(f"astream_events: {node_name} event_data가 dict가 아님 (type: {type(event_data)})")
+                                    except Exception as e:
+                                        self.logger.warning(f"astream_events: 검색 결과 캐시 저장 실패: {e}", exc_info=True)
+                                
+                                # 노드 출력 데이터에서 상태 업데이트
+                                if event_data and isinstance(event_data, dict):
+                                    # 노드 출력이 상태 업데이트인 경우 병합
+                                    if isinstance(accumulated_state, dict):
+                                        # 🔥 개선: 깊은 병합을 사용하여 중첩된 구조 보존
+                                        self._deep_update(accumulated_state, event_data)
+                                        last_node_output = event_data
+                                        
+                                        # 🔥 CRITICAL: accumulated_state의 검색 결과에 type 정보 보장
+                                        if "search" in accumulated_state and isinstance(accumulated_state["search"], dict):
+                                            retrieved_docs = accumulated_state["search"].get("retrieved_docs", [])
+                                            if retrieved_docs:
+                                                try:
+                                                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                                                    normalized_docs = []
+                                                    type_normalized_count = 0
+                                                    for doc in retrieved_docs:
+                                                        if isinstance(doc, dict):
+                                                            if not doc.get("type") and not doc.get("source_type"):
+                                                                normalized_doc = normalize_document_type(doc.copy())
+                                                                if normalized_doc.get("type"):
+                                                                    type_normalized_count += 1
+                                                                normalized_docs.append(normalized_doc)
+                                                            else:
+                                                                normalized_docs.append(doc)
+                                                        else:
+                                                            normalized_docs.append(doc)
+                                                    if type_normalized_count > 0:
+                                                        accumulated_state["search"]["retrieved_docs"] = normalized_docs
+                                                        self.logger.debug(f"astream_events: accumulated_state의 {type_normalized_count}개 문서 type 정보 정규화 완료")
+                                                except (ImportError, Exception):
+                                                    pass
+                    except asyncio.CancelledError:
+                        self.logger.warning("⚠️ [WORKFLOW] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+                        # 취소된 경우에도 현재까지의 상태를 반환
+                        if accumulated_state and isinstance(accumulated_state, dict):
+                            flat_result = accumulated_state
+                        else:
+                            flat_result = initial_state
+                        raise
+                    
+                    # 🔥 CRITICAL: 최종 상태 가져오기 - app.aget_state() 우선 사용
+                    # accumulated_state는 부분적일 수 있으므로 최종 state를 가져와야 함
+                    flat_result = None
+                    try:
+                        # 🔥 개선: 항상 app.aget_state()를 시도하여 전체 state 가져오기
+                        # 체크포인터가 있으면 aget_state() 사용
+                        if (enable_checkpoint and self.checkpoint_manager and self.checkpoint_manager.is_enabled()) or \
+                           (self.app and hasattr(self.app, 'checkpointer') and self.app.checkpointer is not None):
+                            final_state = await self.app.aget_state(enhanced_config)
+                            if final_state and final_state.values:
+                                flat_result = final_state.values
+                                self.logger.debug("astream_events: app.aget_state()에서 최종 state 가져옴 (체크포인터 있음)")
+                        else:
+                            # 체크포인터가 없어도 app.aget_state() 시도 (LangGraph가 내부적으로 관리)
+                            try:
+                                final_state = await self.app.aget_state(enhanced_config)
+                                if final_state and final_state.values:
+                                    flat_result = final_state.values
+                                    self.logger.debug("astream_events: app.aget_state()에서 최종 state 가져옴 (체크포인터 없음)")
+                            except Exception as aget_error:
+                                # 실패하면 accumulated_state 사용
+                                self.logger.debug(f"astream_events: app.aget_state() 실패, accumulated_state 사용: {aget_error}")
+                                if accumulated_state and isinstance(accumulated_state, dict):
+                                    flat_result = accumulated_state
+                                elif last_node_output and isinstance(last_node_output, dict):
+                                    # 마지막 노드 출력을 기반으로 초기 상태와 병합
+                                    flat_result = initial_state.copy() if isinstance(initial_state, dict) else {}
+                                    flat_result.update(last_node_output)
+                                else:
+                                    flat_result = initial_state
+                    except Exception as e:
+                        self.logger.warning(f"Failed to get final state: {e}, using accumulated state")
+                        if accumulated_state and isinstance(accumulated_state, dict):
+                            flat_result = accumulated_state
+                        else:
+                            flat_result = initial_state
+                    
+                    # 🔥 CRITICAL: flat_result의 검색 결과에 type 정보 보장 및 캐시에서 복원
+                    if flat_result and isinstance(flat_result, dict):
+                        # search 그룹 확인
+                        search_group = flat_result.get("search", {})
+                        if not isinstance(search_group, dict):
+                            search_group = {}
+                        
+                        retrieved_docs = search_group.get("retrieved_docs", [])
+                        
+                        # 🔥 CRITICAL: retrieved_docs가 있으면 type 정보 보장
+                        if retrieved_docs:
+                            try:
+                                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                                normalized_docs = []
+                                type_normalized_count = 0
+                                for doc in retrieved_docs:
+                                    if isinstance(doc, dict):
+                                        # type 정보가 없으면 정규화
+                                        if not doc.get("type") and not doc.get("source_type"):
+                                            normalized_doc = normalize_document_type(doc.copy())
+                                            if normalized_doc.get("type"):
+                                                type_normalized_count += 1
+                                            normalized_docs.append(normalized_doc)
+                                        else:
+                                            normalized_docs.append(doc)
+                                    else:
+                                        normalized_docs.append(doc)
+                                
+                                if type_normalized_count > 0:
+                                    search_group["retrieved_docs"] = normalized_docs
+                                    flat_result["search"] = search_group
+                                    self.logger.info(f"astream_events: {type_normalized_count}개 문서의 type 정보 정규화 완료")
+                            except (ImportError, Exception) as norm_error:
+                                self.logger.debug(f"astream_events: type 정규화 실패 (무시): {norm_error}")
+                        
+                        # 캐시에서 복원 시도 (retrieved_docs가 없는 경우)
+                        if not retrieved_docs:
+                            if self._search_results_cache:
+                                cached_docs = self._search_results_cache.get("retrieved_docs", [])
+                                cached_search = self._search_results_cache.get("search", {})
+                                if cached_docs:
+                                    # 🔥 CRITICAL: 복원 시 type 정보 정규화
+                                    try:
+                                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                                        normalized_docs = []
+                                        type_normalized_count = 0
+                                        for doc in cached_docs:
+                                            if isinstance(doc, dict):
+                                                # type 정보가 없으면 정규화
+                                                if not doc.get("type") and not doc.get("source_type"):
+                                                    normalized_doc = normalize_document_type(doc.copy())
+                                                    if normalized_doc.get("type"):
+                                                        type_normalized_count += 1
+                                                    normalized_docs.append(normalized_doc)
+                                                else:
+                                                    normalized_docs.append(doc)
+                                            else:
+                                                normalized_docs.append(doc)
+                                        cached_docs = normalized_docs
+                                        if type_normalized_count > 0:
+                                            self.logger.info(f"astream_events: 복원 시 {type_normalized_count}개 문서의 type 정보 정규화 완료")
+                                    except (ImportError, Exception) as norm_error:
+                                        self.logger.debug(f"astream_events: 복원 시 type 정규화 실패 (무시): {norm_error}")
+                                    
+                                    if not search_group:
+                                        flat_result["search"] = {}
+                                    flat_result["search"]["retrieved_docs"] = cached_docs
+                                    if cached_search:
+                                        flat_result["search"].update(cached_search)
+                                    self.logger.info(f"astream_events: 캐시에서 검색 결과 복원: {len(cached_docs)}개 (type 정규화 완료)")
+                                elif cached_search:
+                                    if not search_group:
+                                        flat_result["search"] = {}
+                                    flat_result["search"].update(cached_search)
+                                    self.logger.info(f"astream_events: 캐시에서 search 그룹 복원")
+                else:
+                    # 기존 astream() 사용
+                    try:
+                        async for event in self.app.astream(initial_state, enhanced_config, stream_mode="updates"):
+                            # 각 이벤트는 {node_name: updated_state} 형태
+                            for node_name, node_state in event.items():
+                                # 새로 실행된 노드인 경우에만 카운트
+                                if node_name not in executed_nodes:
+                                    node_count += 1
+                                    executed_nodes.append(node_name)
+                                    
+                                    # 노드 시작 시간 기록 (이벤트가 발생하면 해당 노드가 완료된 것으로 간주)
+                                    current_time = time.time()
+                                    if node_name in node_start_times:
+                                        # 노드 실행 시간 계산 (시작 시간부터 현재까지)
+                                        node_duration = current_time - node_start_times[node_name]
+                                        node_durations[node_name] = node_duration
+                                    else:
+                                        # 첫 실행 시 이전 노드 완료 시간으로 계산
+                                        node_duration = current_time - last_node_time if node_count > 1 else 0
+                                        node_durations[node_name] = node_duration
+                                    
+                                    # 다음 노드 시작 시간 기록 (이벤트 발생 시점)
+                                    node_start_times[node_name] = current_time
+                                    last_node_time = current_time
 
-                            # 노드 이름을 한국어로 변환하여 더 명확하게 표시
-                            node_display_name = self._get_node_display_name(node_name)
-                            if node_display_name != node_name:
-                                detail_msg = f"      → {node_display_name}"
-                                self.logger.info(detail_msg)
-                                print(detail_msg, flush=True)
+                                    # 진행상황 표시 (실행 시간 포함)
+                                    if node_count == 1:
+                                        progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
+                                    else:
+                                        progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (실행 시간: {node_duration:.2f}초)"
 
-                            # 디버깅: node_state의 query 확인
-                            # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
-                            if node_name == "classify_query_and_complexity" and isinstance(node_state, dict):
-                                # classification 그룹을 캐시에 저장 (stream_mode="updates" 사용 시 다음 노드로 전달 보장)
-                                if "classification" in node_state and isinstance(node_state["classification"], dict):
-                                    if not self._search_results_cache:
-                                        self._search_results_cache = {}
-                                    self._search_results_cache["classification"] = node_state["classification"].copy()
-                                    # common 그룹에도 저장
-                                    if "common" not in self._search_results_cache:
-                                        self._search_results_cache["common"] = {}
-                                    if "classification" not in self._search_results_cache["common"]:
-                                        self._search_results_cache["common"]["classification"] = {}
-                                    self._search_results_cache["common"]["classification"].update(node_state["classification"])
-                                    self.logger.debug("astream: Cached classification group for future nodes")
+                                    self.logger.info(progress_msg)
+                                    self.logger.debug(progress_msg)
+                                    
+                                    # 병목 지점 감지: 느린 노드에 대한 경고
+                                    threshold = self._get_node_threshold(node_name)
+                                    if node_duration > threshold:
+                                        self.logger.warning(
+                                            f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
+                                            f"(임계값: {threshold}초)"
+                                        )
+
+                                    # 노드 이름을 한국어로 변환하여 더 명확하게 표시
+                                    node_display_name = self._get_node_display_name(node_name)
+                                    if node_display_name != node_name:
+                                        detail_msg = f"      → {node_display_name}"
+                                        self.logger.info(detail_msg)
+                                        self.logger.debug(detail_msg)
+
+                                # 디버깅: node_state의 query 확인
+                                # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
+                                if node_name == "classify_query_and_complexity" and isinstance(node_state, dict):
+                                    # classification 그룹을 캐시에 저장 (stream_mode="updates" 사용 시 다음 노드로 전달 보장)
+                                    if "classification" in node_state and isinstance(node_state["classification"], dict):
+                                        if not self._search_results_cache:
+                                            self._search_results_cache = {}
+                                        self._search_results_cache["classification"] = node_state["classification"].copy()
+                                        # common 그룹에도 저장
+                                        if "common" not in self._search_results_cache:
+                                            self._search_results_cache["common"] = {}
+                                        if "classification" not in self._search_results_cache["common"]:
+                                            self._search_results_cache["common"]["classification"] = {}
+                                        self._search_results_cache["common"]["classification"].update(node_state["classification"])
+                                        self.logger.debug("astream: Cached classification group for future nodes")
                                 
                                 node_query = ""
                                 # input 그룹이 변경되었는지 확인
@@ -659,7 +1189,7 @@ class LangGraphWorkflowService:
                                     keyword_results_for_cache = node_state["keyword_results"] if isinstance(node_state["keyword_results"], list) else []
                                 
                                 # 캐시에 저장 (이후 노드에서 사용)
-                                print(f"[CACHE] execute_searches_parallel: semantic_results_for_cache={len(semantic_results_for_cache) if isinstance(semantic_results_for_cache, list) else 0}, keyword_results_for_cache={len(keyword_results_for_cache) if isinstance(keyword_results_for_cache, list) else 0}")
+                                self.logger.debug(f"[CACHE] execute_searches_parallel: semantic_results_for_cache={len(semantic_results_for_cache) if isinstance(semantic_results_for_cache, list) else 0}, keyword_results_for_cache={len(keyword_results_for_cache) if isinstance(keyword_results_for_cache, list) else 0}")
                                 if semantic_results_for_cache or keyword_results_for_cache:
                                     if not self._search_results_cache:
                                         self._search_results_cache = {}
@@ -667,9 +1197,9 @@ class LangGraphWorkflowService:
                                         self._search_results_cache["semantic_results"] = semantic_results_for_cache
                                         # interpretation_paragraph 확인
                                         interpretation_in_cache = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
-                                        print(f"[CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: 총 {len(semantic_results_for_cache)}개, interpretation_paragraph {len(interpretation_in_cache)}개")
+                                        self.logger.debug(f"[CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: 총 {len(semantic_results_for_cache)}개, interpretation_paragraph {len(interpretation_in_cache)}개")
                                         if interpretation_in_cache:
-                                            self.logger.info(f"🔍 [CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: interpretation_paragraph {len(interpretation_in_cache)}개 포함")
+                                            self.logger.debug(f"🔍 [CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: interpretation_paragraph {len(interpretation_in_cache)}개 포함")
                                     if keyword_results_for_cache:
                                         self._search_results_cache["keyword_results"] = keyword_results_for_cache
                                     if search_group_for_cache:
@@ -677,10 +1207,10 @@ class LangGraphWorkflowService:
                                             self._search_results_cache["search"] = {}
                                         self._search_results_cache["search"].update(search_group_for_cache)
                                 else:
-                                    print(f"[CACHE] execute_searches_parallel: semantic_results_for_cache와 keyword_results_for_cache가 모두 비어있음")
-                                    print(f"   node_state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                                    self.logger.debug("[CACHE] execute_searches_parallel: semantic_results_for_cache와 keyword_results_for_cache가 모두 비어있음")
+                                    self.logger.debug(f"   node_state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
                                     if isinstance(node_state, dict) and "search" in node_state:
-                                        print(f"   search 그룹 keys: {list(node_state['search'].keys()) if isinstance(node_state['search'], dict) else 'N/A'}")
+                                        self.logger.debug(f"   search 그룹 keys: {list(node_state['search'].keys()) if isinstance(node_state['search'], dict) else 'N/A'}")
 
                                 # semantic_results와 keyword_results를 retrieved_docs로 변환
                                 # 캐시에서 가져오기 (stream_mode="updates"로 인해 node_state에 없을 수 있음)
@@ -697,13 +1227,11 @@ class LangGraphWorkflowService:
                                             if _global_search_results_cache:
                                                 semantic_results_for_cache = _global_search_results_cache.get("semantic_results", [])
                                                 if semantic_results_for_cache:
-                                                    print(f"[RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
-                                                    self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
+                                                    self.logger.debug(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
                                                     # interpretation_paragraph 확인
                                                     interpretation_in_global = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                                     if interpretation_in_global:
-                                                        print(f"[RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
-                                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
+                                                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
                                         except (ImportError, AttributeError):
                                             pass
                                 
@@ -713,10 +1241,10 @@ class LangGraphWorkflowService:
                                     # interpretation_paragraph 확인
                                     interpretation_in_semantic = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                     if interpretation_in_semantic:
-                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] semantic_results_for_cache에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] semantic_results_for_cache에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                                         for idx, doc in enumerate(interpretation_in_semantic, 1):
                                             is_sample = doc.get("metadata", {}).get("is_sample", False) or doc.get("search_type") == "type_sample"
-                                            self.logger.info(f"   interpretation #{idx}: id={doc.get('id')}, is_sample={is_sample}, source_type={doc.get('source_type')}")
+                                            self.logger.debug(f"   interpretation #{idx}: id={doc.get('id')}, is_sample={is_sample}, source_type={doc.get('source_type')}")
                                 if isinstance(keyword_results_for_cache, list):
                                     combined_docs.extend(keyword_results_for_cache)
 
@@ -725,9 +1253,9 @@ class LangGraphWorkflowService:
                                 unique_docs = []
                                 sample_docs = []  # 샘플링된 문서는 별도로 보관
                                 
-                                print(f"[RETRIEVED_DOCS] combined_docs 총 개수: {len(combined_docs)}")
+                                self.logger.debug(f"[RETRIEVED_DOCS] combined_docs 총 개수: {len(combined_docs)}")
                                 interpretation_in_combined = [d for d in combined_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
-                                print(f"[RETRIEVED_DOCS] combined_docs에 interpretation_paragraph: {len(interpretation_in_combined)}개")
+                                self.logger.debug(f"[RETRIEVED_DOCS] combined_docs에 interpretation_paragraph: {len(interpretation_in_combined)}개")
                                 
                                 for doc in combined_docs:
                                     # 샘플링된 문서는 항상 포함
@@ -735,8 +1263,7 @@ class LangGraphWorkflowService:
                                     doc_type = doc.get("type") or doc.get("source_type")
                                     if is_sample:
                                         sample_docs.append(doc)
-                                        print(f"[RETRIEVED_DOCS] 샘플링된 문서 포함: id={doc.get('id')}, type={doc_type}")
-                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] 샘플링된 문서 포함: {doc.get('id')}, type={doc_type}")
+                                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] 샘플링된 문서 포함: {doc.get('id')}, type={doc_type}")
                                         continue
                                     
                                     doc_id = doc.get("id") or doc.get("content_id") or str(doc.get("content", ""))[:100]
@@ -748,19 +1275,17 @@ class LangGraphWorkflowService:
                                 unique_docs.extend(sample_docs)
                                 if sample_docs:
                                     interpretation_samples = [d for d in sample_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
-                                    print(f"[RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
-                                    self.logger.info(f"✅ [RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
+                                    self.logger.debug(f"✅ [RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
                                     if interpretation_samples:
                                         for idx, doc in enumerate(interpretation_samples, 1):
-                                            self.logger.info(f"   interpretation 샘플 #{idx}: id={doc.get('id')}, source_type={doc.get('source_type')}")
+                                            self.logger.debug(f"   interpretation 샘플 #{idx}: id={doc.get('id')}, source_type={doc.get('source_type')}")
 
                                 # retrieved_docs를 캐시에 저장
                                 if unique_docs:
                                     # interpretation_paragraph 확인
                                     interpretation_in_retrieved = [d for d in unique_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                     if interpretation_in_retrieved:
-                                        print(f"[RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
-                                        self.logger.info(f"✅ [RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
+                                        self.logger.debug(f"✅ [RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
                                     
                                     if not self._search_results_cache:
                                         self._search_results_cache = {}
@@ -782,8 +1307,7 @@ class LangGraphWorkflowService:
                                         # interpretation_paragraph 확인
                                         interpretation_in_unique = [d for d in unique_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                         if interpretation_in_unique:
-                                            print(f"[RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
-                                            self.logger.info(f"✅ [RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
+                                            self.logger.debug(f"✅ [RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
                                     except (ImportError, AttributeError):
                                         pass
                                     
@@ -884,8 +1408,7 @@ class LangGraphWorkflowService:
                             if final_retrieved_docs:
                                 interpretation_in_final = [d for d in final_retrieved_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                 if interpretation_in_final:
-                                    print(f"[RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
-                                    self.logger.info(f"🔍 [RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
+                                    self.logger.debug(f"🔍 [RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
                             
                             # 전역 캐시에서 확인 (final_retrieved_docs에 interpretation_paragraph가 없는 경우)
                             if not final_retrieved_docs or not any((d.get("type") or d.get("source_type")) == "interpretation_paragraph" for d in final_retrieved_docs):
@@ -896,8 +1419,7 @@ class LangGraphWorkflowService:
                                         if cached_retrieved:
                                             interpretation_in_cached = [d for d in cached_retrieved if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                             if interpretation_in_cached:
-                                                print(f"[RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
-                                                self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                                self.logger.debug(f"🔍 [RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
                                                 final_retrieved_docs = cached_retrieved
                                 except (ImportError, AttributeError):
                                     pass
@@ -952,7 +1474,7 @@ class LangGraphWorkflowService:
                                             # interpretation_paragraph 확인
                                             interpretation_in_cached = [d for d in cached_semantic if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                             if interpretation_in_cached:
-                                                self.logger.info(f"🔍 [CACHE] {node_name}에서 캐시된 semantic_results 복원: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                                self.logger.debug(f"🔍 [CACHE] {node_name}에서 캐시된 semantic_results 복원: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
                                         if cached_keyword:
                                             node_state["search"]["keyword_results"] = cached_keyword
                                         self.logger.debug(f"astream: Restored search results from cache for {node_name}")
@@ -1023,6 +1545,12 @@ class LangGraphWorkflowService:
                                 self.logger.warning("astream: merge_and_rerank node_state has no retrieved_docs or merged_documents")
 
                         flat_result = node_state
+                    except asyncio.CancelledError:
+                        self.logger.warning("⚠️ [WORKFLOW] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+                        # 취소된 경우에도 현재까지의 상태를 반환
+                        if flat_result is None:
+                            flat_result = initial_state
+                        raise
 
                 # 모든 노드 실행 완료 표시
                 total_nodes = len(executed_nodes)
@@ -1049,28 +1577,32 @@ class LangGraphWorkflowService:
                 
                 if total_nodes > 0:
                     self.logger.info(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)")
-                    print(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)", flush=True)
+                    self.logger.debug(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)")
                     
                     # 성능 요약 출력 (느린 노드 순서대로 정렬)
                     if node_durations:
                         sorted_nodes = sorted(node_durations.items(), key=lambda x: x[1], reverse=True)
                         self.logger.info("📊 [PERFORMANCE] 노드 실행 시간 요약:")
-                        print("📊 [PERFORMANCE] 노드 실행 시간 요약:", flush=True)
+                        self.logger.debug("📊 [PERFORMANCE] 노드 실행 시간 요약:")
                         
                         for node_name, duration in sorted_nodes[:5]:  # 상위 5개만 표시
                             percentage = (duration / total_execution_time * 100) if total_execution_time > 0 else 0
                             node_display_name = self._get_node_display_name(node_name)
                             summary_msg = f"  - {node_display_name}: {duration:.2f}초 ({percentage:.1f}%)"
                             self.logger.info(summary_msg)
-                            print(summary_msg, flush=True)
+                            self.logger.debug(summary_msg)
                         
                         # 가장 느린 노드 경고
-                        if sorted_nodes and sorted_nodes[0][1] > self.SLOW_NODE_THRESHOLD:
+                        if sorted_nodes:
                             slowest_node = sorted_nodes[0]
-                            self.logger.warning(
-                                f"⚠️ [PERFORMANCE] 가장 느린 노드: {slowest_node[0]} "
-                                f"({slowest_node[1]:.2f}초, 전체의 {slowest_node[1]/total_execution_time*100:.1f}%)"
-                            )
+                            slowest_node_name = slowest_node[0]
+                            slowest_node_duration = slowest_node[1]
+                            threshold = self._get_node_threshold(slowest_node_name)
+                            if slowest_node_duration > threshold:
+                                self.logger.warning(
+                                    f"⚠️ [PERFORMANCE] 가장 느린 노드: {slowest_node_name} "
+                                    f"({slowest_node_duration:.2f}초, 전체의 {slowest_node_duration/total_execution_time*100:.1f}%, 임계값: {threshold}초)"
+                                )
                     
                     # 실행된 노드 목록 표시
                     if total_nodes > 0:
@@ -1078,7 +1610,7 @@ class LangGraphWorkflowService:
                         if total_nodes > 5:
                             nodes_list += f" 외 {total_nodes - 5}개"
                         self.logger.info(f"  실행된 노드: {nodes_list}")
-                        print(f"  실행된 노드: {nodes_list}", flush=True)
+                        self.logger.debug(f"  실행된 노드: {nodes_list}")
 
                 # 최종 결과가 없으면 초기 상태 사용
                 if flat_result is None:
@@ -1231,7 +1763,20 @@ class LangGraphWorkflowService:
                     # 5. Global cache에서 확인 (classify_complexity에서 저장한 값)
                     if not query_complexity_found:
                         try:
-                            from core.agents import node_wrappers
+                            # 여러 import 방법 시도 (모듈 경로 오류 방지)
+                            try:
+                                from lawfirm_langgraph.core.agents import node_wrappers
+                            except ImportError:
+                                try:
+                                    from core.agents import node_wrappers
+                                except ImportError:
+                                    import sys
+                                    from pathlib import Path
+                                    # 상대 경로로 직접 import
+                                    agents_dir = Path(__file__).parent.parent / "agents"
+                                    if str(agents_dir.parent) not in sys.path:
+                                        sys.path.insert(0, str(agents_dir.parent))
+                                    from core.agents import node_wrappers
                             global_cache = getattr(node_wrappers, '_global_search_results_cache', None)
                             self.logger.debug(f"[5] Global cache 확인 - exists={global_cache is not None}, type={type(global_cache).__name__ if global_cache else 'None'}")
                             if global_cache and isinstance(global_cache, dict):
@@ -1405,6 +1950,32 @@ class LangGraphWorkflowService:
 
             # retrieved_docs 추출
             retrieved_docs = self._extract_retrieved_docs_from_result(flat_result)
+            
+            # 🔥 CRITICAL: retrieved_docs의 type 정보 보장 (추출 직후 정규화)
+            if retrieved_docs and len(retrieved_docs) > 0:
+                try:
+                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                    normalized_docs = []
+                    type_normalized_count = 0
+                    for doc in retrieved_docs:
+                        if isinstance(doc, dict):
+                            # type 정보가 없거나 unknown이면 정규화
+                            doc_type = doc.get("type") or doc.get("source_type")
+                            if not doc_type or doc_type == "unknown":
+                                normalized_doc = normalize_document_type(doc.copy())
+                                if normalized_doc.get("type") and normalized_doc.get("type") != "unknown":
+                                    type_normalized_count += 1
+                                normalized_docs.append(normalized_doc)
+                            else:
+                                normalized_docs.append(doc)
+                        else:
+                            normalized_docs.append(doc)
+                    
+                    if type_normalized_count > 0:
+                        retrieved_docs = normalized_docs
+                        self.logger.info(f"[WORKFLOW_SERVICE] {type_normalized_count}개 retrieved_docs의 type 정보 정규화 완료")
+                except (ImportError, Exception) as norm_error:
+                    self.logger.debug(f"[WORKFLOW_SERVICE] retrieved_docs type 정규화 실패 (무시): {norm_error}")
             
             # sources 추출: flat_result에서 여러 위치에서 찾기 (prepare_final_response_part에서 생성한 sources 포함)
             sources = []
@@ -1645,7 +2216,70 @@ class LangGraphWorkflowService:
             metadata_clean = convert_numpy_types(metadata) if metadata else {}
             
             # ConversationManager에 턴 추가 및 conversation_history 업데이트
-            answer = flat_result.get("answer", "") if isinstance(flat_result, dict) else ""
+            # answer 추출: flat_result에서 여러 위치에서 찾기
+            answer = ""
+            if isinstance(flat_result, dict):
+                # 1. 최상위 레벨에서 확인
+                answer_raw = flat_result.get("answer", "")
+                self.logger.debug(f"[ANSWER EXTRACTION] flat_result['answer'] type={type(answer_raw).__name__}, value={str(answer_raw)[:100] if answer_raw else 'None'}")
+                
+                # 2. answer가 dict인 경우 내부 answer 키 확인
+                if isinstance(answer_raw, dict):
+                    answer = answer_raw.get("answer", "") or answer_raw.get("content", "") or ""
+                    self.logger.debug(f"[ANSWER EXTRACTION] Extracted from dict: length={len(str(answer))}")
+                else:
+                    answer = answer_raw
+                
+                # 3. answer가 비어있으면 다른 경로에서 찾기
+                if not answer or len(str(answer).strip()) == 0:
+                    # 3-1. common 그룹에서 확인
+                    if "common" in flat_result:
+                        if isinstance(flat_result["common"], dict):
+                            common_answer = flat_result["common"].get("answer", "")
+                            if isinstance(common_answer, dict):
+                                answer = common_answer.get("answer", "") or common_answer.get("content", "") or ""
+                            else:
+                                answer = common_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in common: length={len(str(answer))}")
+                    
+                    # 3-2. metadata에서 확인
+                    if (not answer or len(str(answer).strip()) == 0) and "metadata" in flat_result:
+                        if isinstance(flat_result["metadata"], dict):
+                            metadata_answer = flat_result["metadata"].get("answer", "")
+                            if isinstance(metadata_answer, dict):
+                                answer = metadata_answer.get("answer", "") or metadata_answer.get("content", "") or ""
+                            else:
+                                answer = metadata_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in metadata: length={len(str(answer))}")
+                    
+                    # 3-3. output 그룹에서 확인
+                    if (not answer or len(str(answer).strip()) == 0) and "output" in flat_result:
+                        if isinstance(flat_result["output"], dict):
+                            output_answer = flat_result["output"].get("answer", "")
+                            if isinstance(output_answer, dict):
+                                answer = output_answer.get("answer", "") or output_answer.get("content", "") or ""
+                            else:
+                                answer = output_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in output: length={len(str(answer))}")
+                    
+                    # 3-4. analysis 그룹에서 확인
+                    if (not answer or len(str(answer).strip()) == 0) and "analysis" in flat_result:
+                        if isinstance(flat_result["analysis"], dict):
+                            analysis_answer = flat_result["analysis"].get("answer", "")
+                            if isinstance(analysis_answer, dict):
+                                answer = analysis_answer.get("answer", "") or analysis_answer.get("content", "") or ""
+                            else:
+                                answer = analysis_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in analysis: length={len(str(answer))}")
+            
+            # answer를 문자열로 변환
+            answer = str(answer).strip() if answer else ""
+            self.logger.info(f"[ANSWER EXTRACTION] Final answer length: {len(answer)}")
+            
             query_type = flat_result.get("query_type", "general_question") if isinstance(flat_result, dict) else "general_question"
             
             if session_id and query and answer:
@@ -1702,8 +2336,9 @@ class LangGraphWorkflowService:
                 except Exception as e:
                     self.logger.warning(f"Failed to update conversation history: {e}", exc_info=True)
             
+            # response에 answer 설정 (이미 위에서 추출한 answer 사용)
             response = {
-                "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",
+                "answer": answer,
                 "sources": sources,
                 "sources_detail": sources_detail_clean,
                 "confidence": flat_result.get("confidence", 0.0) if isinstance(flat_result, dict) else 0.0,
@@ -1731,10 +2366,43 @@ class LangGraphWorkflowService:
                 "query_complexity": query_complexity if query_complexity else "unknown",
                 "needs_search": needs_search,
                 # retrieved_docs는 search 그룹 또는 최상위 레벨에 있을 수 있음
-                "retrieved_docs": retrieved_docs
+                # 🔥 CRITICAL: 최종 결과에 포함하기 전에 type 정보 최종 보장
+                "retrieved_docs": retrieved_docs if retrieved_docs else []
             }
+            
+            # 🔥 CRITICAL: 최종 결과의 retrieved_docs에 type 정보 최종 보장
+            if response.get("retrieved_docs") and len(response["retrieved_docs"]) > 0:
+                try:
+                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                    final_normalized_docs = []
+                    final_type_normalized_count = 0
+                    for doc in response["retrieved_docs"]:
+                        if isinstance(doc, dict):
+                            # type 정보가 없거나 unknown이면 정규화
+                            doc_type = doc.get("type") or doc.get("source_type")
+                            if not doc_type or doc_type == "unknown":
+                                normalized_doc = normalize_document_type(doc.copy())
+                                if normalized_doc.get("type") and normalized_doc.get("type") != "unknown":
+                                    final_type_normalized_count += 1
+                                final_normalized_docs.append(normalized_doc)
+                            else:
+                                final_normalized_docs.append(doc)
+                        else:
+                            final_normalized_docs.append(doc)
+                    
+                    if final_type_normalized_count > 0:
+                        response["retrieved_docs"] = final_normalized_docs
+                        self.logger.info(f"[WORKFLOW_SERVICE] 최종 결과의 {final_type_normalized_count}개 retrieved_docs의 type 정보 정규화 완료")
+                except (ImportError, Exception) as final_norm_error:
+                    self.logger.debug(f"[WORKFLOW_SERVICE] 최종 결과 retrieved_docs type 정규화 실패 (무시): {final_norm_error}")
 
             self.logger.info(f"Query processed successfully in {processing_time:.2f}s")
+            
+            # 메모리 정리: 쿼리 처리 완료 후 가비지 컬렉션
+            collected = gc.collect()
+            if collected > 0:
+                self.logger.debug(f"Garbage collection after query processing: {collected} objects collected")
+            
             return response
 
         except ValueError as e:
@@ -1800,17 +2468,20 @@ class LangGraphWorkflowService:
             flat_result: 최종 결과 딕셔너리
 
         Returns:
-            retrieved_docs 리스트
+            retrieved_docs 리스트 (type 정보 정규화됨)
         """
         if not isinstance(flat_result, dict):
             return []
 
+        docs = []
+        
         # 1. 최상위 레벨에서 확인
         if "retrieved_docs" in flat_result:
             docs = flat_result.get("retrieved_docs", [])
             if isinstance(docs, list) and len(docs) > 0:
                 self.logger.debug(f"Found retrieved_docs in top level: {len(docs)}")
-                return docs
+                # 🔥 CRITICAL: type 정보 정규화 후 반환
+                return self._normalize_retrieved_docs_types(docs)
 
         # 2. search 그룹에서 확인
         if "search" in flat_result and isinstance(flat_result["search"], dict):
@@ -1818,7 +2489,8 @@ class LangGraphWorkflowService:
             docs = search_group.get("retrieved_docs", [])
             if isinstance(docs, list) and len(docs) > 0:
                 self.logger.debug(f"Found retrieved_docs in search group: {len(docs)}")
-                return docs
+                # 🔥 CRITICAL: type 정보 정규화 후 반환
+                return self._normalize_retrieved_docs_types(docs)
 
         # 3. search.retrieved_docs가 없으면 search.merged_documents 확인
         if "search" in flat_result and isinstance(flat_result["search"], dict):
@@ -1826,7 +2498,8 @@ class LangGraphWorkflowService:
             merged_docs = search_group.get("merged_documents", [])
             if isinstance(merged_docs, list) and len(merged_docs) > 0:
                 self.logger.debug(f"Found merged_documents in search group (using as retrieved_docs): {len(merged_docs)}")
-                return merged_docs
+                # 🔥 CRITICAL: type 정보 정규화 후 반환
+                return self._normalize_retrieved_docs_types(merged_docs)
 
         # 4. global cache에서 확인 (마지막 시도)
         try:
@@ -1838,28 +2511,33 @@ class LangGraphWorkflowService:
                     cached_docs = cached_search.get("retrieved_docs", [])
                     if isinstance(cached_docs, list) and len(cached_docs) > 0:
                         self.logger.debug(f"Found retrieved_docs in global cache search group: {len(cached_docs)}")
-                        return cached_docs
+                        # 🔥 CRITICAL: type 정보 정규화 후 반환
+                        return self._normalize_retrieved_docs_types(cached_docs)
                     cached_merged = cached_search.get("merged_documents", [])
                     if isinstance(cached_merged, list) and len(cached_merged) > 0:
                         self.logger.debug(f"Found merged_documents in global cache search group: {len(cached_merged)}")
-                        return cached_merged
+                        # 🔥 CRITICAL: type 정보 정규화 후 반환
+                        return self._normalize_retrieved_docs_types(cached_merged)
 
                     # semantic_results를 retrieved_docs로 변환 (retrieved_docs가 없는 경우)
                     cached_semantic = cached_search.get("semantic_results", [])
                     if isinstance(cached_semantic, list) and len(cached_semantic) > 0:
                         self.logger.debug(f"Converting semantic_results to retrieved_docs: {len(cached_semantic)}")
                         # semantic_results는 이미 문서 형태이므로 그대로 사용
-                        return cached_semantic
+                        # 🔥 CRITICAL: type 정보 정규화 후 반환
+                        return self._normalize_retrieved_docs_types(cached_semantic)
 
                 # 최상위 레벨에서 확인
                 cached_docs = _global_search_results_cache.get("retrieved_docs", [])
                 if isinstance(cached_docs, list) and len(cached_docs) > 0:
                     self.logger.debug(f"Found retrieved_docs in global cache top level: {len(cached_docs)}")
-                    return cached_docs
+                    # 🔥 CRITICAL: type 정보 정규화 후 반환
+                    return self._normalize_retrieved_docs_types(cached_docs)
                 cached_merged = _global_search_results_cache.get("merged_documents", [])
                 if isinstance(cached_merged, list) and len(cached_merged) > 0:
                     self.logger.debug(f"Found merged_documents in global cache top level: {len(cached_merged)}")
-                    return cached_merged
+                    # 🔥 CRITICAL: type 정보 정규화 후 반환
+                    return self._normalize_retrieved_docs_types(cached_merged)
 
                 # semantic_results를 retrieved_docs로 변환 (최상위 레벨)
                 cached_semantic = _global_search_results_cache.get("semantic_results", [])
@@ -1867,7 +2545,7 @@ class LangGraphWorkflowService:
                     # interpretation_paragraph 확인
                     interpretation_in_semantic = [d for d in cached_semantic if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                     if interpretation_in_semantic:
-                        self.logger.info(f"🔍 [RETRIEVED_DOCS] semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                     self.logger.debug(f"Converting semantic_results to retrieved_docs (top level): {len(cached_semantic)}")
                     return cached_semantic
         except (ImportError, AttributeError, TypeError):
@@ -1892,12 +2570,52 @@ class LangGraphWorkflowService:
                 # interpretation_paragraph 확인
                 interpretation_in_semantic = [d for d in semantic_results if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                 if interpretation_in_semantic:
-                    self.logger.info(f"🔍 [RETRIEVED_DOCS] 최상위 레벨의 semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                    self.logger.debug(f"🔍 [RETRIEVED_DOCS] 최상위 레벨의 semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                 self.logger.debug(f"Converting semantic_results to retrieved_docs from top level: {len(semantic_results)}")
                 return semantic_results
 
         self.logger.debug(f"No retrieved_docs found - keys={list(flat_result.keys())[:10]}")
         return []
+    
+    def _normalize_retrieved_docs_types(self, retrieved_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        retrieved_docs의 type 정보 정규화
+        
+        Args:
+            retrieved_docs: 검색된 문서 리스트
+            
+        Returns:
+            type 정보가 정규화된 retrieved_docs 리스트
+        """
+        if not retrieved_docs or not isinstance(retrieved_docs, list):
+            return retrieved_docs if retrieved_docs else []
+        
+        try:
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+            normalized_docs = []
+            type_normalized_count = 0
+            
+            for doc in retrieved_docs:
+                if isinstance(doc, dict):
+                    # type 정보가 없거나 unknown이면 정규화
+                    doc_type = doc.get("type") or doc.get("source_type")
+                    if not doc_type or doc_type == "unknown":
+                        normalized_doc = normalize_document_type(doc.copy())
+                        if normalized_doc.get("type") and normalized_doc.get("type") != "unknown":
+                            type_normalized_count += 1
+                        normalized_docs.append(normalized_doc)
+                    else:
+                        normalized_docs.append(doc)
+                else:
+                    normalized_docs.append(doc)
+            
+            if type_normalized_count > 0:
+                self.logger.debug(f"[_normalize_retrieved_docs_types] {type_normalized_count}개 문서의 type 정보 정규화 완료")
+            
+            return normalized_docs
+        except (ImportError, Exception) as norm_error:
+            self.logger.debug(f"[_normalize_retrieved_docs_types] type 정규화 실패 (원본 반환): {norm_error}")
+            return retrieved_docs
     
     def _extract_sources_from_retrieved_docs(self, retrieved_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -1927,18 +2645,19 @@ class LangGraphWorkflowService:
             if not isinstance(doc, dict):
                 continue
             
-            # 1. type 필드 확인 (우선순위 1)
+            # 🔥 레거시 호환 필드 정리: normalize_document_type으로 type 보장
+            try:
+                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                doc = normalize_document_type(doc)
+            except ImportError:
+                try:
+                    from core.utils.document_type_normalizer import normalize_document_type
+                    doc = normalize_document_type(doc)
+                except ImportError:
+                    pass
+            
+            # 단일 소스 원칙: doc.type만 사용
             doc_type = doc.get("type", "")
-            
-            # 2. metadata.source_type 확인 (우선순위 2)
-            if not doc_type and "metadata" in doc:
-                metadata = doc.get("metadata", {})
-                if isinstance(metadata, dict):
-                    doc_type = metadata.get("source_type", "")
-            
-            # 3. source_type 필드 확인 (우선순위 3)
-            if not doc_type:
-                doc_type = doc.get("source_type", "")
             
             # 4. source_type 매핑 적용
             if doc_type in source_type_mapping:
@@ -1966,17 +2685,40 @@ class LangGraphWorkflowService:
                 else:
                     doc_type = "document"
             
-            # 소스 정보 추출
+            # 소스 정보 추출 강화 (여러 위치에서 확인)
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             source_name = (
                 doc.get("source") or
                 doc.get("title") or
                 doc.get("document_id") or
                 doc.get("law_name") or
+                doc.get("statute_name") or
                 doc.get("case_name") or
                 doc.get("precedent_name") or
                 doc.get("casenames") or  # 판례명
+                metadata.get("source") or
+                metadata.get("title") or
+                metadata.get("statute_name") or
+                metadata.get("law_name") or
+                metadata.get("case_name") or
+                metadata.get("casenames") or
                 ""
             )
+            
+            # 여전히 없으면 content에서 추출 시도
+            if not source_name:
+                content = doc.get("content", "") or doc.get("text", "")
+                if content:
+                    import re
+                    # 법령명 패턴
+                    law_match = re.search(r'([가-힣]+법)', content[:200])
+                    if law_match:
+                        source_name = law_match.group(1)
+                    # 판례명 패턴
+                    elif re.search(r'(대법원|지방법원|고등법원)', content[:200]):
+                        case_match = re.search(r'([가-힣]+(?:지방)?법원.*?\d+[가-힣]+\d+)', content[:200])
+                        if case_match:
+                            source_name = case_match.group(1)
             
             # relevance_score 추출
             relevance_score = (
@@ -2127,9 +2869,6 @@ class LangGraphWorkflowService:
             
             # 이전 상태 가져오기
             try:
-                # LangGraph의 get_state를 사용하여 이전 상태 가져오기
-                from langgraph.checkpoint.memory import MemorySaver
-                
                 # 체크포인터가 있으면 이전 상태 가져오기
                 if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
                     # 이전 상태에서 continue_answer_generation 노드만 실행
@@ -2153,9 +2892,6 @@ class LangGraphWorkflowService:
                     previous_answer = current_state.values.get("answer", "")
                     
                     if not continued_answer or continued_answer == previous_answer:
-                        # 답변이 업데이트되지 않았으면 직접 노드 실행
-                        from langgraph.graph import END
-                        
                         # continue_answer_generation 노드 직접 호출
                         state_dict = dict(current_state.values)
                         state_dict["continue"] = True
@@ -2514,6 +3250,23 @@ class LangGraphWorkflowService:
                     node_state["input"]["session_id"] = self._initial_input["session_id"]
                 self.logger.debug(f"astream: Restored query in input group for {node_name}")
     
+    def _get_node_threshold(self, node_name: str) -> float:
+        """
+        노드 타입에 따른 성능 임계값 반환
+        
+        Args:
+            node_name: 노드 이름
+        
+        Returns:
+            float: 임계값 (초)
+        """
+        if node_name in self.SEARCH_NODES:
+            return self.slow_search_node_threshold
+        elif node_name in self.LLM_NODES:
+            return self.slow_llm_node_threshold
+        else:
+            return self.slow_node_threshold
+    
     def _get_node_display_name(self, node_name: str) -> str:
         """
         노드 이름을 한국어로 변환하여 표시
@@ -2554,3 +3307,18 @@ class LangGraphWorkflowService:
         }
 
         return node_name_map.get(node_name, node_name.replace("_", " ").title())
+    
+    def _deep_update(self, base: Dict[str, Any], update: Dict[str, Any]) -> None:
+        """깊은 병합을 사용하여 중첩된 딕셔너리 업데이트
+        
+        Args:
+            base: 기본 딕셔너리 (업데이트될 딕셔너리)
+            update: 업데이트할 딕셔너리
+        """
+        for key, value in update.items():
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                # 중첩된 딕셔너리는 재귀적으로 병합
+                self._deep_update(base[key], value)
+            else:
+                # 그 외의 경우는 직접 업데이트
+                base[key] = value

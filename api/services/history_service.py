@@ -56,7 +56,6 @@ class HistoryService:
             else:
                 # 세션 목록 기반 조회 (user_id로 필터링)
                 sessions, total = session_service.list_sessions(
-                    category=category,
                     search=search,
                     page=page,
                     page_size=page_size,

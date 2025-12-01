@@ -5,6 +5,10 @@ Context Manager
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 import os
 from typing import List, Dict, Any, Optional, Tuple
@@ -16,7 +20,7 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -47,7 +51,7 @@ class ContextManager:
     def __init__(self, config):
         """컨텍스트 관리자 초기화"""
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 세션 관리
         self.sessions: Dict[str, ContextSession] = {}

@@ -24,8 +24,8 @@ log_level_map = {
 log_level = log_level_map.get(log_level_str, logging.INFO)
 
 # 로그 디렉토리 설정
-LOG_DIR = Path(__file__).parent.parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR = Path(__file__).parent.parent.parent / "logs" / "api"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 서버 시작 시 타임스탬프 (서버 재시작마다 새 파일 생성)
 SERVER_START_TIME = datetime.now().strftime("%Y%m%d_%H%M%S")

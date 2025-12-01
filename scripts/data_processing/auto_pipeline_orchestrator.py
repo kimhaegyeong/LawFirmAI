@@ -30,7 +30,7 @@ from scripts.ml_training.vector_embedding.incremental_precedent_vector_builder i
 from scripts.data_processing.utilities.import_laws_to_db import AssemblyLawImporter
 from scripts.data_processing.utilities.import_precedents_to_db import PrecedentDataImporter
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 
 # Import quality modules
 try:

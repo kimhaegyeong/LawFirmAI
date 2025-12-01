@@ -5,16 +5,20 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DynamicPromptBuilder:
     """검색 결과 기반 동적 프롬프트 빌더"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def analyze_document_types(self, documents: List[Dict[str, Any]]) -> Dict[str, int]:
         """문서 타입별 개수 분석"""

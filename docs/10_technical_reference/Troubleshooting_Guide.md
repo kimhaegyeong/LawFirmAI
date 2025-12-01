@@ -460,7 +460,7 @@ cp data/lawfirm.db data/lawfirm.db.backup
 
 # 새 데이터베이스 생성
 python -c "
-from source.data.conversation_store import ConversationStore
+from lawfirm_langgraph.core.data.conversation_store import ConversationStore
 store = ConversationStore('data/lawfirm.db')
 print('Database created successfully')
 "

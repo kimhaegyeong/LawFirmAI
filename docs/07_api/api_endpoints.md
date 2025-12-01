@@ -24,32 +24,41 @@ LawFirmAI는 지능형 법률 AI 어시스턴트를 위한 RESTful API를 제공
 ### 실제 엔드포인트 목록
 
 #### 채팅 엔드포인트
-- `POST /chat` - 기본 채팅 메시지 처리
-- `POST /chat/stream` - 스트리밍 채팅 응답
-- `GET /chat/{session_id}/sources` - 세션별 소스 조회
+- `POST /api/v1/chat` - 기본 채팅 메시지 처리
+- `POST /api/v1/chat/stream` - 스트리밍 채팅 응답 (Server-Sent Events)
+- `GET /api/v1/chat/{session_id}/sources` - 세션별 소스 조회
+- `POST /api/v1/chat/continue` - 답변 계속 생성
 
 #### 세션 관리 엔드포인트
-- `GET /sessions` - 세션 목록 조회
-- `GET /sessions/by-date` - 날짜별 세션 목록 조회
-- `POST /sessions` - 새 세션 생성
-- `GET /sessions/{session_id}` - 세션 상세 조회
-- `PUT /sessions/{session_id}` - 세션 업데이트
-- `DELETE /sessions/{session_id}` - 세션 삭제
-- `POST /sessions/{session_id}/generate-title` - 세션 제목 생성
+- `GET /api/v1/sessions` - 세션 목록 조회
+- `GET /api/v1/sessions/by-date` - 날짜별 세션 목록 조회
+- `POST /api/v1/sessions` - 새 세션 생성
+- `GET /api/v1/sessions/{session_id}` - 세션 상세 조회
+- `PUT /api/v1/sessions/{session_id}` - 세션 업데이트
+- `DELETE /api/v1/sessions/{session_id}` - 세션 삭제
+- `POST /api/v1/sessions/{session_id}/generate-title` - 세션 제목 생성
 
 #### 히스토리 엔드포인트
-- `GET /history` - 대화 히스토리 조회
-- `POST /history/export` - 히스토리 내보내기
+- `GET /api/v1/history` - 대화 히스토리 조회
+- `POST /api/v1/history/export` - 히스토리 내보내기
 
 #### 피드백 엔드포인트
-- `POST /feedback` - 피드백 제출
+- `POST /api/v1/feedback` - 피드백 제출
+
+#### 인증 엔드포인트
+- `GET /api/v1/oauth2/google/authorize` - Google OAuth2 인증 시작
+- `GET /api/v1/oauth2/google/callback` - Google OAuth2 콜백 처리
+- `POST /api/v1/oauth2/token-exchange` - 토큰 교환
+- `POST /api/v1/auth/refresh` - 토큰 갱신
+- `GET /api/v1/auth/me` - 현재 사용자 정보 조회
+- `DELETE /api/v1/auth/account` - 계정 삭제
 
 #### 헬스체크 엔드포인트
-- `GET /health` - 서비스 상태 확인
+- `GET /api/v1/health` - 서비스 상태 확인
 
 ### 1. 기본 채팅 엔드포인트
 
-#### `POST /chat`
+#### `POST /api/v1/chat`
 기본 채팅 기능
 
 **Request Body:**
@@ -72,7 +81,7 @@ LawFirmAI는 지능형 법률 AI 어시스턴트를 위한 RESTful API를 제공
 
 ### 2. 스트리밍 채팅 엔드포인트
 
-#### `POST /chat/stream`
+#### `POST /api/v1/chat/stream`
 스트리밍 채팅 응답 (Server-Sent Events)
 
 **Request Body:**
@@ -114,7 +123,7 @@ data: {"type":"final","content":"전체 답변...","sources":[...],"legal_refere
 
 ### 3. 소스 조회 엔드포인트
 
-#### `GET /chat/{session_id}/sources`
+#### `GET /api/v1/chat/{session_id}/sources`
 세션별 소스 조회
 
 **Response:**
@@ -134,40 +143,60 @@ data: {"type":"final","content":"전체 답변...","sources":[...],"legal_refere
 
 ### 4. 세션 관리 엔드포인트
 
-#### `GET /sessions`
+#### `GET /api/v1/sessions`
 세션 목록 조회
 
-#### `POST /sessions`
+#### `POST /api/v1/sessions`
 새 세션 생성
 
-#### `GET /sessions/{session_id}`
+#### `GET /api/v1/sessions/{session_id}`
 세션 상세 조회
 
-#### `PUT /sessions/{session_id}`
+#### `PUT /api/v1/sessions/{session_id}`
 세션 업데이트
 
-#### `DELETE /sessions/{session_id}`
+#### `DELETE /api/v1/sessions/{session_id}`
 세션 삭제
 
-#### `POST /sessions/{session_id}/generate-title`
+#### `POST /api/v1/sessions/{session_id}/generate-title`
 세션 제목 생성
 
 ### 5. 히스토리 엔드포인트
 
-#### `GET /history`
+#### `GET /api/v1/history`
 대화 히스토리 조회
 
-#### `POST /history/export`
+#### `POST /api/v1/history/export`
 히스토리 내보내기
 
 ### 6. 피드백 엔드포인트
 
-#### `POST /feedback`
+#### `POST /api/v1/feedback`
 피드백 제출
 
-### 7. 헬스체크 엔드포인트
+### 7. 인증 엔드포인트
 
-#### `GET /health`
+#### `GET /api/v1/oauth2/google/authorize`
+Google OAuth2 인증 시작
+
+#### `GET /api/v1/oauth2/google/callback`
+Google OAuth2 콜백 처리
+
+#### `POST /api/v1/oauth2/token-exchange`
+토큰 교환
+
+#### `POST /api/v1/auth/refresh`
+토큰 갱신
+
+#### `GET /api/v1/auth/me`
+현재 사용자 정보 조회
+
+#### `DELETE /api/v1/auth/account`
+계정 삭제
+
+### 8. 헬스체크 엔드포인트
+
+#### `GET /api/v1/health`
 서비스 상태 확인
 
 **Response:**
@@ -285,8 +314,8 @@ USE_STREAMING_MODE=false  # 테스트용: 최종 검증 노드 사용
 
 ### 4. 지능형 채팅 엔드포인트 v2 (Phase 2 최신)
 
-#### `POST /chat/intelligent-v2`
-모든 개선사항이 통합된 최신 엔드포인트
+#### `POST /api/v1/chat/intelligent-v2`
+모든 개선사항이 통합된 최신 엔드포인트 (참고: 현재는 `/api/v1/chat` 엔드포인트가 모든 기능을 포함)
 
 **Request Body:**
 ```json
@@ -377,8 +406,8 @@ USE_STREAMING_MODE=false  # 테스트용: 최종 검증 노드 사용
 
 ### 5. 검색 엔드포인트
 
-#### `POST /search`
-하이브리드 검색 기능
+#### `POST /api/v1/search`
+하이브리드 검색 기능 (참고: 현재는 `/api/v1/chat` 엔드포인트를 통해 검색 기능이 통합되어 제공됨)
 
 **Request Body:**
 ```json
@@ -412,8 +441,8 @@ USE_STREAMING_MODE=false  # 테스트용: 최종 검증 노드 사용
 
 ### 6. 시스템 상태 확인
 
-#### `GET /system/status`
-시스템 전체 상태 점검
+#### `GET /api/v1/system/status`
+시스템 전체 상태 점검 (참고: 현재는 `/api/v1/health` 엔드포인트가 제공됨)
 
 **Response:**
 ```json

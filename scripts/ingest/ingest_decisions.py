@@ -13,7 +13,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scripts.utils.text_chunker import chunk_paragraphs
+from scripts.utils.chunking.factory import ChunkingFactory
 from scripts.utils.embeddings import SentenceEmbedder
+from scripts.utils.embedding_version_manager import EmbeddingVersionManager
 from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
@@ -83,38 +85,84 @@ def insert_chunks_and_embeddings(
     paragraphs: List[str],
     embedder: SentenceEmbedder,
     batch: int = 64,
+    chunking_strategy: str = "standard",
+    query_type: Optional[str] = None,
+    replace_existing: bool = True,
 ):
-    chunks = chunk_paragraphs(paragraphs)
-    rows_to_embed: List[Dict] = []
-    for ch in chunks:
-        cur = conn.execute(
-            """
-            INSERT INTO text_chunks(source_type, source_id, level, chunk_index, start_char, end_char, overlap_chars, text, token_count, meta)
-            VALUES(?,?,?,?,?,?,?,?,?,NULL)
-            """,
-            (
-                "decision_paragraph",
-                decision_id,
-                "paragraph",
-                ch.get("chunk_index", 0),
-                None,
-                None,
-                None,
-                ch.get("text"),
-                None,
-            ),
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # ?????? ?? ????
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    version_manager = EmbeddingVersionManager(db_path)
+    
+    # ?? ?? ?? ?? ??
+    active_version = version_manager.get_active_version(chunking_strategy)
+    if not active_version:
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+        version_name = f"v1.0.0-{chunking_strategy}"
+        version_id = version_manager.register_version(
+            version_name=version_name,
+            chunking_strategy=chunking_strategy,
+            model_name=model_name,
+            description=f"{chunking_strategy} ?? ??",
+            set_active=True
         )
-        rows_to_embed.append({"id": cur.lastrowid, "text": ch.get("text", "")})
-
-    texts = [r["text"] for r in rows_to_embed]
-    if not texts:
-        return
-    vecs = embedder.encode(texts, batch_size=batch)
-    for r, v in zip(rows_to_embed, vecs):
-        conn.execute(
-            "INSERT INTO embeddings(chunk_id, model, dim, vector) VALUES(?,?,?,?)",
-            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes()),
+    else:
+        version_id = active_version['id']
+    
+    # ?? ?? ?? (?? ?? ??)
+    if replace_existing:
+        deleted_chunks, deleted_embeddings = version_manager.delete_chunks_by_version(
+            source_type="decision_paragraph",
+            source_id=decision_id
         )
+        if deleted_chunks > 0:
+            logger.info(f"Deleted {deleted_chunks} existing chunks for decision_id={decision_id}")
+    
+    # ?? ?? ??
+    strategy = ChunkingFactory.create_strategy(
+        strategy_name=chunking_strategy,
+        query_type=query_type
+    )
+    
+    # ?? ??
+    chunk_results = strategy.chunk(
+        content=paragraphs,
+        source_type="decision_paragraph",
+        source_id=decision_id
+    )
+    
+    # decision ????? ?? (?? ??? ???? ??)
+    decision_metadata = None
+    try:
+        import json
+        cursor_meta = conn.execute("""
+            SELECT org, doc_id
+            FROM decisions
+            WHERE id = ?
+        """, (decision_id,))
+        row = cursor_meta.fetchone()
+        if row:
+            decision_metadata = {
+                'org': row['org'],
+                'doc_id': row['doc_id']
+            }
+    except Exception as e:
+        logger.debug(f"Failed to get decision metadata for decision_id={decision_id}: {e}")
+    
+    # ????? JSON ??
+    meta_json = None
+    if decision_metadata:
+        try:
+            meta_json = json.dumps(decision_metadata, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Failed to serialize decision metadata for decision_id={decision_id}: {e}")
+    
+    # ??: text_chunks ???? PostgreSQL ???? ???? ???? ???
+    # ? ??? ? ?? text_chunks? ???? ???? ????.
+    logger.warning("text_chunks ???? ???? ingest_decisions? insert_chunks_and_embeddings ??? ?????????.")
+    return
 
 
 def main():

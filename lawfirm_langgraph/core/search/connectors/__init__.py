@@ -4,7 +4,7 @@ Search Connectors Module
 검색 커넥터 모듈
 """
 
-from .legal_data_connector import LegalDataConnectorV2
+from .legal_data_connector_v2 import LegalDataConnectorV2
 
 __all__ = [
     "LegalDataConnectorV2",

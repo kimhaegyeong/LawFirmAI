@@ -22,47 +22,14 @@ LawFirmAI 프로젝트에서 LangGraph 워크플로우 개발을 위한 핵심 �
 
 ### LegalWorkflowState
 
-```python
-from typing import TypedDict, Annotated, List, Dict, Any, Optional
+상세한 State 정의는 [LangGraph 통합 가이드](./langgraph_integration_guide.md#상태-state-정의)를 참조하세요.
 
-class LegalWorkflowState(TypedDict):
-    """법률 워크플로우 상태 정의"""
-    
-    # 입력 데이터
-    query: str
-    session_id: str
-    
-    # 질문 분류
-    query_type: str
-    confidence: float
-    legal_field: str
-    legal_domain: str
-    
-    # 긴급도 평가
-    urgency_level: str
-    urgency_reasoning: str
-    emergency_type: Optional[str]
-    
-    # 멀티턴 처리
-    is_multi_turn: bool
-    conversation_history: List[Dict[str, Any]]
-    
-    # 검색 결과
-    retrieved_docs: List[Dict[str, Any]]
-    
-    # 최종 답변
-    answer: str
-    sources: List[str]
-    legal_references: List[str]
-    
-    # 처리 과정
-    processing_steps: Annotated[List[str], add]
-    errors: Annotated[List[str], add]
-    metadata: Dict[str, Any]
-    
-    # 성능
-    processing_time: float
-```
+주요 State 필드:
+- **입력**: `query`, `session_id`
+- **분류**: `query_type`, `legal_field`, `legal_domain`
+- **검색**: `retrieved_docs`, `extracted_keywords`, `search_query`
+- **답변**: `answer`, `sources`, `legal_references`
+- **처리**: `processing_steps`, `errors`, `metadata`
 
 ### State 최적화 설정
 
@@ -73,6 +40,8 @@ MAX_DOCUMENT_CONTENT_LENGTH = 500    # 문서 content 최대 길이
 MAX_CONVERSATION_HISTORY = 5        # 대화 이력 최대 개수
 MAX_PROCESSING_STEPS = 20            # 처리 단계 최대 개수
 ```
+
+상세한 최적화 방법은 [LangGraph 통합 가이드](./langgraph_integration_guide.md#state-최적화)를 참조하세요.
 
 ## 워크플로우 구현 규칙
 

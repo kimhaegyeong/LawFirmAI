@@ -5,19 +5,56 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import sqlite3
 import asyncio
+import os
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.data.database import DatabaseManager
-from core.data.vector_store import LegalVectorStore
-from core.utils.config import Config
-from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
+# Database adapter import
+try:
+    from core.data.db_adapter import DatabaseAdapter
+    from core.data.sql_adapter import SQLAdapter
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+        from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+    except ImportError:
+        DatabaseAdapter = None
+        SQLAdapter = None
 
-logger = logging.getLogger(__name__)
+try:
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+except ImportError:
+    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+try:
+    from lawfirm_langgraph.core.data.vector_store import LegalVectorStore
+except ImportError:
+    from core.data.vector_store import LegalVectorStore
+try:
+    from lawfirm_langgraph.core.utils.config import Config
+except ImportError:
+    from core.utils.config import Config
+try:
+    from lawfirm_langgraph.core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
+except ImportError:
+    from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
+
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -45,22 +82,37 @@ class PrecedentSearchEngine:
                  vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents",
                  vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents.json"):
         """판례 검색 엔진 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         if db_path is None:
             config = Config()
             db_path = config.database_path
 
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor.get_instance()
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
+
         # 데이터베이스 연결
-        self.db_manager = DatabaseManager(db_path)
+        self.db_manager = LegalDataConnectorV2(db_path)
 
         # 벡터 저장소 초기화
         self.vector_store = None
         self.vector_metadata = None
 
         try:
+            import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            if model_name is None:
+                from core.utils.config import Config
+                config = Config()
+                model_name = config.embedding_model
+            
             self.vector_store = LegalVectorStore(
-                model_name="jhgan/ko-sroberta-multitask",
+                model_name=model_name,
                 dimension=768,
                 index_type="flat"
             )
@@ -366,16 +418,14 @@ class PrecedentSearchEngine:
         # 조사 제거 패턴 (한글 조사)
         josa_pattern = r'(에|에서|로|으로|와|과|의|을|를|이|가|은|는|도|만|부터|까지|대해|관련)$'
         
-        # 키워드 정리 (1글자 제외, 불용어 제거, 조사 제거)
-        stopwords = {'의', '을', '를', '이', '가', '은', '는', '에', '에서', '로', '으로', 
-                     '와', '과', '도', '만', '부터', '까지', '에', '대해', '관련', '질문'}
-        
+        # 키워드 정리 (1글자 제외, 불용어 제거, 조사 제거 - KoreanStopwordProcessor 사용)
         filtered_keywords = []
         for kw in keywords:
             # 조사 제거
             cleaned_kw = re.sub(josa_pattern, '', kw)
-            if cleaned_kw and len(cleaned_kw) > 1 and cleaned_kw not in stopwords:
-                filtered_keywords.append(cleaned_kw)
+            if cleaned_kw and len(cleaned_kw) > 1:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(cleaned_kw):
+                    filtered_keywords.append(cleaned_kw)
         
         return filtered_keywords if filtered_keywords else keywords[:3]
     

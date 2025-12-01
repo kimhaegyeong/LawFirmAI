@@ -6,12 +6,16 @@ UnifiedPromptManager 기반 단순화된 래퍼
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
 from .question_classifier import QuestionType
 from .unified_prompt_manager import LegalDomain, ModelType, UnifiedPromptManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PromptTemplateManager:
@@ -19,7 +23,7 @@ class PromptTemplateManager:
 
     def __init__(self):
         """프롬프트 템플릿 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         # 통합 프롬프트 관리자와 연동
         self.unified_manager = UnifiedPromptManager()
 

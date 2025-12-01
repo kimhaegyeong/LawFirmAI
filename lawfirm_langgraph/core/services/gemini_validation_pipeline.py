@@ -5,7 +5,13 @@ import re
 from datetime import datetime
 from .gemini_client import GeminiClient, GeminiResponse
 
-logger = logging.getLogger(__name__)
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class GeminiValidationPipeline:
     """Gemini 기반 다단계 검증 파이프라인"""
@@ -18,7 +24,7 @@ class GeminiValidationPipeline:
             "quality_assessment",    # 품질 평가
             "context_analysis"       # 문맥 분석
         ]
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def validate_term(self, term: str, context: Optional[str] = None) -> Dict[str, Any]:
         """용어 다단계 검증"""

@@ -5,6 +5,10 @@ LawFirmAI의 성능을 최적화하고 메모리 사용량을 관리합니다.
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 import gc
 from typing import Dict, List, Any, Optional, Callable
@@ -24,7 +28,7 @@ except ImportError:
     PSUTIL_AVAILABLE = False
     psutil = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -60,7 +64,7 @@ class PerformanceMonitor:
         Args:
             max_history: 최대 메트릭 저장 개수
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_history = max_history
         self.metrics_history = deque(maxlen=max_history)
         self.start_time = datetime.now()
@@ -265,7 +269,7 @@ class MemoryOptimizer:
         Args:
             max_cache_size: 최대 캐시 크기
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_cache_size = max_cache_size
         
         # 캐시 관리
@@ -287,7 +291,8 @@ class MemoryOptimizer:
                 "timestamp": datetime.now().isoformat(),
                 "actions_taken": [],
                 "memory_freed_mb": 0,
-                "cache_cleared": 0
+                "cache_cleared": 0,
+                "global_cache_cleared": 0
             }
             
             # 1. 가비지 컬렉션 실행
@@ -305,10 +310,16 @@ class MemoryOptimizer:
             if cache_cleared > 0:
                 optimization_results["actions_taken"].append(f"Cache cleanup: {cache_cleared} entries removed")
             
-            # 3. 메모리 사용량 기록
+            # 3. 전역 캐시 정리
+            global_cache_cleared = self._cleanup_global_cache()
+            optimization_results["global_cache_cleared"] = global_cache_cleared
+            if global_cache_cleared > 0:
+                optimization_results["actions_taken"].append(f"Global cache cleanup: {global_cache_cleared} items trimmed")
+            
+            # 4. 메모리 사용량 기록
             self.memory_usage_history.append(after_gc)
             
-            # 4. 메모리 압박 상황 체크
+            # 5. 메모리 압박 상황 체크
             if after_gc > 1024 * 1024 * 1024:  # 1GB 이상
                 self.logger.warning(f"High memory usage detected: {after_gc / 1024 / 1024:.1f}MB")
                 optimization_results["actions_taken"].append("High memory usage warning")
@@ -369,18 +380,74 @@ class MemoryOptimizer:
             if trend == "increasing" and trend_rate > 10:  # 10% 이상 증가
                 memory_leak_warning = True
             
+            # 자동 정리 트리거: 메모리 누수 경고 시 자동 정리 실행
+            auto_cleanup_performed = False
+            if memory_leak_warning and trend_rate > 20:  # 20% 이상 증가 시 자동 정리
+                self.logger.warning(f"[MEMORY] Memory leak detected (trend_rate: {trend_rate:.1f}%), performing automatic cleanup")
+                cleanup_result = self.optimize_memory()
+                auto_cleanup_performed = True
+                if cleanup_result.get("memory_freed_mb", 0) > 0:
+                    self.logger.info(f"[MEMORY] Automatic cleanup freed {cleanup_result['memory_freed_mb']:.1f}MB")
+            
             return {
                 "trend": trend,
                 "trend_rate_percent": round(trend_rate, 2),
                 "average_usage_mb": round(avg_usage / 1024 / 1024, 2),
                 "current_usage_mb": round(recent_usage[-1] / 1024 / 1024, 2),
                 "memory_leak_warning": memory_leak_warning,
+                "auto_cleanup_performed": auto_cleanup_performed,
                 "recommendations": self._get_memory_recommendations(trend, trend_rate, avg_usage)
             }
             
         except Exception as e:
             self.logger.error(f"Error analyzing memory trend: {e}")
             return {"error": str(e)}
+    
+    def check_and_auto_cleanup(self, threshold_mb: float = 1024.0) -> Dict[str, Any]:
+        """
+        메모리 사용량을 체크하고 임계값 초과 시 자동 정리
+        
+        Args:
+            threshold_mb: 메모리 임계값 (MB, 기본값: 1024MB = 1GB)
+        
+        Returns:
+            정리 결과 딕셔너리
+        """
+        try:
+            if not PSUTIL_AVAILABLE:
+                return {"status": "unavailable", "reason": "psutil not available"}
+            
+            process = psutil.Process()
+            current_memory_mb = process.memory_info().rss / 1024 / 1024
+            
+            if current_memory_mb > threshold_mb:
+                self.logger.warning(
+                    f"[MEMORY] Memory threshold exceeded: {current_memory_mb:.1f}MB > {threshold_mb:.1f}MB, "
+                    "performing automatic cleanup"
+                )
+                cleanup_result = self.optimize_memory()
+                
+                # 정리 후 메모리 재확인
+                after_memory_mb = process.memory_info().rss / 1024 / 1024
+                memory_freed = current_memory_mb - after_memory_mb
+                
+                return {
+                    "status": "cleaned",
+                    "before_mb": round(current_memory_mb, 2),
+                    "after_mb": round(after_memory_mb, 2),
+                    "freed_mb": round(memory_freed, 2),
+                    "cleanup_details": cleanup_result
+                }
+            else:
+                return {
+                    "status": "ok",
+                    "current_mb": round(current_memory_mb, 2),
+                    "threshold_mb": threshold_mb
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error in check_and_auto_cleanup: {e}")
+            return {"status": "error", "error": str(e)}
     
     def _get_memory_usage(self) -> int:
         """현재 메모리 사용량 조회 (바이트)"""
@@ -413,6 +480,64 @@ class MemoryOptimizer:
             self.logger.error(f"Error cleaning up cache: {e}")
             return 0
     
+    def _cleanup_global_cache(self) -> int:
+        """전역 캐시 정리 (node_wrappers의 _global_search_results_cache)"""
+        try:
+            items_trimmed = 0
+            
+            # 전역 캐시 모듈 import 시도
+            try:
+                from core.shared.wrappers.node_wrappers import (
+                    _global_search_results_cache,
+                    MAX_GLOBAL_CACHE_PROCESSING_STEPS,
+                    MAX_GLOBAL_CACHE_SEARCH_RESULTS
+                )
+            except ImportError:
+                try:
+                    from core.workflow.nodes.node_wrappers import (
+                        _global_search_results_cache,
+                        MAX_GLOBAL_CACHE_PROCESSING_STEPS,
+                        MAX_GLOBAL_CACHE_SEARCH_RESULTS
+                    )
+                except ImportError:
+                    try:
+                        from core.agents.node_wrappers import (
+                            _global_search_results_cache,
+                            MAX_GLOBAL_CACHE_PROCESSING_STEPS,
+                            MAX_GLOBAL_CACHE_SEARCH_RESULTS
+                        )
+                    except ImportError:
+                        # 전역 캐시를 찾을 수 없으면 0 반환
+                        return 0
+            
+            if _global_search_results_cache is None:
+                return 0
+            
+            # processing_steps 크기 제한
+            if "processing_steps" in _global_search_results_cache:
+                steps = _global_search_results_cache["processing_steps"]
+                if isinstance(steps, list) and len(steps) > MAX_GLOBAL_CACHE_PROCESSING_STEPS:
+                    original_len = len(steps)
+                    _global_search_results_cache["processing_steps"] = steps[-MAX_GLOBAL_CACHE_PROCESSING_STEPS:]
+                    items_trimmed += original_len - MAX_GLOBAL_CACHE_PROCESSING_STEPS
+                    self.logger.debug(f"[MEMORY] Trimmed processing_steps: {original_len} -> {MAX_GLOBAL_CACHE_PROCESSING_STEPS}")
+            
+            # 검색 결과 크기 제한
+            for key in ["semantic_results", "keyword_results", "retrieved_docs", "merged_documents"]:
+                if key in _global_search_results_cache:
+                    results = _global_search_results_cache[key]
+                    if isinstance(results, list) and len(results) > MAX_GLOBAL_CACHE_SEARCH_RESULTS:
+                        original_len = len(results)
+                        _global_search_results_cache[key] = results[:MAX_GLOBAL_CACHE_SEARCH_RESULTS]
+                        items_trimmed += original_len - MAX_GLOBAL_CACHE_SEARCH_RESULTS
+                        self.logger.debug(f"[MEMORY] Trimmed {key}: {original_len} -> {MAX_GLOBAL_CACHE_SEARCH_RESULTS}")
+            
+            return items_trimmed
+            
+        except Exception as e:
+            self.logger.debug(f"Error cleaning up global cache: {e}")
+            return 0
+    
     def _get_memory_recommendations(self, trend: str, trend_rate: float, avg_usage: int) -> List[str]:
         """메모리 최적화 권장사항"""
         recommendations = []
@@ -443,7 +568,7 @@ class CacheManager:
             max_size: 최대 캐시 크기
             ttl: 캐시 생존 시간 (초)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_size = max_size
         self.ttl = ttl
         

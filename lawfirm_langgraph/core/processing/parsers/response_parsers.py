@@ -7,10 +7,14 @@
 import json
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ResponseParser:
@@ -263,7 +267,7 @@ class QueryParser(ResponseParser):
 
     @staticmethod
     def parse_keyword_expansion_response(response: str) -> Dict[str, Any]:
-        """키워드 확장 응답 파싱"""
+        """키워드 확장 응답 파싱 (Phase 5: 고급 키워드 매칭 기법 지원)"""
         json_str = QueryParser.extract_json(response)
         if json_str:
             parsed = QueryParser.parse_json_safe(
@@ -273,6 +277,10 @@ class QueryParser(ResponseParser):
                     "synonyms": [],
                     "related_terms": [],
                     "keyword_variants": [],
+                    "keyword_groups": {},
+                    "hierarchical_keywords": {},
+                    "weighted_keywords": {},
+                    "contextual_keywords": {},
                     "reasoning": "JSON 파싱 실패"
                 }
             )
@@ -284,6 +292,10 @@ class QueryParser(ResponseParser):
             "synonyms": [],
             "related_terms": [],
             "keyword_variants": [],
+            "keyword_groups": {},
+            "hierarchical_keywords": {},
+            "weighted_keywords": {},
+            "contextual_keywords": {},
             "reasoning": "JSON 파싱 실패"
         }
 

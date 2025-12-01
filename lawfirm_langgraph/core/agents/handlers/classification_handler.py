@@ -13,14 +13,23 @@ import time
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
-from core.agents.parsers.response_parsers import ClassificationParser
-from core.agents.workflow_constants import WorkflowConstants
-from core.agents.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.parsers.response_parsers import ClassificationParser
+except ImportError:
+    from core.agents.parsers.response_parsers import ClassificationParser
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
-    # 호환성을 위한 fallback
-    from core.services.question_classifier import QuestionType
+    # 호환성을 위한 fallback (더 이상 services에 없음)
+    QuestionType = None
 
 
 class QueryComplexity(str, Enum):

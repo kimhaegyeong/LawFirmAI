@@ -11,7 +11,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from lawfirm_langgraph.core.services.semantic_search_engine_v2 import SemanticSearchEngineV2
+from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
 from lawfirm_langgraph.core.agents.handlers.answer_formatter import AnswerFormatterHandler
 
 

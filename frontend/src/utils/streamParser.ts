@@ -4,7 +4,7 @@
  */
 
 export interface ParsedChunk {
-  type: 'progress' | 'stream' | 'final' | 'chunk' | 'quota' | 'sources' | 'validation' | 'validation_start' | 'regeneration_start' | 'done';
+  type: 'progress' | 'stream' | 'final' | 'chunk' | 'quota' | 'sources' | 'validation' | 'validation_start' | 'regeneration_start' | 'done' | 'error';
   content: string;
   metadata?: {
     step?: number;
@@ -15,6 +15,7 @@ export interface ParsedChunk {
     length?: number;
     answer_found?: boolean;
     error?: boolean;
+    cancelled?: boolean;
     error_type?: string;
     chunk_index?: number;
     total_chunks?: number;
@@ -44,7 +45,34 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
   // JSONL 형식 파싱 시도
   try {
     const parsed = JSON.parse(trimmed);
-    if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start', 'done'].includes(parsed.type)) {
+    
+    // detail 필드만 있는 경우 (에러 응답)
+    if (parsed.detail && typeof parsed.detail === 'string' && !parsed.type) {
+      return {
+        type: 'error',
+        content: parsed.detail,
+        metadata: {
+          error: true,
+          error_type: 'api_error',
+        }
+      };
+    }
+    
+    if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start', 'done', 'error'].includes(parsed.type)) {
+      // error 이벤트 처리
+      if (parsed.type === 'error') {
+        return {
+          type: 'error',
+          content: parsed.detail || parsed.content || parsed.message || '오류가 발생했습니다.',
+          metadata: {
+            error: true,
+            cancelled: parsed.metadata?.cancelled || false,
+            error_type: parsed.metadata?.error_type || 'unknown',
+            ...parsed.metadata
+          }
+        };
+      }
+      
       // sources 이벤트의 경우 metadata를 그대로 보존
       if (parsed.type === 'sources') {
         return {

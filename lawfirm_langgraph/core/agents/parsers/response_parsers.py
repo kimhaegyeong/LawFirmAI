@@ -7,10 +7,16 @@
 import json
 import re
 import logging
+
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ResponseParser:

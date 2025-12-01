@@ -119,6 +119,27 @@ class AnonymousQuotaService:
         
         return remaining
     
+    def decrement_quota(self, ip_address: str) -> int:
+        """질의 횟수 감소 및 남은 횟수 반환 (에러 발생 시 롤백용)"""
+        if not self.enabled:
+            return self.quota_limit
+        
+        key = self._get_quota_key(ip_address)
+        
+        # 일일 리셋 확인
+        if self._should_reset(ip_address):
+            self._reset_quota(ip_address)
+        
+        # 질의 횟수 감소 (0 이하로 내려가지 않도록)
+        if self._quota_store[key]["count"] > 0:
+            self._quota_store[key]["count"] -= 1
+        
+        current_count = self._quota_store[key]["count"]
+        remaining = max(0, self.quota_limit - current_count)
+        logger.debug(f"익명 사용자 질의 횟수 감소 (롤백): {ip_address}, 현재: {current_count}/{self.quota_limit}, 남은 횟수: {remaining}")
+        
+        return remaining
+    
     def reset_daily_quota(self):
         """모든 IP 주소의 일일 질의 횟수 리셋 (KST 기준)"""
         if not self.enabled:

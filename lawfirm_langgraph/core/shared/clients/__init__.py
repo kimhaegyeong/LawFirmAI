@@ -9,13 +9,7 @@ try:
 except ImportError as e:
     GeminiClient = None
 
-try:
-    from .ollama_client import OllamaClient
-except ImportError as e:
-    OllamaClient = None
-
 __all__ = [
     "GeminiClient",
-    "OllamaClient",
 ]
 

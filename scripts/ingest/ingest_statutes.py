@@ -4,7 +4,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Ensure project root is on sys.path so `scripts.*` imports work from any CWD
 _CURRENT_FILE = Path(__file__).resolve()
@@ -14,6 +14,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from scripts.utils.embeddings import SentenceEmbedder
 from scripts.utils.text_chunker import chunk_statute
+from scripts.utils.chunking.factory import ChunkingFactory
+from scripts.utils.embedding_version_manager import EmbeddingVersionManager
 
 
 def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
@@ -88,8 +90,65 @@ def insert_chunks_and_embeddings(
     sentences: List[str],
     embedder: SentenceEmbedder,
     batch: int = 64,
+    chunking_strategy: str = "standard",
+    query_type: Optional[str] = None,
+    replace_existing: bool = True,
 ):
-    chunks = chunk_statute(sentences)
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # ?????? ?? ????
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    version_manager = EmbeddingVersionManager(db_path)
+    
+    # ?? ?? ?? ?? ??
+    active_version = version_manager.get_active_version(chunking_strategy)
+    if not active_version:
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+        version_name = f"v1.0.0-{chunking_strategy}"
+        version_id = version_manager.register_version(
+            version_name=version_name,
+            chunking_strategy=chunking_strategy,
+            model_name=model_name,
+            description=f"{chunking_strategy} ?? ??",
+            set_active=True
+        )
+    else:
+        version_id = active_version['id']
+    
+    # ?? ?? ?? (?? ?? ??) - ? statute_article_id?? ??
+    if replace_existing:
+        for article_id in statute_article_ids:
+            deleted_chunks, deleted_embeddings = version_manager.delete_chunks_by_version(
+                source_type="statute_article",
+                source_id=article_id
+            )
+            if deleted_chunks > 0:
+                logger.info(f"Deleted {deleted_chunks} existing chunks for statute_article_id={article_id}")
+    
+    # ?? ?? ??
+    strategy = ChunkingFactory.create_strategy(
+        strategy_name=chunking_strategy,
+        query_type=query_type
+    )
+    
+    # ?? ?? (statute_article? ? ?? ID ??)
+    source_id = statute_article_ids[0] if statute_article_ids else 0
+    chunk_results = strategy.chunk(
+        content=sentences,
+        source_type="statute_article",
+        source_id=source_id
+    )
+    
+    # ChunkResult? ?? ???? ?? (?? ???)
+    chunks = []
+    for chunk_result in chunk_results:
+        chunk_dict = {
+            "text": chunk_result.text,
+            "chunk_index": chunk_result.chunk_index,
+            **chunk_result.metadata
+        }
+        chunks.append(chunk_dict)
     # Map chunks back to nearest statute_articles by article/clause/item identifiers
     # Build lookup from keys -> list of rowids inserted for that key in order of insertion
     cur = conn.execute(
@@ -103,16 +162,12 @@ def insert_chunks_and_embeddings(
         key_to_ids.setdefault(key, []).append(row[0])
 
     # Prepare next chunk_index per source_id to avoid UNIQUE(source_type, source_id, chunk_index) collisions
-    # Initialize with current max(chunk_index)+1 if rows already exist
+    # ??: text_chunks ???? PostgreSQL ???? ???? ???? ???
     next_index_by_source: Dict[int, int] = {}
-    if statute_article_ids:
-        placeholders = ",".join(["?"] * len(statute_article_ids))
-        for sid, max_idx in conn.execute(
-            f"SELECT source_id, COALESCE(MAX(chunk_index), -1) FROM text_chunks WHERE source_type=? AND source_id IN ({placeholders}) GROUP BY source_id",
-            ("statute_article", *statute_article_ids,),
-        ):
-            next_index_by_source[int(sid)] = int(max_idx) + 1
 
+    # statute_article ????? ?? (source_id?? ??)
+    statute_metadata_cache = {}
+    
     rows_to_embed: List[Dict] = []
     for ch in chunks:
         key = f"{ch.get('article_no')}|{ch.get('clause_no')}|{ch.get('item_no')}"
@@ -120,10 +175,46 @@ def insert_chunks_and_embeddings(
         source_id = candidates[0] if candidates else statute_article_ids[0]
         # Assign sequential chunk_index per source_id
         current_idx = next_index_by_source.get(source_id, 0)
+        
+        # ?? source_id? ????? ?? (?? ??)
+        meta_json = None
+        if source_id not in statute_metadata_cache:
+            try:
+                import json
+                cursor_meta = conn.execute("""
+                    SELECT s.name as statute_name, sa.article_no
+                    FROM statute_articles sa
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE sa.id = ?
+                """, (source_id,))
+                row = cursor_meta.fetchone()
+                if row:
+                    statute_metadata = {
+                        'statute_name': row['statute_name'],
+                        'law_name': row['statute_name'],
+                        'article_no': row['article_no'],
+                        'article_number': row['article_no']
+                    }
+                    statute_metadata_cache[source_id] = statute_metadata
+                    meta_json = json.dumps(statute_metadata, ensure_ascii=False)
+            except Exception as e:
+                logger.debug(f"Failed to get statute metadata for source_id={source_id}: {e}")
+        else:
+            try:
+                import json
+                meta_json = json.dumps(statute_metadata_cache[source_id], ensure_ascii=False)
+            except Exception as e:
+                logger.debug(f"Failed to serialize statute metadata for source_id={source_id}: {e}")
+        
+        # ??????? ?? ?? ??
+        metadata = ch.get("metadata", {})
         cur2 = conn.execute(
             """
-            INSERT INTO text_chunks(source_type, source_id, level, chunk_index, start_char, end_char, overlap_chars, text, token_count, meta)
-            VALUES(?,?,?,?,?,?,?,?,?,NULL)
+            INSERT INTO text_chunks(
+                source_type, source_id, level, chunk_index, 
+                start_char, end_char, overlap_chars, text, token_count, meta,
+                chunking_strategy, chunk_size_category, chunk_group_id, query_type, original_document_id, embedding_version_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 "statute_article",
@@ -135,6 +226,13 @@ def insert_chunks_and_embeddings(
                 None,
                 ch.get("text"),
                 None,
+                meta_json,  # ????? JSON ??
+                metadata.get("chunking_strategy"),
+                metadata.get("chunk_size_category"),
+                metadata.get("chunk_group_id"),
+                metadata.get("query_type"),
+                metadata.get("original_document_id"),
+                version_id
             ),
         )
         # Advance next index for this source
@@ -148,8 +246,8 @@ def insert_chunks_and_embeddings(
     vecs = embedder.encode(texts, batch_size=batch)
     for r, v in zip(rows_to_embed, vecs):
         conn.execute(
-            "INSERT INTO embeddings(chunk_id, model, dim, vector) VALUES(?,?,?,?)",
-            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes()),
+            "INSERT INTO embeddings(chunk_id, model, dim, vector, version_id) VALUES(?,?,?,?,?)",
+            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes(), version_id),
         )
 
 

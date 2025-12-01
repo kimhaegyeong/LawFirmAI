@@ -14,22 +14,41 @@ Flat 및 Modular 구조 모두 지원하는 State 접근 헬퍼 함수들
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List
 
-from .modular_states import (
-    AnalysisState,
-    AnswerState,
-    ClassificationState,
-    ControlState,
-    DocumentState,
-    InputState,
-    LegalWorkflowState,
-    MultiTurnState,
-    SearchState,
-    ValidationState,
-)
+# modular_states는 core/workflow/state/에 있으므로 올바른 경로로 import
+try:
+    from lawfirm_langgraph.core.workflow.state.modular_states import (
+        AnalysisState,
+        AnswerState,
+        ClassificationState,
+        ControlState,
+        DocumentState,
+        InputState,
+        LegalWorkflowState,
+        MultiTurnState,
+        SearchState,
+        ValidationState,
+    )
+except ImportError:
+    from core.workflow.state.modular_states import (
+        AnalysisState,
+        AnswerState,
+        ClassificationState,
+        ControlState,
+        DocumentState,
+        InputState,
+        LegalWorkflowState,
+        MultiTurnState,
+        SearchState,
+        ValidationState,
+    )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ============================================
@@ -42,7 +61,11 @@ def get_input(state: LegalWorkflowState) -> InputState:
 
 def get_query(state: LegalWorkflowState) -> str:
     """질문만 반환"""
-    return state["input"]["query"]
+    # state에 "input" 키가 없을 수 있으므로 안전하게 접근
+    if "input" in state and isinstance(state.get("input"), dict):
+        return state["input"].get("query", "")
+    # "input"이 없으면 최상위 레벨에서 "query" 확인
+    return state.get("query", "")
 
 
 def get_session_id(state: LegalWorkflowState) -> str:
@@ -61,7 +84,10 @@ def get_classification(state: LegalWorkflowState) -> ClassificationState:
 def set_classification(state: LegalWorkflowState, data: Dict[str, Any]):
     """분류 결과 설정"""
     if state["classification"] is None:
-        from .modular_states import create_default_classification
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_classification
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_classification
         state["classification"] = create_default_classification()
 
     state["classification"].update(data)  # type: ignore
@@ -71,7 +97,10 @@ def update_classification(state: LegalWorkflowState, **kwargs):
     """분류 결과 업데이트 (keyword arguments)"""
     # classification 키가 없거나 None인 경우 기본값 생성
     if "classification" not in state or state["classification"] is None:
-        from .modular_states import create_default_classification
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_classification
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_classification
         state["classification"] = create_default_classification()
 
     for key, value in kwargs.items():
@@ -87,7 +116,10 @@ def get_search(state: LegalWorkflowState) -> Dict[str, Any]:
     search = state.get("search")
     if search is None:
         # 기본값 생성 (필요한 모든 키 포함)
-        from .modular_states import create_default_search
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_search
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_search
         query = get_query(state)
         return create_default_search(query)
     return search  # type: ignore
@@ -96,7 +128,10 @@ def get_search(state: LegalWorkflowState) -> Dict[str, Any]:
 def set_search(state: LegalWorkflowState, data: Dict[str, Any]):
     """검색 결과 설정"""
     if state["search"] is None:
-        from .modular_states import create_default_search
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_search
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_search
         state["search"] = create_default_search(get_query(state))
 
     state["search"].update(data)  # type: ignore
@@ -130,7 +165,10 @@ def set_analysis(state: LegalWorkflowState, data: Dict[str, Any]):
         data: 설정할 데이터 딕셔너리
     """
     if state["analysis"] is None:
-        from .modular_states import create_default_analysis
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_analysis
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_analysis
         state["analysis"] = create_default_analysis()
 
     # "analysis" 키가 있고 값이 딕셔너리인 경우, 중첩 구조라면 평탄화
@@ -194,7 +232,10 @@ def get_answer(state: LegalWorkflowState) -> AnswerState:
 def set_answer(state: LegalWorkflowState, data: Dict[str, Any]):
     """답변 결과 설정"""
     if state["answer"] is None:
-        from .modular_states import create_default_answer
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_answer
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_answer
         state["answer"] = create_default_answer()
 
     state["answer"].update(data)  # type: ignore
@@ -222,7 +263,10 @@ def get_document(state: LegalWorkflowState) -> DocumentState:
 def set_document(state: LegalWorkflowState, data: Dict[str, Any]):
     """문서 분석 결과 설정"""
     if state["document"] is None:
-        from .modular_states import create_default_document
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_document
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_document
         state["document"] = create_default_document()
 
     state["document"].update(data)  # type: ignore
@@ -239,7 +283,10 @@ def get_multi_turn(state: LegalWorkflowState) -> MultiTurnState:
 def set_multi_turn(state: LegalWorkflowState, data: Dict[str, Any]):
     """멀티턴 상태 설정"""
     if state["multi_turn"] is None:
-        from .modular_states import create_default_multi_turn
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_multi_turn
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_multi_turn
         state["multi_turn"] = create_default_multi_turn()
 
     state["multi_turn"].update(data)  # type: ignore
@@ -256,7 +303,10 @@ def get_validation(state: LegalWorkflowState) -> ValidationState:
 def set_validation(state: LegalWorkflowState, data: Dict[str, Any]):
     """검증 결과 설정"""
     if state["validation"] is None:
-        from .modular_states import create_default_validation
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_validation
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_validation
         state["validation"] = create_default_validation()
 
     state["validation"].update(data)  # type: ignore
@@ -273,7 +323,10 @@ def get_control(state: LegalWorkflowState) -> ControlState:
 def set_control(state: LegalWorkflowState, data: Dict[str, Any]):
     """제어 상태 설정"""
     if state["control"] is None:
-        from .modular_states import create_default_control
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_control
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_control
         state["control"] = create_default_control()
 
     state["control"].update(data)  # type: ignore
@@ -296,7 +349,10 @@ def get_processing_steps(state: LegalWorkflowState) -> List[str]:
 def add_processing_step(state: LegalWorkflowState, step: str):
     """처리 단계 추가"""
     if "common" not in state:
-        from .modular_states import create_default_common
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_common
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_common
         state["common"] = create_default_common()
 
     state["common"]["processing_steps"].append(step)
@@ -311,7 +367,10 @@ def get_errors(state: LegalWorkflowState) -> List[str]:
 def add_error(state: LegalWorkflowState, error: str):
     """에러 추가"""
     if "common" not in state:
-        from .modular_states import create_default_common
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_common
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_common
         state["common"] = create_default_common()
 
     state["common"]["errors"].append(error)
@@ -326,7 +385,10 @@ def get_metadata(state: LegalWorkflowState) -> Dict[str, Any]:
 def set_metadata(state: LegalWorkflowState, data: Dict[str, Any]):
     """메타데이터 설정"""
     if "common" not in state:
-        from .modular_states import create_default_common
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import create_default_common
+        except ImportError:
+            from core.workflow.state.modular_states import create_default_common
         state["common"] = create_default_common()
 
     state["common"]["metadata"].update(data)
@@ -365,17 +427,30 @@ def ensure_state_group(state: LegalWorkflowState, group_name: str) -> None:
         group_name: 그룹 이름 ("classification", "search", "analysis", 등)
     """
     if state.get(group_name) is None:
-        from .modular_states import (
-            create_default_analysis,
-            create_default_answer,
-            create_default_classification,
-            create_default_common,
-            create_default_control,
-            create_default_document,
-            create_default_multi_turn,
-            create_default_search,
-            create_default_validation,
-        )
+        try:
+            from lawfirm_langgraph.core.workflow.state.modular_states import (
+                create_default_analysis,
+                create_default_answer,
+                create_default_classification,
+                create_default_common,
+                create_default_control,
+                create_default_document,
+                create_default_multi_turn,
+                create_default_search,
+                create_default_validation,
+            )
+        except ImportError:
+            from core.workflow.state.modular_states import (
+                create_default_analysis,
+                create_default_answer,
+                create_default_classification,
+                create_default_common,
+                create_default_control,
+                create_default_document,
+                create_default_multi_turn,
+                create_default_search,
+                create_default_validation,
+            )
 
         defaults = {
             "classification": create_default_classification,
@@ -575,7 +650,10 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
     elif field_path in ["processing_time", "tokens_used", "processing_steps", "errors"]:
         # common 필드 처리
         if "common" not in state or state["common"] is None:
-            from .modular_states import create_default_common
+            try:
+                from lawfirm_langgraph.core.workflow.state.modular_states import create_default_common
+            except ImportError:
+                from core.workflow.state.modular_states import create_default_common
             state["common"] = create_default_common()
         state["common"][field_path] = value  # type: ignore
     elif field_path == "metadata":
@@ -583,7 +661,10 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
     elif field_path == "quality_metrics":
         # quality_metrics는 common.metadata에 저장
         if "common" not in state or state["common"] is None:
-            from .modular_states import create_default_common
+            try:
+                from lawfirm_langgraph.core.workflow.state.modular_states import create_default_common
+            except ImportError:
+                from core.workflow.state.modular_states import create_default_common
             state["common"] = create_default_common()
         if "metadata" not in state["common"]:
             state["common"]["metadata"] = {}

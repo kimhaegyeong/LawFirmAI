@@ -5,10 +5,38 @@ Result Merger and Ranker
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+import re
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+import math
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+try:
+    from html import unescape
+except ImportError:
+    # Python 2 호환성
+    from HTMLParser import HTMLParser
+    def unescape(text):
+        return HTMLParser().unescape(text)
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+# ModelCacheManager import
+try:
+    from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager
+except ImportError:
+    try:
+        from core.shared.utils.model_cache_manager import get_model_cache_manager
+    except ImportError:
+        get_model_cache_manager = None
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -25,13 +53,14 @@ class ResultMerger:
     
     def __init__(self):
         """병합기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("ResultMerger initialized")
     
     def merge_results(self, 
                      exact_results: Dict[str, List[Dict[str, Any]]], 
                      semantic_results: List[Dict[str, Any]],
-                     weights: Dict[str, float] = None) -> List[MergedResult]:
+                     weights: Dict[str, float] = None,
+                     query: str = "") -> List[MergedResult]:
         """
         검색 결과 병합
         
@@ -39,6 +68,7 @@ class ResultMerger:
             exact_results: 정확한 검색 결과 (딕셔너리)
             semantic_results: 의미적 검색 결과 (리스트)
             weights: 가중치 딕셔너리
+            query: 검색 쿼리 (metadata 저장용)
             
         Returns:
             List[MergedResult]: 병합된 결과
@@ -73,6 +103,48 @@ class ResultMerger:
                     metadata['content'] = text_content
                     metadata['text'] = text_content
                     
+                    # 🔥 개선: 원본 문서의 모든 필드를 metadata에 보존 (메타데이터 손실 방지)
+                    for key in ["type", "statute_name", "law_name", "article_no", 
+                               "article_number", "case_id", "court", "ccourt", "doc_id", 
+                               "casenames", "precedent_id", "id", "chunk_id", "document_id"]:
+                        if result.get(key) and key not in metadata:
+                            metadata[key] = result[key]
+                    
+                    # 🔥 CRITICAL: type 정보 우선 사용, 없을 때만 normalize_document_type으로 추론
+                    # 1. result에 type이 있으면 우선 사용
+                    if result.get("type") and result.get("type").lower() != "unknown":
+                        metadata["type"] = result.get("type")
+                        metadata["source_type"] = result.get("type")
+                        result["type"] = result.get("type")  # 최상위 레벨에도 저장
+                    # 2. metadata에 type이 있으면 사용
+                    elif metadata.get("type") and metadata.get("type").lower() != "unknown":
+                        result["type"] = metadata.get("type")
+                        metadata["source_type"] = metadata.get("type")
+                    # 3. source_type이 있으면 type으로 사용
+                    elif result.get("source_type") and result.get("source_type").lower() != "unknown":
+                        result["type"] = result.get("source_type")
+                        metadata["type"] = result.get("source_type")
+                        metadata["source_type"] = result.get("source_type")
+                    # 4. 모두 없으면 normalize_document_type으로 추론
+                    else:
+                        try:
+                            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                            normalized_result = normalize_document_type(result.copy())
+                            inferred_type = normalized_result.get("type")
+                            if inferred_type and inferred_type.lower() != "unknown":
+                                result["type"] = inferred_type
+                                metadata["type"] = inferred_type
+                                metadata["source_type"] = inferred_type
+                        except (ImportError, Exception):
+                            pass
+                    
+                    # 🔥 개선: type 정보가 없으면 기본값 설정 방지 (unknown으로 설정하지 않음)
+                    # type이 없으면 metadata에서도 제거하지 않고 유지
+                    
+                    # metadata에 query 저장
+                    if query:
+                        metadata['query'] = query
+                    
                     merged_result = MergedResult(
                         text=text_content,
                         score=result.get('similarity', result.get('relevance_score', result.get('score', 0.0))) * weights["exact"],
@@ -105,6 +177,59 @@ class ResultMerger:
                 metadata['content'] = text_content
                 metadata['text'] = text_content
                 
+                # 🔥 개선: 원본 문서의 모든 필드를 metadata에 보존 (메타데이터 손실 방지)
+                for key in ["type", "statute_name", "law_name", "article_no", 
+                           "article_number", "case_id", "court", "ccourt", "doc_id", 
+                           "casenames", "precedent_id", "id", "chunk_id", "document_id"]:
+                    if result.get(key) and key not in metadata:
+                        metadata[key] = result[key]
+                
+                # 🔥 CRITICAL: type 정보 우선 사용, 없을 때만 normalize_document_type으로 추론
+                # 1. result에 type이 있으면 우선 사용
+                if result.get("type") and result.get("type").lower() != "unknown":
+                    metadata["type"] = result.get("type")
+                    metadata["source_type"] = result.get("type")
+                    result["type"] = result.get("type")  # 최상위 레벨에도 저장
+                # 2. metadata에 type이 있으면 사용
+                elif metadata.get("type") and metadata.get("type").lower() != "unknown":
+                    result["type"] = metadata.get("type")
+                    metadata["source_type"] = metadata.get("type")
+                # 3. source_type이 있으면 type으로 사용
+                elif result.get("source_type") and result.get("source_type").lower() != "unknown":
+                    result["type"] = result.get("source_type")
+                    metadata["type"] = result.get("source_type")
+                    metadata["source_type"] = result.get("source_type")
+                # 4. data_type 정보 활용 (검색 엔진에서 전달된 정보)
+                elif metadata.get("data_type"):
+                    data_type = metadata.get("data_type").lower()
+                    if data_type == "precedents":
+                        result["type"] = "precedent_content"
+                        metadata["type"] = "precedent_content"
+                        metadata["source_type"] = "precedent_content"
+                    elif data_type == "statutes":
+                        result["type"] = "statute_article"
+                        metadata["type"] = "statute_article"
+                        metadata["source_type"] = "statute_article"
+                # 5. 모두 없으면 normalize_document_type으로 추론
+                else:
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        normalized_result = normalize_document_type(result.copy())
+                        inferred_type = normalized_result.get("type")
+                        if inferred_type and inferred_type.lower() != "unknown":
+                            result["type"] = inferred_type
+                            metadata["type"] = inferred_type
+                            metadata["source_type"] = inferred_type
+                    except (ImportError, Exception):
+                        pass
+                
+                # 🔥 개선: type 정보가 없으면 기본값 설정 방지 (unknown으로 설정하지 않음)
+                # type이 없으면 metadata에서도 제거하지 않고 유지
+                
+                # metadata에 query 저장
+                if query:
+                    metadata['query'] = query
+                
                 merged_result = MergedResult(
                     text=text_content,
                     score=result.get('similarity', result.get('relevance_score', result.get('score', 0.0))) * weights["semantic"],
@@ -119,18 +244,176 @@ class ResultMerger:
 class ResultRanker:
     """검색 결과 순위 결정기"""
     
-    def __init__(self):
-        """순위 결정기 초기화"""
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("ResultRanker initialized")
+    # 클래스 변수: SentenceTransformer 모델 캐싱 (성능 최적화)
+    _semantic_model = None
+    _semantic_model_name = None
     
-    def rank_results(self, results: List[Any], top_k: int = 10) -> List[Any]:
+    def __init__(self, use_cross_encoder: bool = True, rerank_original_weight: float = None, rerank_cross_encoder_weight: float = None, cross_encoder_model_name: str = None):
+        """순위 결정기 초기화"""
+        self.logger = get_logger(__name__)
+        self.use_cross_encoder = use_cross_encoder
+        self.cross_encoder = None
+        
+        # 재랭킹 가중치 설정 (환경 변수 또는 파라미터로 설정)
+        if rerank_original_weight is None or rerank_cross_encoder_weight is None:
+            import os
+            rerank_original_weight = float(os.getenv("RERANK_ORIGINAL_WEIGHT", "0.6"))
+            rerank_cross_encoder_weight = float(os.getenv("RERANK_CROSS_ENCODER_WEIGHT", "0.4"))
+        
+        # 가중치 합이 1.0이 되도록 정규화
+        total_weight = rerank_original_weight + rerank_cross_encoder_weight
+        if total_weight > 0:
+            self.rerank_original_weight = rerank_original_weight / total_weight
+            self.rerank_cross_encoder_weight = rerank_cross_encoder_weight / total_weight
+        else:
+            # 잘못된 값이면 기본값으로 재설정
+            self.rerank_original_weight = 0.6
+            self.rerank_cross_encoder_weight = 0.4
+        
+        # Cross-Encoder는 지연 로딩 (초기화 시간 단축)
+        # 실제 사용 시점에 로드됨
+        if use_cross_encoder:
+            # 모델명 설정 (파라미터 > 환경 변수 > 기본값)
+            if cross_encoder_model_name:
+                self._cross_encoder_model_name = cross_encoder_model_name
+            else:
+                import os
+                self._cross_encoder_model_name = os.getenv("CROSS_ENCODER_MODEL_NAME", "dragonkue/bge-reranker-v2-m3-ko")
+            self._cross_encoder_initialized = False
+            self.logger.debug(f"Cross-Encoder reranker will be loaded on first use (model: {self._cross_encoder_model_name})")
+        
+        self.logger.info(
+            f"ResultRanker initialized (cross_encoder={self.use_cross_encoder}, "
+            f"weights: original={self.rerank_original_weight:.2f}, cross_encoder={self.rerank_cross_encoder_weight:.2f})"
+        )
+    
+    def _preprocess_text_for_cross_encoder(self, text: str, max_length: int = 512) -> str:
+        """
+        Cross-Encoder용 텍스트 전처리 (판례 문서 특수 처리 강화)
+        
+        Args:
+            text: 원본 텍스트
+            max_length: 최대 길이 (기본값: 512)
+        
+        Returns:
+            전처리된 텍스트
+        """
+        if not text or not isinstance(text, str):
+            return ""
+        
+        # 🔥 개선: 판례 문서 특수 형식 처리
+        # 【신 청 인】, 【피신청인】 등의 특수 마커를 일반 텍스트로 변환 (띄어쓰기 제거)
+        # 패턴: 【내용】 -> 내용 (띄어쓰기 제거)
+        def normalize_marker(match):
+            """【】 마커 내부의 띄어쓰기 제거"""
+            content = match.group(1)  # 【】 안의 내용
+            # 띄어쓰기 제거
+            normalized = re.sub(r'\s+', '', content)
+            return normalized
+        
+        # 【】 마커를 일반 텍스트로 변환 (띄어쓰기 제거)
+        text = re.sub(r'【([^】]+)】', normalize_marker, text)
+        
+        # HTML 태그 제거
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # HTML 엔티티 디코딩
+        try:
+            text = unescape(text)
+        except Exception:
+            pass  # 디코딩 실패 시 원본 유지
+        
+        # 공백 정리 (연속된 공백을 하나로)
+        text = ' '.join(text.split())
+        
+        # 텍스트 길이 제한 (Cross-Encoder 최대 길이 고려)
+        if len(text) > max_length:
+            text = text[:max_length]
+        
+        return text.strip()
+    
+    def _ensure_cross_encoder_loaded(self):
+        """Cross-Encoder 모델을 지연 로딩 (필요 시에만 로드)"""
+        if not self.use_cross_encoder:
+            return False
+        
+        if self._cross_encoder_initialized:
+            return self.cross_encoder is not None
+        
+        try:
+            import time
+            load_start = time.time()
+            from sentence_transformers import CrossEncoder
+            self.cross_encoder = CrossEncoder(self._cross_encoder_model_name, max_length=512)
+            load_time = time.time() - load_start
+            self._cross_encoder_initialized = True
+            self.logger.info(f"Cross-Encoder reranker loaded ({self._cross_encoder_model_name}, {load_time:.2f}초)")
+            return True
+        except ImportError:
+            self.logger.warning("sentence-transformers not available, Cross-Encoder disabled")
+            self.use_cross_encoder = False
+            self.cross_encoder = None
+            return False
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Cross-Encoder: {e}, falling back to standard ranking")
+            self.use_cross_encoder = False
+            self.cross_encoder = None
+            return False
+    
+    @classmethod
+    def _get_semantic_model(cls):
+        """SentenceTransformer 모델 가져오기 (캐싱)"""
+        if cls._semantic_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                import os
+                
+                if cls._semantic_model_name is None:
+                    model_name = os.getenv("EMBEDDING_MODEL")
+                    if model_name is None:
+                        try:
+                            from ...utils.config import Config
+                        except ImportError:
+                            from core.utils.config import Config
+                        config = Config()
+                        model_name = config.embedding_model
+                    cls._semantic_model_name = model_name
+                
+                # ModelCacheManager 사용 (중복 로딩 방지)
+                if get_model_cache_manager:
+                    try:
+                        model_cache = get_model_cache_manager()
+                        cls._semantic_model = model_cache.get_model(cls._semantic_model_name)
+                        if cls._semantic_model:
+                            logger = logging.getLogger(__name__)
+                            logger.debug(f"Semantic model loaded via cache manager: {cls._semantic_model_name}")
+                        else:
+                            raise ValueError(f"Failed to load model {cls._semantic_model_name} via cache manager")
+                    except Exception as e:
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Failed to load model via cache manager: {e}, falling back to direct load")
+                        # 폴백: 직접 로드
+                        cls._semantic_model = SentenceTransformer(cls._semantic_model_name)
+                        logger.debug(f"Semantic model loaded and cached (direct): {cls._semantic_model_name}")
+                else:
+                    # ModelCacheManager가 없으면 직접 로드
+                    cls._semantic_model = SentenceTransformer(cls._semantic_model_name)
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"Semantic model loaded and cached: {cls._semantic_model_name}")
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.debug(f"Failed to load semantic model: {e}")
+                return None
+        return cls._semantic_model
+    
+    def rank_results(self, results: List[Any], top_k: int = 10, query: str = "") -> List[Any]:
         """
         검색 결과 순위 결정
         
         Args:
             results: 병합된 검색 결과 (MergedResult 또는 Dict)
             top_k: 반환할 결과 수
+            query: 검색 쿼리 (Cross-Encoder reranking용)
             
         Returns:
             List[MergedResult] 또는 List[Dict]: 순위가 매겨진 결과
@@ -149,6 +432,13 @@ class ResultRanker:
                 metadata = result.get("metadata", {})
                 if not isinstance(metadata, dict):
                     metadata = result if isinstance(result, dict) else {}
+                
+                # 🔥 개선: 원본 문서의 모든 필드를 metadata에 보존 (메타데이터 손실 방지)
+                for key in ["type", "statute_name", "law_name", "article_no", 
+                           "article_number", "case_id", "court", "ccourt", "doc_id", 
+                           "casenames", "precedent_id", "id", "chunk_id", "document_id"]:
+                    if result.get(key) and key not in metadata:
+                        metadata[key] = result[key]
                 
                 converted_result = MergedResult(
                     text=text,
@@ -177,20 +467,444 @@ class ResultRanker:
         ranked_results = list(unique_results.values())
         ranked_results.sort(key=lambda x: x.score, reverse=True)
         
+        # 🔥 성능 최적화: Cross-Encoder reranking 중복 실행 방지
+        # 이미 reranking된 문서인지 확인 (cross_encoder_score 필드 존재 여부)
+        already_reranked = any(
+            (isinstance(r, MergedResult) and isinstance(r.metadata, dict) and r.metadata.get("cross_encoder_score") is not None) or
+            (isinstance(r, dict) and r.get("cross_encoder_score") is not None)
+            for r in ranked_results[:top_k]
+        )
+        
+        # Cross-Encoder reranking 적용 (상위 후보만, 중복 실행 방지)
+        if not already_reranked and self.use_cross_encoder and len(ranked_results) > 0:
+            # Cross-Encoder 지연 로딩
+            if self._ensure_cross_encoder_loaded() and self.cross_encoder:
+                try:
+                    # extracted_keywords 추출 (metadata에서)
+                    extracted_keywords = None
+                    for result in ranked_results:
+                        if isinstance(result.metadata, dict):
+                            extracted_keywords = result.metadata.get("extracted_keywords", [])
+                            if extracted_keywords:
+                                break
+                    
+                    reranked_results = self.cross_encoder_rerank(
+                        ranked_results[:top_k * 2],  # 상위 후보만 rerank
+                        query=query,  # query 전달
+                        top_k=top_k,
+                        extracted_keywords=extracted_keywords
+                    )
+                    ranked_results = reranked_results + ranked_results[top_k * 2:]
+                except Exception as e:
+                    self.logger.warning(f"Cross-Encoder reranking failed: {e}, using standard ranking")
+        elif already_reranked:
+            self.logger.debug("⚡ [PERFORMANCE] Cross-Encoder reranking 스킵 (이미 reranking된 문서)")
+        
+        # 🔥 CRITICAL: Dict로 변환하기 전에 MergedResult의 metadata에서 type 정보 확인 및 복원
+        for result in ranked_results[:top_k]:
+            if isinstance(result, MergedResult):
+                metadata = result.metadata if isinstance(result.metadata, dict) else {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    result.metadata = metadata
+                
+                # 🔥 CRITICAL: type 정보가 없거나 unknown인 경우에만 추론 시도
+                current_type = metadata.get("type", "").lower() if metadata.get("type") else ""
+                if not current_type or current_type == "unknown":
+                    # MergedResult를 임시 딕셔너리로 변환하여 normalize_document_type 호출
+                    temp_dict = {
+                        "text": result.text,
+                        "content": result.text,
+                        "metadata": metadata.copy() if isinstance(metadata, dict) else {}
+                    }
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        normalized_dict = normalize_document_type(temp_dict)
+                        inferred_type = normalized_dict.get("type")
+                        if inferred_type and inferred_type.lower() != "unknown":
+                            metadata["type"] = inferred_type
+                            metadata["source_type"] = inferred_type
+                            result.metadata = metadata
+                    except (ImportError, Exception):
+                        pass
+                
+                # 🔥 개선: metadata에서 최상위 필드로 type 복원 (이미 있는 경우에도 확인)
+                if metadata.get("type") and metadata.get("type").lower() != "unknown":
+                    # type 정보가 있으면 유지
+                    pass
+                elif metadata.get("source_type") and metadata.get("source_type").lower() != "unknown":
+                    # source_type이 있으면 type으로 사용
+                    metadata["type"] = metadata.get("source_type")
+                    result.metadata = metadata
+        
         # Dict로 변환하여 반환 (호환성 유지)
-        return [self._merged_result_to_dict(r) for r in ranked_results[:top_k]]
+        # 🔥 CRITICAL: _merged_result_to_dict에서 type 정보가 제대로 복원되는지 확인
+        dict_results = []
+        for r in ranked_results[:top_k]:
+            dict_result = self._merged_result_to_dict(r)
+            # 🔥 추가 보강: _merged_result_to_dict 후 type 정보 최종 확인
+            if not dict_result.get("type") or dict_result.get("type", "").lower() == "unknown":
+                # metadata에서 type 복원 시도
+                metadata = dict_result.get("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata_type = metadata.get("type") or metadata.get("source_type")
+                    if metadata_type and metadata_type.lower() != "unknown":
+                        dict_result["type"] = metadata_type
+            dict_results.append(dict_result)
+        
+        return dict_results
+    
+    def cross_encoder_rerank(
+        self,
+        results: List[MergedResult],
+        query: str = "",
+        top_k: int = 10,
+        extracted_keywords: List[str] = None
+    ) -> List[MergedResult]:
+        """
+        Cross-Encoder를 사용한 정확한 재정렬 (Phase 2: Keyword Coverage 고려)
+        
+        Args:
+            results: 재정렬할 MergedResult 리스트
+            query: 검색 쿼리 (우선순위: 파라미터 > metadata)
+            top_k: 반환할 최대 결과 수
+            extracted_keywords: 추출된 키워드 리스트 (Keyword Coverage 계산용)
+            
+        Returns:
+            List[MergedResult]: 재정렬된 결과
+        """
+        if not results:
+            return results[:top_k]
+        
+        # Cross-Encoder 지연 로딩
+        if not self._ensure_cross_encoder_loaded() or not self.cross_encoder:
+            return results[:top_k]
+        
+        # query 추출 우선순위: 파라미터 > metadata > 원본 쿼리
+        extracted_query = query
+        
+        if not extracted_query:
+            for result in results:
+                if isinstance(result.metadata, dict):
+                    extracted_query = result.metadata.get("query", "")
+                    if extracted_query:
+                        break
+        
+        # 추가: 원본 쿼리 필드 확인
+        if not extracted_query:
+            for result in results:
+                if isinstance(result.metadata, dict):
+                    extracted_query = result.metadata.get("original_query", "") or result.metadata.get("search_query", "")
+                    if extracted_query:
+                        break
+        
+        if not extracted_query:
+            self.logger.warning("No query provided for Cross-Encoder reranking, using standard ranking")
+            return results[:top_k]
+        
+        # 🔥 성능 최적화 1: 문서 수가 적으면 스킵
+        if len(results) <= 3:
+            self.logger.debug("⏭️ [CROSS-ENCODER SKIP] 문서 수가 적음 (<=3), reranking 스킵")
+            return results[:top_k]
+        
+        # 🔥 성능 최적화 2: 상위 문서의 평균 점수가 이미 높으면 스킵
+        top_results = results[:min(5, len(results))]
+        avg_score = sum(r.score for r in top_results) / len(top_results)
+        if avg_score >= 0.8:
+            self.logger.debug(f"⏭️ [CROSS-ENCODER SKIP] 평균 점수가 이미 높음 (avg={avg_score:.3f} >= 0.8), reranking 스킵")
+            return results[:top_k]
+        
+        # 🔥 성능 최적화 3: 상위 문서만 reranking (최대 10개)
+        max_rerank_docs = min(10, len(results))
+        pre_filtered_results = results[:max_rerank_docs]
+        remaining_results = results[max_rerank_docs:]
+        
+        if len(results) > max_rerank_docs:
+            self.logger.debug(f"⚡ [CROSS-ENCODER] 상위 {max_rerank_docs}개 문서만 reranking (전체 {len(results)}개 중)")
+        
+        # extracted_keywords 추출 (metadata에서)
+        if extracted_keywords is None:
+            for result in pre_filtered_results:
+                if isinstance(result.metadata, dict):
+                    extracted_keywords = result.metadata.get("extracted_keywords", [])
+                    if extracted_keywords:
+                        break
+        
+        try:
+            # query-document 쌍 생성 (상위 문서만)
+            pairs = []
+            for result in pre_filtered_results:
+                # 🔥 개선: 텍스트 전처리 (HTML 태그 제거, 텍스트 정리, 길이 제한)
+                text = self._preprocess_text_for_cross_encoder(result.text, max_length=500)
+                if text:  # 전처리 후에도 텍스트가 있으면 추가
+                    pairs.append([extracted_query, text])
+            
+            # 개선: 배치 크기 최적화 (Cross-Encoder의 predict는 이미 배치 처리 지원)
+            # batch_size를 명시적으로 설정하여 메모리 효율성 향상
+            batch_size = min(16, len(pairs))  # 배치 크기 제한 (메모리 효율성)
+            
+            # 점수 계산 (배치 처리)
+            if len(pairs) <= batch_size:
+                scores = self.cross_encoder.predict(pairs)
+            else:
+                # 큰 경우 배치로 나누어 처리
+                scores = []
+                for i in range(0, len(pairs), batch_size):
+                    batch_pairs = pairs[i:i + batch_size]
+                    batch_scores = self.cross_encoder.predict(batch_pairs)
+                    scores.extend(batch_scores)
+            
+            # Cross-Encoder 점수 정규화 (0-1 범위로 정규화하여 기존 점수와 스케일 일치)
+            if SKLEARN_AVAILABLE and len(scores) > 1:
+                scores_array = np.array([float(s) for s in scores])
+                min_score = scores_array.min()
+                max_score = scores_array.max()
+                if max_score > min_score:
+                    # Min-Max 정규화 (0-1 범위)
+                    normalized_scores = (scores_array - min_score) / (max_score - min_score)
+                else:
+                    normalized_scores = scores_array
+                scores = normalized_scores.tolist()
+            
+            # 점수 반영 및 정렬 (상위 문서만)
+            reranked_results = []
+            for result, score in zip(pre_filtered_results, scores):
+                # 기존 점수와 Cross-Encoder 점수 결합
+                original_score = result.score
+                cross_encoder_score = float(score)  # 정규화된 점수 사용
+                
+                # 🔥 개선: 판례 및 법령 문서 점수 보정 (Cross-Encoder 점수가 매우 낮은 경우)
+                doc_type = result.metadata.get("type", "") if isinstance(result.metadata, dict) else ""
+                doc_type_lower = doc_type.lower()
+                is_precedent = any(keyword in doc_type_lower for keyword in ["precedent", "case", "case_paragraph", "판례"])
+                is_statute = any(keyword in doc_type_lower for keyword in ["statute", "article", "law", "법령", "조문"])
+                
+                # Cross-Encoder 점수가 매우 낮은 경우 (0.1 미만) 원본 점수에 더 높은 가중치 부여
+                if (is_precedent or is_statute) and cross_encoder_score < 0.1:
+                    # 판례 또는 법령 문서의 경우 Cross-Encoder 점수가 낮으면 원본 점수에 더 높은 가중치 부여
+                    adjusted_original_weight = min(0.8, self.rerank_original_weight + 0.2)
+                    adjusted_cross_encoder_weight = max(0.2, self.rerank_cross_encoder_weight - 0.2)
+                    doc_type_name = "판례" if is_precedent else "법령"
+                    self.logger.debug(
+                        f"🔧 [{doc_type_name.upper()} SCORE ADJUST] {doc_type_name} 문서 점수 보정: "
+                        f"cross_encoder={cross_encoder_score:.3f} < 0.1, "
+                        f"original_weight={adjusted_original_weight:.2f} (기본: {self.rerank_original_weight:.2f}), "
+                        f"cross_encoder_weight={adjusted_cross_encoder_weight:.2f} (기본: {self.rerank_cross_encoder_weight:.2f})"
+                    )
+                # 🔥 개선: 법령 문서에 대한 추가 보정 (법령 조문은 중요하므로 더 높은 가중치)
+                elif is_statute and cross_encoder_score < 0.3:
+                    # 법령 문서의 경우 Cross-Encoder 점수가 낮으면 원본 점수에 더 높은 가중치 부여
+                    adjusted_original_weight = min(0.75, self.rerank_original_weight + 0.15)
+                    adjusted_cross_encoder_weight = max(0.25, self.rerank_cross_encoder_weight - 0.15)
+                    self.logger.debug(
+                        f"🔧 [STATUTE SCORE ADJUST] 법령 문서 점수 보정: "
+                        f"cross_encoder={cross_encoder_score:.3f} < 0.3, "
+                        f"original_weight={adjusted_original_weight:.2f} (기본: {self.rerank_original_weight:.2f}), "
+                        f"cross_encoder_weight={adjusted_cross_encoder_weight:.2f} (기본: {self.rerank_cross_encoder_weight:.2f})"
+                    )
+                else:
+                    adjusted_original_weight = self.rerank_original_weight
+                    adjusted_cross_encoder_weight = self.rerank_cross_encoder_weight
+                
+                # Phase 2: Keyword Coverage 기반 보너스 계산
+                keyword_bonus = 0.0
+                if extracted_keywords:
+                    # 문서에서 키워드 매칭 확인
+                    text_lower = result.text.lower()
+                    matched_keywords = [kw for kw in extracted_keywords if kw.lower() in text_lower]
+                    
+                    if matched_keywords:
+                        # Keyword Coverage 계산
+                        keyword_coverage = len(matched_keywords) / len(extracted_keywords)
+                        
+                        # 핵심 키워드(상위 3개) 매칭 확인
+                        core_keywords = extracted_keywords[:3] if len(extracted_keywords) >= 3 else extracted_keywords
+                        core_matched = sum(1 for kw in core_keywords if kw.lower() in text_lower)
+                        core_ratio = core_matched / len(core_keywords) if core_keywords else 0.0
+                        
+                        # Keyword Coverage 보너스 (최대 15%)
+                        coverage_bonus = keyword_coverage * 0.15
+                        
+                        # 핵심 키워드 매칭 보너스 (최대 10%)
+                        core_bonus = core_ratio * 0.10
+                        
+                        keyword_bonus = coverage_bonus + core_bonus
+                
+                # 가중 평균 (가중치 튜닝 가능, 환경 변수로 조정)
+                base_combined_score = (
+                    adjusted_original_weight * original_score + 
+                    adjusted_cross_encoder_weight * cross_encoder_score
+                )
+                
+                # 디버그 로그 (가중치 확인용)
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    self.logger.debug(
+                        f"Score combination: original={original_score:.3f} (weight={adjusted_original_weight:.2f}), "
+                        f"cross_encoder={cross_encoder_score:.3f} (weight={adjusted_cross_encoder_weight:.2f}), "
+                        f"combined={base_combined_score:.3f}"
+                    )
+                
+                # Keyword Coverage 보너스 적용
+                combined_score = base_combined_score * (1.0 + keyword_bonus)
+                
+                # MergedResult 업데이트 (새 객체 생성)
+                updated_result = MergedResult(
+                    text=result.text,
+                    score=combined_score,
+                    source=result.source,
+                    metadata={
+                        **result.metadata,
+                        "cross_encoder_score": cross_encoder_score,
+                        "original_score": original_score,
+                        "keyword_bonus": keyword_bonus
+                    }
+                )
+                reranked_results.append(updated_result)
+            
+            # 점수순 정렬
+            reranked_results.sort(key=lambda x: x.score, reverse=True)
+            
+            # 나머지 문서 추가 (reranking하지 않은 문서)
+            if remaining_results:
+                reranked_results.extend(remaining_results)
+            
+            self.logger.info(
+                f"Cross-Encoder reranking: {len(pre_filtered_results)} documents reranked (전체 {len(results)}개 중), "
+                f"top score: {reranked_results[0].score:.3f}" if reranked_results else "no results"
+            )
+            
+            return reranked_results[:top_k]
+            
+        except Exception as e:
+            self.logger.error(f"Cross-Encoder reranking error: {e}")
+            return results[:top_k]
     
     def _merged_result_to_dict(self, result: MergedResult) -> Dict[str, Any]:
-        """MergedResult를 Dict로 변환"""
-        return {
+        """MergedResult를 Dict로 변환 (메타데이터 보존)"""
+        # metadata 복사 (원본 보존)
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        else:
+            # 깊은 복사 (원본 보존)
+            metadata = metadata.copy()
+        
+        doc = {
             "text": result.text,
             "content": result.text,
             "score": result.score,
             "relevance_score": result.score,
             "similarity": result.score,
             "source": result.source,
-            "metadata": result.metadata
+            "metadata": metadata
         }
+        
+        # 🔥 개선: metadata에서 최상위 필드로 복원 (메타데이터 보존)
+        # None이 아닌 값만 복원 (빈 문자열도 허용)
+        # 🔥 CRITICAL: type 필드는 최우선으로 복원
+        if "type" in metadata and metadata["type"] is not None:
+            doc["type"] = metadata["type"]
+        elif "source_type" in metadata and metadata["source_type"] is not None:
+            doc["type"] = metadata["source_type"]
+            metadata["type"] = metadata["source_type"]
+        
+        for key in ["statute_name", "law_name", "article_no", 
+                   "article_number", "clause_no", "item_no", "case_id", "court", 
+                   "ccourt", "doc_id", "casenames", "precedent_id", "id", "chunk_id", 
+                   "document_id", "source", "source_description", "source_url"]:
+            if key in metadata and metadata[key] is not None:
+                # metadata에 값이 있으면 최상위 필드로 복원
+                doc[key] = metadata[key]
+            # 최상위 필드가 이미 있으면 metadata에도 복사 (일관성 유지)
+            elif key in doc and doc[key] is not None and key not in metadata:
+                metadata[key] = doc[key]
+        
+        # 🔥 개선: metadata가 비어있거나 type이 없을 때 source 필드로 추론
+        if not doc.get("type") and result.source:
+            # source 필드에서 type 추론
+            source_lower = result.source.lower()
+            if "exact_semantic" in source_lower or "semantic" in source_lower:
+                # semantic 결과는 metadata에서 type 추론 시도
+                if metadata.get("type"):
+                    doc["type"] = metadata["type"]
+                elif metadata.get("source_type"):
+                    doc["type"] = metadata["source_type"]
+                # metadata에도 저장
+                if doc.get("type"):
+                    metadata["type"] = doc["type"]
+            elif "exact_keyword" in source_lower or "keyword" in source_lower:
+                doc["type"] = "keyword"
+                metadata["type"] = "keyword"
+        
+        # 🔥 CRITICAL: type 정보 우선 사용, 없을 때만 normalize_document_type으로 추론
+        # 1. doc에 type이 있으면 우선 사용
+        if doc.get("type") and doc.get("type").lower() != "unknown":
+            metadata["type"] = doc.get("type")
+            metadata["source_type"] = doc.get("type")
+        # 2. metadata에 type이 있으면 사용
+        elif metadata.get("type") and metadata.get("type").lower() != "unknown":
+            doc["type"] = metadata.get("type")
+            metadata["source_type"] = metadata.get("type")
+        # 3. source_type이 있으면 type으로 사용
+        elif metadata.get("source_type") and metadata.get("source_type").lower() != "unknown":
+            doc["type"] = metadata.get("source_type")
+            metadata["type"] = metadata.get("source_type")
+        # 4. data_type 정보 활용 (검색 엔진에서 전달된 정보)
+        elif metadata.get("data_type"):
+            data_type = metadata.get("data_type").lower()
+            if data_type == "precedents":
+                doc["type"] = "precedent_content"
+                metadata["type"] = "precedent_content"
+                metadata["source_type"] = "precedent_content"
+            elif data_type == "statutes":
+                doc["type"] = "statute_article"
+                metadata["type"] = "statute_article"
+                metadata["source_type"] = "statute_article"
+        # 5. 모두 없으면 normalize_document_type으로 추론
+        else:
+            try:
+                from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                # 🔥 개선: text/content가 있으면 추론 시도
+                if doc.get("text") or doc.get("content"):
+                    normalized_doc = normalize_document_type(doc.copy())
+                    inferred_type = normalized_doc.get("type")
+                    if inferred_type and inferred_type.lower() != "unknown":
+                        doc["type"] = inferred_type
+                        metadata["type"] = inferred_type
+                        metadata["source_type"] = inferred_type
+            except (ImportError, Exception):
+                pass
+        
+        # 🔥 개선: type 정보가 여전히 없으면 최소한 metadata에 빈 값이라도 저장하지 않음
+        # (unknown으로 설정하지 않고 None으로 유지하여 이후 복원 시도 가능하도록)
+        
+        # metadata 업데이트 (복원된 필드 포함)
+        doc["metadata"] = metadata
+        
+        return doc
+    
+    def _dict_to_merged_result(self, doc: Dict[str, Any]) -> MergedResult:
+        """Dict를 MergedResult로 변환 (메타데이터 보존)"""
+        text = doc.get("text") or doc.get("content") or doc.get("chunk_text") or ""
+        score = doc.get("final_weighted_score") or doc.get("score") or doc.get("relevance_score") or doc.get("similarity", 0.0)
+        source = doc.get("source") or doc.get("title") or doc.get("document_id") or ""
+        metadata = doc.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = doc if isinstance(doc, dict) else {}
+        
+        # 🔥 개선: 원본 문서의 모든 필드를 metadata에 보존 (메타데이터 손실 방지)
+        for key in ["type", "statute_name", "law_name", "article_no", 
+                   "article_number", "case_id", "court", "ccourt", "doc_id", 
+                   "casenames", "precedent_id", "id", "chunk_id", "document_id"]:
+            if doc.get(key) and key not in metadata:
+                metadata[key] = doc[key]
+        
+        return MergedResult(
+            text=text,
+            score=score,
+            source=source,
+            metadata=metadata
+        )
     
     def multi_stage_rerank(
         self,
@@ -201,11 +915,22 @@ class ResultRanker:
         search_quality: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        다단계 재정렬 전략 (개선: 키워드 매칭, Citation 매칭, 질문 유형별 특화, MMR 다양성, 검색 품질 기반 조정, 정보 밀도, 최신성)
+        다단계 재정렬 전략 (개선: 키워드 매칭, Citation 매칭, 질문 유형별 특화, MMR 다양성, 검색 품질 기반 조정, 정보 밀도, 최신성, Cross-Encoder)
+        
+        재랭킹 단계:
+        - Stage 1: 관련성 점수로 초기 정렬
+        - Stage 1.5: 키워드 매칭 점수 직접 반영
+        - Stage 2: Citation 포함 문서 우선순위
+        - Stage 3: 신뢰도 점수 적용
+        - Stage 3.5: 질문 유형별 특화 재정렬
+        - Stage 3.6: 정보 밀도 점수 적용
+        - Stage 3.7: 최신성 점수 적용
+        - Stage 4: MMR 기반 다양성 적용
+        - Stage 5: Cross-Encoder 재랭킹 (동적 후보 수 조정)
         
         Args:
             documents: 재정렬할 문서 리스트
-            query: 검색 쿼리
+            query: 검색 쿼리 (Cross-Encoder 재랭킹에 필요)
             query_type: 질문 유형
             extracted_keywords: 추출된 키워드
             search_quality: 검색 품질 점수
@@ -213,6 +938,9 @@ class ResultRanker:
         Returns:
             List[Dict]: 재정렬된 문서 리스트
         """
+        import time
+        start_time = time.time()
+        
         if not documents:
             return []
         
@@ -240,11 +968,11 @@ class ResultRanker:
                 core_keyword_ratio = core_keywords_matched / min(3, len(extracted_keywords)) if extracted_keywords else 0.0
                 core_keyword_bonus = core_keyword_ratio * 0.25  # 최대 25% 증가
             
-            # 키워드 커버리지 보너스
-            coverage_bonus = keyword_coverage * 0.15  # 최대 15% 증가
+            # 키워드 커버리지 보너스 (개선: Phase 1 - 가중치 증가)
+            coverage_bonus = keyword_coverage * 0.20  # 최대 20% 증가 (0.15 → 0.20)
             
-            # 키워드 매칭 점수 보너스
-            keyword_bonus = keyword_score * 0.2  # 최대 20% 증가
+            # 키워드 매칭 점수 보너스 (개선: Phase 1 - 가중치 증가)
+            keyword_bonus = keyword_score * 0.30  # 최대 30% 증가 (0.2 → 0.3)
             
             # 총 키워드 보너스 적용
             current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
@@ -319,50 +1047,627 @@ class ResultRanker:
                     current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
                     doc["final_weighted_score"] = current_score * 0.9  # 10% 감소
         
-        # Stage 3.6: 정보 밀도 점수 적용 (개선: 문서 길이/정보 밀도 고려)
-        for doc in citation_docs + non_citation_docs:
-            density_score = self._calculate_information_density(doc)
-            current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
-            doc["final_weighted_score"] = current_score * (1.0 + density_score * 0.1)  # 최대 10% 증가
-            doc["information_density"] = density_score
-        
-        # Stage 3.7: 최신성 점수 적용 (개선: 시간적 관련성 고려)
-        for doc in citation_docs + non_citation_docs:
-            doc_type = doc.get("type", "").lower() if doc.get("type") else ""
-            if "판례" in doc_type or "precedent" in doc_type:
-                # 판례만 최신성 고려
-                recency_score = self._calculate_recency_score(doc)
+        # Stage 3.6: 정보 밀도 점수 적용 (개선: 품질이 낮을 때만 적용)
+        if search_quality < 0.85:  # 품질이 낮을 때만 적용
+            for doc in citation_docs + non_citation_docs:
+                density_score = self._calculate_information_density(doc)
                 current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
-                doc["final_weighted_score"] = current_score * (1.0 + recency_score * 0.15)  # 최대 15% 증가
-                doc["recency_score"] = recency_score
+                doc["final_weighted_score"] = current_score * (1.0 + density_score * 0.1)  # 최대 10% 증가
+                doc["information_density"] = density_score
         
-        # Stage 4: MMR 기반 다양성 적용 (개선: 검색 결과 품질 및 질문 타입 기반 동적 조정)
-        # 검색 품질에 따른 lambda_score 조정
-        if search_quality < 0.5:
-            # 품질 낮음: 키워드 매칭 강화 (다양성 감소)
-            lambda_score = 0.8
-        elif search_quality > 0.8:
-            # 품질 높음: 관련성 우선 (다양성 증가)
-            lambda_score = 0.6
-        else:
-            # 품질 중간: 균형잡힌 재정렬
-            lambda_score = 0.7
+        # Stage 3.7: 최신성 점수 적용 (개선: 품질이 낮을 때만 적용)
+        if search_quality < 0.85:  # 품질이 낮을 때만 적용
+            for doc in citation_docs + non_citation_docs:
+                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                if "판례" in doc_type or "precedent" in doc_type:
+                    # 판례만 최신성 고려
+                    recency_score = self._calculate_recency_score(doc)
+                    current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                    doc["final_weighted_score"] = current_score * (1.0 + recency_score * 0.15)  # 최대 15% 증가
+                    doc["recency_score"] = recency_score
         
-        # 질문 타입별 다양성 조정
-        if query_type == "law_inquiry":
-            # 법령 조회: 관련성 우선 (다양성 약간 감소)
-            lambda_score = min(0.85, lambda_score + 0.1)
-        elif query_type == "precedent_search":
-            # 판례 검색: 다양성 강화 (다양한 판례 포함)
-            lambda_score = max(0.5, lambda_score - 0.1)
+        # Stage 4: MMR 기반 다양성 적용 (개선: 동적 가중치 사용, 품질이 높으면 가중치 감소)
+        dynamic_lambda = self._get_dynamic_mmr_lambda(
+            query_type=query_type,
+            search_quality=search_quality,
+            num_results=len(citation_docs + non_citation_docs)
+        )
+        # 품질이 높으면 다양성 가중치 감소 (더 빠른 처리)
+        if search_quality >= 0.85:
+            dynamic_lambda = min(dynamic_lambda, 0.3)  # 다양성 가중치 상한선 설정
         
         diverse_docs = self._apply_mmr_diversity(
             citation_docs + non_citation_docs,
             query,
-            lambda_score=lambda_score
+            lambda_score=dynamic_lambda
         )
         
-        return diverse_docs
+        # Stage 5: Cross-Encoder 재랭킹 (개선: 조기 종료 조건 강화)
+        if self.use_cross_encoder and len(diverse_docs) > 0 and query:
+            # Cross-Encoder 지연 로딩
+            if self._ensure_cross_encoder_loaded() and self.cross_encoder:
+                # 개선: 조기 종료 조건 강화 (품질 >= 0.75 또는 문서 <= 10)
+                should_skip_cross_encoder = (
+                    search_quality >= 0.75 or  # 품질이 중간 이상이면 스킵 (0.85 → 0.75로 완화)
+                    len(diverse_docs) <= 10  # 문서 수가 적으면 스킵 (8 → 10으로 완화)
+                )
+                
+                if should_skip_cross_encoder:
+                    self.logger.info(
+                        f"⏭️ [CROSS-ENCODER SKIP] Skipping Cross-Encoder reranking "
+                        f"(quality: {search_quality:.2f}, docs: {len(diverse_docs)})"
+                    )
+                    return diverse_docs
+                
+                try:
+                    # 개선: Cross-Encoder 재랭킹 후보 수 감소 (10-20개 → 5-10개)
+                    # 문서 수에 따라 동적으로 조정: 최소 5개, 최대 10개
+                    if len(diverse_docs) <= 5:
+                        rerank_candidates_count = len(diverse_docs)  # 문서 수가 매우 적으면 모두 재랭킹
+                    elif len(diverse_docs) <= 10:
+                        rerank_candidates_count = min(8, len(diverse_docs))  # 중간 크기면 8개
+                    elif len(diverse_docs) <= 15:
+                        rerank_candidates_count = min(10, len(diverse_docs))  # 큰 경우 10개
+                    else:
+                        rerank_candidates_count = min(10, max(5, len(diverse_docs) // 4))  # 매우 큰 경우 동적 조정 (최대 10개)
+                    
+                    candidates_for_rerank = diverse_docs[:rerank_candidates_count]
+                    
+                    print(f"[CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates out of {len(diverse_docs)} documents for reranking", flush=True)
+                    self.logger.info(
+                        f"🔍 [CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates "
+                        f"out of {len(diverse_docs)} documents for reranking"
+                    )
+                    
+                    # 개선: Dict를 MergedResult로 변환 최적화 (불필요한 복사 최소화)
+                    merged_candidates = []
+                    for doc in candidates_for_rerank:
+                        # 기존 _dict_to_merged_result 호출 대신 직접 생성 (성능 향상)
+                        text = doc.get("text") or doc.get("content") or doc.get("chunk_text", "")
+                        score = doc.get("final_weighted_score") or doc.get("relevance_score", 0.0)
+                        source = doc.get("source") or doc.get("title") or doc.get("document_id", "")
+                        metadata = doc.get("metadata", {})
+                        if not isinstance(metadata, dict):
+                            metadata = doc if isinstance(doc, dict) else {}
+                        
+                        merged_candidates.append(MergedResult(
+                            text=text,
+                            score=score,
+                            source=source,
+                            metadata=metadata
+                        ))
+                    
+                    # Cross-Encoder 재랭킹 수행
+                    reranked_merged = self.cross_encoder_rerank(
+                        results=merged_candidates,
+                        query=query,
+                        top_k=rerank_candidates_count,
+                        extracted_keywords=extracted_keywords
+                    )
+                    
+                    # MergedResult를 Dict로 변환하고 기존 점수 정보 유지
+                    reranked_docs = []
+                    # 원본 문서를 텍스트로 인덱싱 (빠른 매칭을 위해)
+                    original_docs_by_text = {doc.get("text") or doc.get("content") or doc.get("chunk_text", ""): doc for doc in candidates_for_rerank}
+                    
+                    for merged_result in reranked_merged:
+                        doc_dict = self._merged_result_to_dict(merged_result)
+                        # 텍스트로 원본 문서 찾기
+                        doc_text = merged_result.text
+                        original_doc = original_docs_by_text.get(doc_text)
+                        
+                        if original_doc:
+                            # 기존 필드 유지하면서 점수만 업데이트
+                            doc_dict.update({
+                                **original_doc,
+                                "final_weighted_score": merged_result.score,
+                                "relevance_score": merged_result.score,
+                                "score": merged_result.score,
+                                "cross_encoder_applied": True
+                            })
+                        else:
+                            # 원본 문서를 찾지 못한 경우에도 점수 업데이트
+                            doc_dict.update({
+                                "final_weighted_score": merged_result.score,
+                                "relevance_score": merged_result.score,
+                                "score": merged_result.score,
+                                "cross_encoder_applied": True
+                            })
+                        reranked_docs.append(doc_dict)
+                    
+                    # 재랭킹된 문서와 나머지 문서 병합
+                    remaining_docs = diverse_docs[rerank_candidates_count:]
+                    final_docs = reranked_docs + remaining_docs
+                    
+                    # 🔥 개선: 타입별 다양성 보장 (법령 질의인 경우)
+                    if query_type == "law_inquiry":
+                        # 타입별로 문서 분류
+                        statute_docs = []
+                        precedent_docs = []
+                        other_docs = []
+                        
+                        for doc in final_docs:
+                            doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                            if "statute" in doc_type or "법령" in doc_type:
+                                statute_docs.append(doc)
+                            elif "precedent" in doc_type or "판례" in doc_type:
+                                precedent_docs.append(doc)
+                            else:
+                                other_docs.append(doc)
+                        
+                        # 법령 질의인 경우: 법령 최소 1개, 판례 최소 1개 보장
+                        if len(statute_docs) == 0 and len(diverse_docs) > len(final_docs):
+                            # 법령 문서가 없으면 원본 문서에서 법령 문서 찾기
+                            for doc in diverse_docs:
+                                if doc not in final_docs:
+                                    doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                                    if "statute" in doc_type or "법령" in doc_type:
+                                        statute_docs.append(doc)
+                                        final_docs.append(doc)
+                                        break
+                        
+                        if len(precedent_docs) == 0 and len(diverse_docs) > len(final_docs):
+                            # 판례 문서가 없으면 원본 문서에서 판례 문서 찾기
+                            for doc in diverse_docs:
+                                if doc not in final_docs:
+                                    doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                                    if "precedent" in doc_type or "판례" in doc_type:
+                                        precedent_docs.append(doc)
+                                        final_docs.append(doc)
+                                        break
+                        
+                        # 타입별 다양성 보장 후 점수 기준으로 재정렬
+                        final_docs.sort(
+                            key=lambda x: x.get("final_weighted_score", x.get("relevance_score", 0.0)),
+                            reverse=True
+                        )
+                        
+                        self.logger.info(
+                            f"🔍 [TYPE DIVERSITY] 법령 질의 타입별 다양성 보장: "
+                            f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개, 기타={len(other_docs)}개"
+                        )
+                    
+                    # 개선: 재랭킹 결과 검증 - 전후 점수 분포 비교
+                    # Cross-Encoder 재랭킹 직전 점수와 재랭킹 후 점수 비교
+                    if reranked_docs:
+                        # 재랭킹 직전 점수: merged_candidates의 score (MergedResult.score)
+                        before_scores = [result.score for result in merged_candidates]
+                        # 재랭킹 후 점수: reranked_merged의 score (Cross-Encoder 재랭킹 후)
+                        after_scores = [result.score for result in reranked_merged]
+                        
+                        if before_scores and after_scores and len(before_scores) == len(after_scores):
+                            before_avg = sum(before_scores) / len(before_scores)
+                            after_avg = sum(after_scores) / len(after_scores)
+                            before_max = max(before_scores)
+                            after_max = max(after_scores)
+                            before_min = min(before_scores)
+                            after_min = min(after_scores)
+                            
+                            # 순위 변경 추적 (상위 3개 문서)
+                            before_top3_indices = sorted(range(len(before_scores)), key=lambda i: before_scores[i], reverse=True)[:3]
+                            after_top3_indices = sorted(range(len(after_scores)), key=lambda i: after_scores[i], reverse=True)[:3]
+                            rank_change = len(set(before_top3_indices) & set(after_top3_indices))  # 상위 3개 중 유지된 문서 수
+                            
+                            improvement_pct = (after_avg - before_avg) * 100 / before_avg if before_avg > 0 else 0
+                            max_improvement_pct = (after_max - before_max) * 100 / before_max if before_max > 0 else 0
+                            
+                            print(f"[CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents. Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), min {before_min:.3f}→{after_min:.3f}. Top 3 rank stability: {rank_change}/3", flush=True)
+                            self.logger.info(
+                                f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
+                                f"(out of {len(diverse_docs)} total documents). "
+                                f"Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), "
+                                f"max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), "
+                                f"min {before_min:.3f}→{after_min:.3f}. "
+                                f"Top 3 rank stability: {rank_change}/3"
+                            )
+                        else:
+                            self.logger.info(
+                                f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
+                                f"(out of {len(diverse_docs)} total documents)"
+                            )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ [CROSS-ENCODER RERANK] No documents were reranked "
+                            f"(expected {rerank_candidates_count}, got {len(reranked_docs)})"
+                        )
+                    
+                    # 개선: 재랭킹 성능 모니터링
+                    rerank_time = time.time() - start_time
+                    self.logger.info(
+                        f"⏱️ [RERANK PERFORMANCE] Total reranking time: {rerank_time:.3f}s "
+                        f"({len(diverse_docs)} documents, {rerank_candidates_count} reranked)"
+                    )
+                    
+                    return final_docs
+                
+                except Exception as e:
+                    rerank_time = time.time() - start_time
+                    self.logger.warning(
+                        f"Cross-Encoder reranking in multi_stage_rerank failed: {e}, using MMR results "
+                        f"(time: {rerank_time:.3f}s)"
+                    )
+                    return diverse_docs
+        else:
+            # Cross-Encoder가 비활성화되었거나 쿼리가 없는 경우 MMR 결과 반환
+            rerank_time = time.time() - start_time
+            if not self.use_cross_encoder or not self._ensure_cross_encoder_loaded() or not self.cross_encoder:
+                self.logger.info(f"⏭️ [CROSS-ENCODER SKIP] Cross-Encoder not available, skipping Stage 5 (time: {rerank_time:.3f}s)")
+            elif not query:
+                self.logger.info(f"⏭️ [CROSS-ENCODER SKIP] Query not provided, skipping Cross-Encoder reranking (time: {rerank_time:.3f}s)")
+            
+            # 🔥 개선: 타입별 다양성 보장 (법령 질의인 경우, Cross-Encoder 없이도)
+            if query_type == "law_inquiry":
+                # 타입별로 문서 분류
+                statute_docs = []
+                precedent_docs = []
+                other_docs = []
+                
+                for doc in diverse_docs:
+                    doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                    if "statute" in doc_type or "법령" in doc_type:
+                        statute_docs.append(doc)
+                    elif "precedent" in doc_type or "판례" in doc_type:
+                        precedent_docs.append(doc)
+                    else:
+                        other_docs.append(doc)
+                
+                # 법령 질의인 경우: 법령 최소 1개, 판례 최소 1개 보장
+                if len(statute_docs) == 0:
+                    self.logger.warning(
+                        f"⚠️ [TYPE DIVERSITY] 법령 질의인데 법령 문서가 없음: "
+                        f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개"
+                    )
+                elif len(precedent_docs) == 0:
+                    self.logger.warning(
+                        f"⚠️ [TYPE DIVERSITY] 법령 질의인데 판례 문서가 없음: "
+                        f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개"
+                    )
+                else:
+                    self.logger.info(
+                        f"✅ [TYPE DIVERSITY] 법령 질의 타입별 다양성 확인: "
+                        f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개, 기타={len(other_docs)}개"
+                    )
+            
+            return diverse_docs
+    
+    def evaluate_search_quality(
+        self,
+        query: str,
+        results: List[Dict[str, Any]],
+        query_type: str = "",
+        extracted_keywords: List[str] = None
+    ) -> Dict[str, float]:
+        """
+        검색 품질 평가 메트릭 수집
+        
+        Args:
+            query: 검색 쿼리
+            results: 검색 결과 리스트
+            query_type: 질문 유형
+            extracted_keywords: 추출된 키워드
+            
+        Returns:
+            Dict[str, float]: 검색 품질 메트릭
+        """
+        metrics = {
+            "avg_relevance": 0.0,
+            "min_relevance": 0.0,
+            "max_relevance": 0.0,
+            "diversity_score": 0.0,
+            "keyword_coverage": 0.0
+        }
+        
+        if not results:
+            return metrics
+        
+        # 관련성 점수 계산
+        scores = [doc.get("relevance_score", doc.get("final_weighted_score", 0.0)) for doc in results]
+        if scores:
+            metrics["avg_relevance"] = sum(scores) / len(scores)
+            metrics["min_relevance"] = min(scores)
+            metrics["max_relevance"] = max(scores)
+        
+        # 다양성 점수 계산 (다차원 다양성 통합)
+        metrics["diversity_score"] = self._calculate_comprehensive_diversity_score(results)
+        
+        # 키워드 커버리지 점수 계산 (Phase 3: 의미적 유사도 고려)
+        if extracted_keywords:
+            covered_keywords = set()
+            semantic_matches = {}  # 의미적 매칭 점수
+            
+            # Phase 3: 임베딩 모델을 사용한 의미적 유사도 기반 매칭 (성능 최적화: 모델 캐싱)
+            use_semantic_matching = False
+            model = None
+            if SKLEARN_AVAILABLE:
+                model = self._get_semantic_model()
+                if model is not None:
+                    use_semantic_matching = True
+                    self.logger.debug("Using semantic similarity for keyword matching (cached model)")
+                else:
+                    self.logger.debug("Semantic model not available, using string matching only")
+            else:
+                self.logger.debug("sklearn not available, using string matching only")
+            
+            if use_semantic_matching:
+                try:
+                    # 성능 최적화: 배치 임베딩 생성 및 선택적 의미 기반 매칭
+                    # 1. 직접 문자열 매칭 먼저 수행 (빠른 필터링)
+                    for doc in results:
+                        content = doc.get("content", doc.get("text", ""))
+                        if not isinstance(content, str) or not content:
+                            continue
+                        
+                        content_lower = content.lower()
+                        
+                        # 직접 문자열 매칭
+                        for keyword in extracted_keywords:
+                            if keyword.lower() in content_lower:
+                                covered_keywords.add(keyword.lower())
+                    
+                    # 2. 의미 기반 매칭이 필요한 경우만 수행 (직접 매칭이 부족한 경우)
+                    # Keyword Coverage가 이미 높으면 의미 기반 매칭 생략
+                    current_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+                    use_semantic_if_needed = current_coverage < 0.7  # 70% 미만일 때만 의미 기반 매칭
+                    
+                    if use_semantic_if_needed:
+                        # 키워드 임베딩 생성 (한 번만)
+                        keyword_embeddings = model.encode(extracted_keywords, show_progress_bar=False)
+                        
+                        # 문서 임베딩 배치 생성 (성능 최적화)
+                        doc_texts = []
+                        doc_indices = []
+                        for idx, doc in enumerate(results):
+                            content = doc.get("content", doc.get("text", ""))
+                            if isinstance(content, str) and content:
+                                doc_text = content[:512] if len(content) > 512 else content
+                                doc_texts.append(doc_text)
+                                doc_indices.append(idx)
+                        
+                        if doc_texts:
+                            # 배치 임베딩 생성 (개별 생성 대신 배치로 처리)
+                            doc_embeddings = model.encode(doc_texts, show_progress_bar=False, batch_size=8)
+                            
+                            # 배치 유사도 계산
+                            for doc_idx, doc_embedding in zip(doc_indices, doc_embeddings):
+                                doc = results[doc_idx]
+                                try:
+                                    # 코사인 유사도 계산
+                                    similarities = cosine_similarity(
+                                        [doc_embedding],
+                                        keyword_embeddings
+                                    )[0]
+                                    
+                                    for idx, similarity in enumerate(similarities):
+                                        if similarity >= 0.5:  # 의미적 유사도 임계값
+                                            keyword = extracted_keywords[idx]
+                                            # 직접 매칭이 없고 의미적 매칭만 있는 경우
+                                            if keyword.lower() not in covered_keywords:
+                                                if keyword not in semantic_matches:
+                                                    semantic_matches[keyword] = similarity
+                                                else:
+                                                    semantic_matches[keyword] = max(semantic_matches[keyword], similarity)
+                                except Exception as e:
+                                    self.logger.debug(f"Semantic matching error for document: {e}")
+                                    continue
+                    else:
+                        self.logger.debug(f"Skipping semantic matching (coverage already high: {current_coverage:.2f})")
+                    
+                    # 의미적 매칭도 포함하여 계산 (의미적 매칭은 80% 가중치로 증가)
+                    total_coverage = len(covered_keywords) + len(semantic_matches) * 0.8
+                    if extracted_keywords:
+                        metrics["keyword_coverage"] = min(1.0, total_coverage / len(extracted_keywords))
+                    
+                except Exception as e:
+                    self.logger.warning(f"Semantic keyword matching failed: {e}, falling back to string matching")
+                    use_semantic_matching = False
+            
+            # 폴백: 기존 문자열 매칭 방식
+            if not use_semantic_matching:
+                for doc in results:
+                    content = doc.get("content", doc.get("text", "")).lower()
+                    if isinstance(content, str):
+                        for keyword in extracted_keywords:
+                            if keyword.lower() in content:
+                                covered_keywords.add(keyword.lower())
+                
+                if extracted_keywords:
+                    metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
+        
+        return metrics
+    
+    def _calculate_comprehensive_diversity_score(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        다차원 다양성 점수 계산
+        
+        Args:
+            results: 검색 결과 리스트
+            
+        Returns:
+            float: 통합 다양성 점수 (0.0 ~ 1.0)
+        """
+        if not results or len(results) < 2:
+            return 0.0
+        
+        # 1. 단어 기반 다양성 (30%)
+        word_diversity = self._calculate_word_diversity(results)
+        
+        # 2. 의미적 다양성 (40%) - 문서 임베딩 간 코사인 유사도 기반
+        semantic_diversity = self._calculate_semantic_diversity(results)
+        
+        # 3. 타입 다양성 (20%) - 엔트로피 기반
+        type_diversity = self._calculate_type_diversity(results)
+        
+        # 4. 문서 간 유사도 다양성 (10%) - 평균 최소 거리
+        inter_doc_diversity = self._calculate_inter_document_diversity(results)
+        
+        # 가중 평균
+        comprehensive_score = (
+            0.3 * word_diversity +
+            0.4 * semantic_diversity +
+            0.2 * type_diversity +
+            0.1 * inter_doc_diversity
+        )
+        
+        return max(0.0, min(1.0, comprehensive_score))
+    
+    def _calculate_word_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        단어 기반 다양성 계산 (기존 로직)
+        
+        Returns:
+            float: 단어 다양성 점수 (0.0 ~ 1.0)
+        """
+        contents = [doc.get("content", doc.get("text", "")) for doc in results]
+        unique_terms = set()
+        total_terms = 0
+        for content in contents:
+            if isinstance(content, str):
+                terms = content.lower().split()
+                unique_terms.update(terms)
+                total_terms += len(terms)
+        
+        if total_terms > 0:
+            return len(unique_terms) / total_terms
+        return 0.0
+    
+    def _calculate_semantic_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        의미적 다양성 계산 (임베딩 벡터 간 유사도 기반)
+        
+        Returns:
+            float: 의미적 다양성 점수 (0.0 ~ 1.0, 높을수록 다양함)
+        """
+        if len(results) < 2:
+            return 0.0
+        
+        # 문서 임베딩 벡터 추출
+        embeddings = []
+        for doc in results:
+            embedding = doc.get("embedding") or doc.get("vector") or doc.get("metadata", {}).get("embedding")
+            if embedding is not None:
+                if isinstance(embedding, list):
+                    if SKLEARN_AVAILABLE:
+                        embedding = np.array(embedding)
+                    else:
+                        continue
+                embeddings.append(embedding)
+        
+        if len(embeddings) < 2 or not SKLEARN_AVAILABLE:
+            # 임베딩이 없거나 sklearn이 없으면 폴백: 문서 간 유사도 사용
+            return self._calculate_inter_document_diversity(results)
+        
+        try:
+            # 모든 문서 쌍 간 코사인 유사도 계산
+            similarities = []
+            for i in range(len(embeddings)):
+                for j in range(i + 1, len(embeddings)):
+                    try:
+                        similarity = cosine_similarity(
+                            embeddings[i].reshape(1, -1),
+                            embeddings[j].reshape(1, -1)
+                        )[0][0]
+                        similarities.append(float(similarity))
+                    except Exception:
+                        continue
+            
+            if not similarities:
+                return self._calculate_inter_document_diversity(results)
+            
+            # 평균 유사도가 낮을수록 다양성 높음
+            avg_similarity = sum(similarities) / len(similarities)
+            semantic_diversity = 1.0 - avg_similarity
+            
+            return max(0.0, min(1.0, semantic_diversity))
+        except Exception:
+            # 오류 발생 시 폴백
+            return self._calculate_inter_document_diversity(results)
+    
+    def _calculate_inter_document_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        문서 간 유사도 기반 다양성 계산
+        
+        Returns:
+            float: 문서 간 다양성 점수 (0.0 ~ 1.0)
+        """
+        if len(results) < 2:
+            return 0.0
+        
+        # 문서 쌍 간 유사도 계산
+        similarities = []
+        for i in range(len(results)):
+            doc1_content = (results[i].get("content") or results[i].get("text") or "").lower()
+            doc1_words = set(doc1_content.split())
+            
+            for j in range(i + 1, len(results)):
+                doc2_content = (results[j].get("content") or results[j].get("text") or "").lower()
+                doc2_words = set(doc2_content.split())
+                
+                # Jaccard 유사도
+                if doc1_words or doc2_words:
+                    intersection = len(doc1_words & doc2_words)
+                    union = len(doc1_words | doc2_words)
+                    similarity = intersection / union if union > 0 else 0.0
+                    similarities.append(similarity)
+        
+        if not similarities:
+            return 0.0
+        
+        # 평균 유사도가 낮을수록 다양성 높음
+        avg_similarity = sum(similarities) / len(similarities)
+        diversity = 1.0 - avg_similarity
+        
+        return max(0.0, min(1.0, diversity))
+    
+    def _calculate_type_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        타입 다양성 계산 (엔트로피 기반)
+        
+        Returns:
+            float: 타입 다양성 점수 (0.0 ~ 1.0)
+        """
+        if not results:
+            return 0.0
+        
+        # 타입별 카운트
+        type_counts = {}
+        for doc in results:
+            doc_type = (
+                doc.get("type") or
+                doc.get("metadata", {}).get("type", "unknown")
+            )
+            type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+        
+        # 엔트로피 계산
+        total = sum(type_counts.values())
+        if total == 0:
+            return 0.0
+        
+        entropy = 0.0
+        for count in type_counts.values():
+            if count > 0:
+                p = count / total
+                entropy -= p * math.log2(p)
+        
+        # 정규화 (최대 엔트로피)
+        max_entropy = math.log2(len(type_counts)) if len(type_counts) > 1 else 1.0
+        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
+        
+        return normalized_entropy
     
     def _has_citation(self, document: Dict[str, Any]) -> bool:
         """문서에 Citation이 있는지 확인"""
@@ -516,6 +1821,51 @@ class ResultRanker:
                 break
         
         return selected
+    
+    def _get_dynamic_mmr_lambda(
+        self,
+        query_type: str = "",
+        search_quality: float = 0.7,
+        num_results: int = 10
+    ) -> float:
+        """
+        동적 MMR lambda 가중치 계산
+        
+        Args:
+            query_type: 질문 유형
+            search_quality: 검색 품질 점수 (0.0 ~ 1.0)
+            num_results: 검색 결과 수
+        
+        Returns:
+            float: lambda 가중치 (0.0 ~ 1.0, 높을수록 관련성 중시)
+        """
+        base_lambda = 0.7
+        
+        # 질문 유형별 조정
+        if query_type == "law_inquiry":
+            base_lambda = 0.8  # 법령 조회: 관련성 우선
+        elif query_type == "precedent_search":
+            base_lambda = 0.6  # 판례 검색: 다양성 중시
+        elif query_type == "complex_question":
+            base_lambda = 0.65  # 복합 질문: 균형
+        
+        # 검색 품질에 따른 조정
+        if search_quality >= 0.8:
+            # 품질이 높으면 다양성 강화 가능
+            base_lambda -= 0.1
+        elif search_quality < 0.6:
+            # 품질이 낮으면 관련성 우선
+            base_lambda += 0.1
+        
+        # 결과 수에 따른 조정
+        if num_results > 20:
+            # 결과가 많으면 다양성 강화
+            base_lambda -= 0.05
+        elif num_results < 10:
+            # 결과가 적으면 관련성 우선
+            base_lambda += 0.05
+        
+        return max(0.5, min(0.9, base_lambda))
     
     def _calculate_doc_similarity(
         self,
@@ -722,6 +2072,1436 @@ class ResultRanker:
         
         # Dict로 변환하여 반환 (호환성 유지)
         return [self._merged_result_to_dict(r) for r in filtered_results]
+    
+    # ==================== 최적화: 사전 계산 메서드 ====================
+    
+    def _precompute_citations(self, documents: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """
+        문서별 Citation을 한 번만 추출하여 캐싱
+        
+        Args:
+            documents: 문서 리스트
+        
+        Returns:
+            Dict[str, List[str]]: 문서 ID -> Citation 리스트 매핑
+        """
+        citation_cache = {}
+        for doc in documents:
+            doc_id = doc.get("id", str(id(doc)))
+            if doc_id not in citation_cache:
+                citation_cache[doc_id] = self._extract_citations(doc)
+        return citation_cache
+    
+    def _precompute_keyword_scores(
+        self, 
+        documents: List[Dict[str, Any]], 
+        extracted_keywords: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        키워드 관련 점수를 한 번만 계산하여 캐싱
+        
+        Args:
+            documents: 문서 리스트
+            extracted_keywords: 추출된 키워드
+        
+        Returns:
+            Dict[str, Dict[str, Any]]: 문서 ID -> 키워드 점수 정보 매핑
+        """
+        keyword_cache = {}
+        for doc in documents:
+            doc_id = doc.get("id", str(id(doc)))
+            matched_keywords = doc.get("matched_keywords", [])
+            keyword_coverage = len(matched_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+            keyword_match_score = doc.get("keyword_match_score", 0.0)
+            
+            keyword_cache[doc_id] = {
+                "matched_keywords": matched_keywords,
+                "keyword_coverage": keyword_coverage,
+                "keyword_match_score": keyword_match_score
+            }
+        return keyword_cache
+    
+    def _calculate_normalization_params(
+        self, 
+        documents: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        정규화 파라미터를 한 번만 계산
+        
+        Args:
+            documents: 문서 리스트
+        
+        Returns:
+            Dict[str, Dict[str, float]]: 검색 타입별 정규화 파라미터
+        """
+        params = {}
+        
+        # 검색 타입별 그룹화
+        db_docs = []
+        vector_docs = []
+        keyword_docs = []
+        
+        for doc in documents:
+            search_type = doc.get("search_type", "unknown")
+            if search_type in ["database", "db", "fts"]:
+                db_docs.append(doc)
+            elif search_type in ["semantic", "vector", "embedding"]:
+                vector_docs.append(doc)
+            elif search_type in ["keyword", "text"]:
+                keyword_docs.append(doc)
+            else:
+                vector_docs.append(doc)  # 기본값
+        
+        # DB 검색 점수 정규화 파라미터
+        if db_docs:
+            db_scores = [d.get("relevance_score", 0.0) for d in db_docs]
+            if db_scores:
+                min_score = min(db_scores)
+                max_score = max(db_scores)
+                params["database"] = {
+                    "min": min_score,
+                    "max": max_score,
+                    "range": max_score - min_score if max_score > min_score else 1.0
+                }
+        
+        # 벡터 검색 점수 정규화 파라미터
+        if vector_docs:
+            vector_scores = [d.get("similarity", d.get("relevance_score", 0.0)) for d in vector_docs]
+            if vector_scores:
+                min_score = min(vector_scores)
+                max_score = max(vector_scores)
+                params["semantic"] = {
+                    "min": min_score,
+                    "max": max_score,
+                    "range": max_score - min_score if max_score > min_score else 1.0
+                }
+        
+        # 키워드 검색 점수 정규화 파라미터
+        if keyword_docs:
+            keyword_scores = [d.get("relevance_score", 0.0) for d in keyword_docs]
+            if keyword_scores:
+                min_score = min(keyword_scores)
+                max_score = max(keyword_scores)
+                params["keyword"] = {
+                    "min": min_score,
+                    "max": max_score,
+                    "range": max_score - min_score if max_score > min_score else 1.0
+                }
+        
+        return params
+    
+    def _precompute_similarity_matrix(
+        self, 
+        documents: List[Dict[str, Any]]
+    ) -> Dict[Tuple[str, str], float]:
+        """
+        문서 간 유사도를 한 번만 계산하여 캐싱
+        
+        Args:
+            documents: 문서 리스트
+        
+        Returns:
+            Dict[Tuple[str, str], float]: (문서 ID1, 문서 ID2) -> 유사도 매핑
+        """
+        similarity_cache = {}
+        doc_ids = [doc.get("id", str(id(doc))) for doc in documents]
+        
+        for i, doc1 in enumerate(documents):
+            id1 = doc_ids[i]
+            for j, doc2 in enumerate(documents[i+1:], i+1):
+                id2 = doc_ids[j]
+                similarity = self._calculate_doc_similarity(doc1, doc2)
+                similarity_cache[(id1, id2)] = similarity
+                similarity_cache[(id2, id1)] = similarity  # 대칭성
+        
+        return similarity_cache
+    
+    def _group_by_search_type(
+        self,
+        db_results: List[Dict[str, Any]],
+        vector_results: List[Dict[str, Any]],
+        keyword_results: List[Dict[str, Any]]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        검색 타입별로 그룹화 (한 번만 수행)
+        
+        Args:
+            db_results: DB 검색 결과
+            vector_results: 벡터 검색 결과
+            keyword_results: 키워드 검색 결과
+        
+        Returns:
+            Tuple[List, List, List]: 그룹화된 결과
+        """
+        # 검색 타입 라벨링
+        for doc in db_results:
+            doc["search_type"] = "database"
+        for doc in vector_results:
+            doc["search_type"] = "semantic"
+        for doc in keyword_results:
+            doc["search_type"] = "keyword"
+        
+        return db_results, vector_results, keyword_results
+    
+    # ==================== 최적화: 빠른 정규화 및 가중치 적용 ====================
+    
+    def _normalize_scores_fast(
+        self,
+        documents: List[Dict[str, Any]],
+        normalization_params: Dict[str, Dict[str, float]]
+    ) -> List[Dict[str, Any]]:
+        """
+        사전 계산된 파라미터를 사용한 빠른 점수 정규화
+        
+        Args:
+            documents: 정규화할 문서 리스트
+            normalization_params: 사전 계산된 정규화 파라미터
+        
+        Returns:
+            List[Dict[str, Any]]: 정규화된 문서 리스트
+        """
+        for doc in documents:
+            search_type = doc.get("search_type", "unknown")
+            
+            # 검색 타입 매핑
+            if search_type in ["database", "db", "fts"]:
+                type_key = "database"
+                original_score = doc.get("relevance_score", 0.0)
+            elif search_type in ["semantic", "vector", "embedding"]:
+                type_key = "semantic"
+                original_score = doc.get("similarity", doc.get("relevance_score", 0.0))
+            elif search_type in ["keyword", "text"]:
+                type_key = "keyword"
+                original_score = doc.get("relevance_score", 0.0)
+            else:
+                type_key = "semantic"  # 기본값
+                original_score = doc.get("relevance_score", 0.0)
+            
+            # 정규화 파라미터 사용
+            params = normalization_params.get(type_key)
+            if params and params["range"] > 0:
+                normalized_score = (original_score - params["min"]) / params["range"]
+            else:
+                normalized_score = 0.5  # 기본값
+            
+            doc["normalized_relevance_score"] = normalized_score
+            
+            # 원본 점수 저장
+            if type_key == "semantic" and "similarity" in doc:
+                doc["original_similarity"] = doc.get("similarity")
+            else:
+                doc["original_relevance_score"] = original_score
+        
+        return documents
+    
+    def _apply_dynamic_search_type_weights_fast(
+        self,
+        documents: List[Dict[str, Any]],
+        query: str = "",
+        query_type: str = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        빠른 검색 타입별 가중치 동적 조정 (이미 그룹화된 문서 사용)
+        
+        Args:
+            documents: 가중치를 적용할 문서 리스트
+            query: 검색 쿼리
+            query_type: 질문 유형
+        
+        Returns:
+            List[Dict[str, Any]]: 가중치가 적용된 문서 리스트
+        """
+        if not documents:
+            return []
+        
+        # 검색 타입별 카운트 (이미 그룹화되어 있음)
+        db_count = sum(1 for d in documents if d.get("search_type") == "database")
+        vector_count = sum(1 for d in documents if d.get("search_type") == "semantic")
+        keyword_count = sum(1 for d in documents if d.get("search_type") == "keyword")
+        total_count = len(documents)
+        
+        if total_count == 0:
+            return documents
+        
+        # 검색 타입별 가중치 동적 조정
+        if vector_count > total_count * 0.5:
+            vector_weight = 0.5
+            db_weight = 0.3
+            keyword_weight = 0.2
+        elif db_count > total_count * 0.5:
+            db_weight = 0.5
+            vector_weight = 0.3
+            keyword_weight = 0.2
+        elif keyword_count > total_count * 0.5:
+            keyword_weight = 0.5
+            vector_weight = 0.3
+            db_weight = 0.2
+        else:
+            vector_weight = 0.4
+            db_weight = 0.35
+            keyword_weight = 0.25
+        
+        self.logger.debug(
+            f"📊 [DYNAMIC WEIGHTS] 검색 타입별 가중치: "
+            f"DB={db_weight:.2f}, Vector={vector_weight:.2f}, Keyword={keyword_weight:.2f} "
+            f"(DB={db_count}, Vector={vector_count}, Keyword={keyword_count})"
+        )
+        
+        # 가중치 적용
+        for doc in documents:
+            search_type = doc.get("search_type", "semantic")
+            normalized_score = doc.get("normalized_relevance_score", doc.get("relevance_score", 0.0))
+            
+            if search_type == "database":
+                doc["search_type_weighted_score"] = normalized_score * db_weight
+            elif search_type == "semantic":
+                doc["search_type_weighted_score"] = normalized_score * vector_weight
+            elif search_type == "keyword":
+                doc["search_type_weighted_score"] = normalized_score * keyword_weight
+            else:
+                doc["search_type_weighted_score"] = normalized_score * vector_weight
+        
+        return documents
+    
+    def _apply_search_type_specific_rerank_fast(
+        self,
+        documents: List[Dict[str, Any]],
+        query: str = "",
+        extracted_keywords: List[str] = None,
+        citation_cache: Dict[str, List[str]] = None,
+        keyword_cache: Dict[str, Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        빠른 검색 타입별 특화 reranking (사전 계산된 값 사용)
+        
+        Args:
+            documents: reranking할 문서 리스트
+            query: 검색 쿼리
+            extracted_keywords: 추출된 키워드
+            citation_cache: 사전 계산된 Citation 캐시
+            keyword_cache: 사전 계산된 키워드 점수 캐시
+        
+        Returns:
+            List[Dict[str, Any]]: 특화 reranking이 적용된 문서 리스트
+        """
+        if not documents:
+            return []
+        
+        if extracted_keywords is None:
+            extracted_keywords = []
+        
+        if citation_cache is None:
+            citation_cache = {}
+        if keyword_cache is None:
+            keyword_cache = {}
+        
+        # DB 검색 특화: Citation 매칭 강조
+        for doc in documents:
+            if doc.get("search_type") == "database":
+                doc_id = doc.get("id", str(id(doc)))
+                citations = citation_cache.get(doc_id, [])
+                
+                citation_bonus = 0.0
+                if citations:
+                    # Citation 매칭 점수 계산 (캐시된 Citation 사용)
+                    citation_match_score = self._calculate_citation_match_score_fast(
+                        document=doc,
+                        query=query,
+                        extracted_keywords=extracted_keywords,
+                        cached_citations=citations
+                    )
+                    citation_bonus = citation_match_score * 0.3
+                
+                current_score = doc.get("search_type_weighted_score", 0.0)
+                doc["search_type_weighted_score"] = current_score * (1.0 + citation_bonus)
+                doc["citation_bonus"] = citation_bonus
+        
+        # 벡터 검색 특화: 키워드 매칭 강조
+        for doc in documents:
+            if doc.get("search_type") == "semantic":
+                doc_id = doc.get("id", str(id(doc)))
+                keyword_info = keyword_cache.get(doc_id, {})
+                keyword_coverage = keyword_info.get("keyword_coverage", 0.0)
+                
+                keyword_bonus = keyword_coverage * 0.2
+                current_score = doc.get("search_type_weighted_score", 0.0)
+                doc["search_type_weighted_score"] = current_score * (1.0 + keyword_bonus)
+                doc["keyword_bonus"] = keyword_bonus
+        
+        # 키워드 검색 특화: 키워드 매칭 강조
+        for doc in documents:
+            if doc.get("search_type") == "keyword":
+                doc_id = doc.get("id", str(id(doc)))
+                keyword_info = keyword_cache.get(doc_id, {})
+                keyword_match_score = keyword_info.get("keyword_match_score", 0.0)
+                
+                keyword_bonus = keyword_match_score * 0.3
+                current_score = doc.get("search_type_weighted_score", 0.0)
+                doc["search_type_weighted_score"] = current_score * (1.0 + keyword_bonus)
+                doc["keyword_bonus"] = keyword_bonus
+        
+        return documents
+    
+    def _calculate_citation_match_score_fast(
+        self,
+        document: Dict[str, Any],
+        query: str = "",
+        extracted_keywords: List[str] = None,
+        cached_citations: List[str] = None
+    ) -> float:
+        """
+        빠른 Citation 매칭 점수 계산 (캐시된 Citation 사용)
+        
+        Args:
+            document: 문서 딕셔너리
+            query: 검색 쿼리
+            extracted_keywords: 추출된 키워드
+            cached_citations: 사전 계산된 Citation 리스트
+        
+        Returns:
+            float: Citation 매칭 점수
+        """
+        import re
+        
+        if extracted_keywords is None:
+            extracted_keywords = []
+        
+        if cached_citations is None:
+            cached_citations = self._extract_citations(document)
+        
+        if not cached_citations:
+            return 0.0
+        
+        # 질문에서 법령/판례 추출
+        query_laws = re.findall(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', query)
+        query_precedents = re.findall(r'대법원.*?(\d{4}[다나마]\d+)', query)
+        
+        match_score = 0.0
+        
+        # 법령 일치도 계산
+        if query_laws:
+            for q_law, q_article in query_laws:
+                query_citation = f"{q_law} 제{q_article}조"
+                if query_citation in cached_citations:
+                    match_score += 0.5  # 정확 일치
+                elif q_law in " ".join(cached_citations):
+                    match_score += 0.2  # 법령명만 일치
+        
+        # 판례 일치도 계산
+        if query_precedents:
+            for q_precedent in query_precedents:
+                if q_precedent in " ".join(cached_citations):
+                    match_score += 0.5
+        
+        return min(1.0, match_score)
+    
+    def _calculate_unified_score_fast(
+        self,
+        doc: Dict[str, Any],
+        query: str,
+        extracted_keywords: List[str] = None,
+        citation_cache: Dict[str, List[str]] = None,
+        keyword_cache: Dict[str, Dict[str, Any]] = None
+    ) -> float:
+        """
+        빠른 통합 reranking 점수 계산 (사전 계산된 값 사용)
+        
+        Args:
+            doc: 문서 딕셔너리
+            query: 검색 쿼리
+            extracted_keywords: 추출된 키워드
+            citation_cache: 사전 계산된 Citation 캐시
+            keyword_cache: 사전 계산된 키워드 점수 캐시
+        
+        Returns:
+            float: 통합 reranking 점수
+        """
+        if extracted_keywords is None:
+            extracted_keywords = []
+        
+        if citation_cache is None:
+            citation_cache = {}
+        if keyword_cache is None:
+            keyword_cache = {}
+        
+        search_type = doc.get("search_type", "semantic")
+        doc_id = doc.get("id", str(id(doc)))
+        
+        # 1. 검색 타입별 정규화 점수 (40%)
+        # 🔥 원본 점수 우선 사용 (벡터 검색 점수 보존)
+        if search_type in ["semantic", "vector"]:
+            # 벡터 검색의 경우 원본 similarity 점수 우선 사용
+            original_score = doc.get("original_similarity") or doc.get("similarity") or doc.get("normalized_relevance_score", 0.0)
+        else:
+            # 다른 검색 타입의 경우 원본 relevance_score 우선 사용
+            original_score = doc.get("original_relevance_score") or doc.get("normalized_relevance_score") or doc.get("relevance_score", 0.0)
+        
+        # 정규화 점수가 있으면 사용, 없으면 원본 점수 사용
+        normalized_score = doc.get("normalized_relevance_score", original_score)
+        type_score = normalized_score * 0.4
+        
+        # 2. 키워드 매칭 점수 (20%) - 캐시 사용
+        keyword_info = keyword_cache.get(doc_id, {})
+        keyword_coverage = keyword_info.get("keyword_coverage", 0.0)
+        keyword_match_score = keyword_info.get("keyword_match_score", 0.0)
+        keyword_score = (keyword_coverage * 0.6 + keyword_match_score * 0.4) * 0.2
+        
+        # 3. Citation 매칭 점수 (15%) - 캐시 사용
+        citations = citation_cache.get(doc_id, [])
+        citation_score = 0.0
+        if citations:
+            citation_match_score = self._calculate_citation_match_score_fast(
+                document=doc,
+                query=query,
+                extracted_keywords=extracted_keywords,
+                cached_citations=citations
+            )
+            citation_score = citation_match_score * 0.15
+        
+        # 4. Cross-Encoder 점수 (15%)
+        cross_encoder_score = 0.0
+        if doc.get("cross_encoder_score") is not None:
+            raw_cross_encoder_score = doc.get("cross_encoder_score", 0.0)
+            
+            # 🔥 개선: 판례 문서 점수 보정 (Cross-Encoder 점수가 매우 낮은 경우)
+            doc_type = doc.get("type", "") or (doc.get("metadata", {}).get("type", "") if isinstance(doc.get("metadata"), dict) else "")
+            is_precedent = any(keyword in doc_type.lower() for keyword in ["precedent", "case", "case_paragraph", "판례"])
+            
+            # Cross-Encoder 점수가 매우 낮은 경우 (0.1 미만) 원본 점수에 더 높은 가중치 부여
+            if is_precedent and raw_cross_encoder_score < 0.1:
+                # 판례 문서의 경우 Cross-Encoder 점수 가중치를 낮춤 (원본 점수에 더 높은 가중치)
+                cross_encoder_score = raw_cross_encoder_score * 0.10  # 15% → 10%로 감소
+                self.logger.debug(
+                    f"🔧 [PRECEDENT SCORE ADJUST] 통합 점수 계산에서 판례 문서 점수 보정: "
+                    f"cross_encoder={raw_cross_encoder_score:.3f} < 0.1, "
+                    f"weight=0.10 (기본: 0.15)"
+                )
+            else:
+                cross_encoder_score = raw_cross_encoder_score * 0.15
+        
+        # 5. 다양성 점수 (10%)
+        diversity_score = doc.get("diversity_score", 0.0) * 0.1
+        
+        # 검색 타입별 가중치 조정
+        type_weights = {
+            "database": {
+                "type": 0.5,
+                "keyword": 0.15,
+                "citation": 0.25,
+                "cross_encoder": 0.1
+            },
+            "semantic": {
+                "type": 0.35,
+                "keyword": 0.25,
+                "citation": 0.15,
+                "cross_encoder": 0.25
+            },
+            "keyword": {
+                "type": 0.3,
+                "keyword": 0.4,
+                "citation": 0.1,
+                "cross_encoder": 0.2
+            }
+        }
+        
+        weights = type_weights.get(search_type, type_weights["semantic"])
+        
+        # 최종 통합 점수
+        unified_score = (
+            type_score * weights["type"] +
+            keyword_score * weights["keyword"] +
+            citation_score * weights["citation"] +
+            cross_encoder_score * weights["cross_encoder"] +
+            diversity_score
+        )
+        
+        doc["unified_rerank_score"] = unified_score
+        return unified_score
+    
+    def _rerank_by_type(
+        self,
+        docs: List[Dict[str, Any]],
+        query: str,
+        extracted_keywords: List[str],
+        citation_cache: Dict[str, Any],
+        keyword_cache: Dict[str, Any],
+        min_count: int = 1,
+        max_count: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        특정 타입의 문서들만으로 reranking 수행 (테이블별 reranking)
+        
+        Args:
+            docs: reranking할 문서 리스트 (동일한 타입)
+            query: 검색 쿼리
+            extracted_keywords: 추출된 키워드
+            citation_cache: Citation 캐시
+            keyword_cache: 키워드 점수 캐시
+            min_count: 최소 선택할 문서 수
+            max_count: 최대 선택할 문서 수
+        
+        Returns:
+            List[Dict[str, Any]]: reranking된 문서 리스트
+        """
+        if not docs:
+            return []
+        
+        # 1. 통합 점수 재계산 (해당 타입 내에서만)
+        for doc in docs:
+            unified_score = self._calculate_unified_score_fast(
+                doc,
+                query=query,
+                extracted_keywords=extracted_keywords,
+                citation_cache=citation_cache,
+                keyword_cache=keyword_cache
+            )
+            doc["final_rerank_score"] = unified_score
+        
+        # 2. 점수 기준으로 정렬
+        sorted_docs = sorted(
+            docs,
+            key=lambda x: x.get("final_rerank_score", 0.0),
+            reverse=True
+        )
+        
+        # 3. 최소/최대 개수 보장
+        selected_count = max(min_count, min(max_count, len(sorted_docs)))
+        
+        return sorted_docs[:selected_count]
+    
+    def _apply_mmr_diversity_fast(
+        self,
+        documents: List[Dict[str, Any]],
+        query: str = "",
+        lambda_score: float = 0.6,
+        top_k: int = 10,
+        similarity_matrix: Dict[Tuple[str, str], float] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        빠른 MMR 기반 다양성 적용 (사전 계산된 유사도 행렬 사용)
+        
+        Args:
+            documents: 문서 리스트
+            query: 검색 쿼리
+            lambda_score: 관련성 가중치
+            top_k: 반환할 결과 수
+            similarity_matrix: 사전 계산된 유사도 행렬
+        
+        Returns:
+            List[Dict[str, Any]]: 다양성이 적용된 문서 리스트
+        """
+        if not documents:
+            return []
+        
+        if similarity_matrix is None:
+            # 폴백: 기존 방식 사용
+            return self._apply_mmr_diversity(documents, query, lambda_score, top_k)
+        
+        selected = []
+        remaining = documents.copy()
+        
+        if not remaining:
+            return []
+        
+        # 첫 번째 결과는 가장 관련성 높은 것으로 선택
+        first_doc = max(remaining, key=lambda x: x.get("final_rerank_score", x.get("relevance_score", 0.0)))
+        selected.append(first_doc)
+        remaining.remove(first_doc)
+        
+        doc_ids = {doc.get("id", str(id(doc))): doc for doc in documents}
+        
+        while remaining and len(selected) < top_k:
+            best_score = -float('inf')
+            best_doc = None
+            
+            for candidate in remaining:
+                # 관련성 점수
+                relevance = candidate.get("final_rerank_score", candidate.get("relevance_score", 0.0))
+                
+                # 다양성 점수 (캐시된 유사도 행렬 사용)
+                max_similarity = 0.0
+                candidate_id = candidate.get("id", str(id(candidate)))
+                
+                for selected_doc in selected:
+                    selected_id = selected_doc.get("id", str(id(selected_doc)))
+                    similarity = similarity_matrix.get((candidate_id, selected_id), 0.0)
+                    max_similarity = max(max_similarity, similarity)
+                
+                diversity = 1.0 - max_similarity
+                
+                # MMR 점수
+                mmr_score = lambda_score * relevance + (1 - lambda_score) * diversity
+                
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_doc = candidate
+            
+            if best_doc:
+                selected.append(best_doc)
+                remaining.remove(best_doc)
+            else:
+                break
+        
+        return selected
+    
+    # ==================== 최적화된 통합 파이프라인 ====================
+    
+    def integrated_rerank_pipeline(
+        self,
+        db_results: List[Dict[str, Any]],
+        vector_results: List[Dict[str, Any]],
+        keyword_results: List[Dict[str, Any]],
+        query: str,
+        query_type: str = "",
+        extracted_keywords: List[str] = None,
+        top_k: int = 20,
+        search_quality: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        최적화된 통합 Reranking 파이프라인
+        
+        모든 개선 사항을 통합한 새로운 reranking 파이프라인 (성능 최적화 적용)
+        
+        단계:
+        1. 검색 타입별 그룹화 (한 번만)
+        2. 사전 계산 (Citation, 키워드, 정규화 파라미터, 유사도 행렬)
+        3. 검색 타입별 점수 정규화 (사전 계산된 파라미터 사용)
+        4. 검색 타입별 가중치 동적 조정
+        5. 검색 타입별 특화 reranking (사전 계산된 값 사용)
+        6. Cross-Encoder 재랭킹
+        7. 통합 점수 계산 및 최종 정렬 (사전 계산된 값 사용)
+        8. 다양성 보장 (MMR, 사전 계산된 유사도 행렬 사용)
+        
+        Args:
+            db_results: DB 검색 결과
+            vector_results: 벡터 검색 결과
+            keyword_results: 키워드 검색 결과
+            query: 검색 쿼리
+            query_type: 질문 유형
+            extracted_keywords: 추출된 키워드
+            top_k: 반환할 최대 문서 수
+            search_quality: 검색 품질 점수
+        
+        Returns:
+            List[Dict[str, Any]]: 통합 reranking된 문서 리스트
+        """
+        import time
+        start_time = time.time()
+        
+        if not db_results and not vector_results and not keyword_results:
+            return []
+        
+        if extracted_keywords is None:
+            extracted_keywords = []
+        
+        # 🔥 개선: 입력 문서들의 doc_id를 사전에 정규화 (방어적 접근)
+        all_input_docs = db_results + vector_results + keyword_results
+        for doc in all_input_docs:
+            if isinstance(doc, dict):
+                # doc_id 필드들을 문자열로 정규화
+                for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                    if id_field in doc and doc[id_field] is not None:
+                        if isinstance(doc[id_field], int):
+                            doc[id_field] = str(doc[id_field])
+                        elif not isinstance(doc[id_field], str):
+                            doc[id_field] = str(doc[id_field])
+                
+                # metadata 내부의 doc_id도 정규화
+                if isinstance(doc.get('metadata'), dict):
+                    for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                        if id_field in doc['metadata'] and doc['metadata'][id_field] is not None:
+                            if isinstance(doc['metadata'][id_field], int):
+                                doc['metadata'][id_field] = str(doc['metadata'][id_field])
+                            elif not isinstance(doc['metadata'][id_field], str):
+                                doc['metadata'][id_field] = str(doc['metadata'][id_field])
+        
+        # 🔥 성능 최적화: 작은 문서 수일 때 통합 reranking 스킵
+        total_docs = len(db_results) + len(vector_results) + len(keyword_results)
+        
+        # 🔥 개선: 타입별 다양성이 필요한 경우에는 스킵하지 않음
+        # 법령 질의(query_type == "law_inquiry")인 경우 법령과 판례가 각각 필요하므로 스킵하지 않음
+        all_docs_preview = db_results + vector_results + keyword_results
+        doc_types = set()
+        for doc in all_docs_preview:
+            doc_type = doc.get("type", "") or (doc.get("metadata", {}).get("type", "") if isinstance(doc.get("metadata"), dict) else "")
+            if doc_type:
+                doc_types.add(doc_type.lower())
+        
+        # 법령 질의인 경우 무조건 통합 reranking 수행 (타입별 다양성 보장을 위해)
+        # 통합 reranking이 호출되기 전 단계에서 이미 타입이 필터링되었을 수 있으므로,
+        # 법령 질의인 경우에는 타입 다양성과 무관하게 통합 reranking 수행
+        needs_type_diversity = (
+            query_type == "law_inquiry"
+        )
+        
+        # 문서가 5개 이하이고 품질이 높고 타입별 다양성이 필요하지 않으면 간단한 병합만 수행
+        if total_docs <= 5 and search_quality >= 0.7 and not needs_type_diversity:
+            self.logger.info(
+                f"⚡ [PERFORMANCE] 통합 reranking 스킵 (문서 수 적음: {total_docs}개, "
+                f"품질: {search_quality:.2f}, 타입 다양성 불필요). 간단한 병합만 수행."
+            )
+            # 간단한 병합 및 정렬만 수행
+            all_docs = db_results + vector_results + keyword_results
+            
+            # 🔥 메타데이터 보존: 통합 reranking 스킵 시에도 메타데이터 복원
+            # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_documents_type
+            
+            all_docs = normalize_documents_type(all_docs)
+            
+            for doc in all_docs:
+                if not isinstance(doc, dict):
+                    continue
+                
+                # metadata에서 최상위 필드로 복원
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    for key in ["statute_name", "law_name", "article_no", 
+                               "article_number", "case_id", "court", "ccourt", "doc_id", 
+                               "casenames", "precedent_id", "id", "chunk_id", "document_id", "source_id"]:
+                        if metadata.get(key) and key not in doc:
+                            doc[key] = metadata[key]
+                
+                # 최상위 필드를 metadata에도 저장 (일관성 유지)
+                if "metadata" not in doc:
+                    doc["metadata"] = {}
+                if not isinstance(doc["metadata"], dict):
+                    doc["metadata"] = {}
+                
+                for key in ["type", "statute_name", "law_name", "article_no",
+                           "article_number", "case_id", "court", "ccourt", "doc_id",
+                           "casenames", "precedent_id"]:
+                    if doc.get(key) and not doc["metadata"].get(key):
+                        doc["metadata"][key] = doc.get(key)
+            
+            # 🔥 개선: 타입별 다양성 보장 (법령 질의인 경우)
+            if query_type == "law_inquiry":
+                # 법령과 판례를 각각 분리
+                statute_docs = [doc for doc in all_docs if "statute" in doc.get("type", "").lower()]
+                precedent_docs = [doc for doc in all_docs if "precedent" in doc.get("type", "").lower() or "case" in doc.get("type", "").lower()]
+                other_docs = [doc for doc in all_docs if doc not in statute_docs and doc not in precedent_docs]
+                
+                # 타입별로 점수 기준 정렬
+                statute_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                precedent_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                other_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                
+                # 타입별 최소 보장: 법령 최소 1개, 판례 최소 1개
+                sorted_docs = []
+                if statute_docs:
+                    sorted_docs.append(statute_docs[0])  # 최소 1개 법령
+                if precedent_docs:
+                    sorted_docs.append(precedent_docs[0])  # 최소 1개 판례
+                
+                # 나머지는 점수 순으로 추가
+                remaining_slots = top_k - len(sorted_docs)
+                remaining_docs = []
+                if len(statute_docs) > 1:
+                    remaining_docs.extend(statute_docs[1:])
+                if len(precedent_docs) > 1:
+                    remaining_docs.extend(precedent_docs[1:])
+                remaining_docs.extend(other_docs)
+                
+                remaining_docs.sort(
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+                sorted_docs.extend(remaining_docs[:remaining_slots])
+            else:
+                # 일반적인 경우 점수 기준으로 정렬
+                sorted_docs = sorted(
+                    all_docs,
+                    key=lambda x: (
+                        x.get("score", 0) or 
+                        x.get("relevance_score", 0) or 
+                        x.get("similarity", 0) or 
+                        0
+                    ),
+                    reverse=True
+                )
+            
+            # top_k만큼 반환
+            return sorted_docs[:top_k]
+        
+        # 1. 검색 타입별 그룹화 (한 번만 수행)
+        db_results, vector_results, keyword_results = self._group_by_search_type(
+            db_results, vector_results, keyword_results
+        )
+        
+        # 2. 모든 결과 통합
+        all_docs = db_results + vector_results + keyword_results
+        
+        # 🔥 CRITICAL: 메타데이터 백업 전 타입 정보 보존 강화
+        # 타입이 없거나 unknown이면 DocumentType.from_metadata로 재추론 시도
+        from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+        for doc in all_docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            # 타입이 없거나 unknown이면 재추론 시도
+            current_type = doc.get("type", "").lower() if doc.get("type") else ""
+            if not doc.get("type") or current_type == "unknown":
+                try:
+                    doc_type_enum = DocumentType.from_metadata(doc)
+                    if doc_type_enum != DocumentType.UNKNOWN:
+                        doc["type"] = doc_type_enum.value
+                        # metadata에도 저장
+                        if "metadata" not in doc:
+                            doc["metadata"] = {}
+                        if not isinstance(doc["metadata"], dict):
+                            doc["metadata"] = {}
+                        doc["metadata"]["type"] = doc_type_enum.value
+                        doc["metadata"]["source_type"] = doc_type_enum.value
+                        # 🔥 개선: doc_id 타입 안전 처리
+                        doc_id_for_log = doc.get('id', 'unknown')
+                        if doc_id_for_log and doc_id_for_log != 'unknown':
+                            doc_id_str = str(doc_id_for_log) if not isinstance(doc_id_for_log, str) else doc_id_for_log
+                            doc_id_display = doc_id_str[:20] if len(doc_id_str) > 20 else doc_id_str
+                        else:
+                            doc_id_display = 'unknown'
+                        self.logger.debug(
+                            f"🔍 [TYPE PRESERVATION] 백업 전 타입 재추론 성공: "
+                            f"doc_id={doc_id_display}, "
+                            f"type={doc_type_enum.value}"
+                        )
+                except Exception as e:
+                    self.logger.debug(f"🔍 [TYPE PRESERVATION] 타입 재추론 실패: {e}")
+        
+        # 🔥 개선: 메타데이터 백업 (파이프라인 시작 시)
+        # 재랭킹 과정에서 메타데이터가 손실되지 않도록 백업
+        metadata_backup = {}
+        for doc in all_docs:
+            # 고유 ID 생성 (여러 필드 조합으로 안정적인 ID 생성)
+            # 🔥 개선: doc_id를 항상 문자열로 정규화 (딕셔너리 키 및 슬라이싱 안전성 보장)
+            raw_doc_id = (
+                doc.get("id") or 
+                doc.get("chunk_id") or 
+                doc.get("document_id") or
+                None
+            )
+            
+            if raw_doc_id is not None:
+                # 정수인 경우 문자열로 변환
+                if isinstance(raw_doc_id, int):
+                    doc_id = str(raw_doc_id)
+                elif not isinstance(raw_doc_id, str):
+                    doc_id = str(raw_doc_id)
+                else:
+                    doc_id = raw_doc_id
+            else:
+                # 해시 기반 ID 생성 (이미 문자열)
+                doc_id = str(hash(str(doc.get("text", "")) + str(doc.get("content", "")) + str(doc.get("source", ""))))
+            
+            if doc_id:
+                # 메타데이터 딕셔너리 백업 (deep copy)
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata_backup[doc_id] = {
+                        "metadata": metadata.copy(),
+                        # 최상위 필드 백업
+                        "type": doc.get("type"),
+                        "statute_name": doc.get("statute_name"),
+                        "law_name": doc.get("law_name"),
+                        "article_no": doc.get("article_no"),
+                        "article_number": doc.get("article_number"),
+                        "clause_no": doc.get("clause_no"),
+                        "item_no": doc.get("item_no"),
+                        "case_id": doc.get("case_id"),
+                        "court": doc.get("court"),
+                        "ccourt": doc.get("ccourt"),
+                        "doc_id": doc.get("doc_id"),
+                        "casenames": doc.get("casenames"),
+                        "precedent_id": doc.get("precedent_id"),
+                        "source": doc.get("source"),
+                        "source_description": doc.get("source_description"),
+                        "source_url": doc.get("source_url"),
+                        "text": doc.get("text"),
+                        "content": doc.get("content"),
+                    }
+                else:
+                    # metadata가 dict가 아닌 경우에도 최상위 필드만 백업
+                    metadata_backup[doc_id] = {
+                        "metadata": {},
+                        "type": doc.get("type"),
+                        "statute_name": doc.get("statute_name"),
+                        "law_name": doc.get("law_name"),
+                        "article_no": doc.get("article_no"),
+                        "case_id": doc.get("case_id"),
+                        "court": doc.get("court"),
+                        "doc_id": doc.get("doc_id"),
+                        "casenames": doc.get("casenames"),
+                        "precedent_id": doc.get("precedent_id"),
+                    }
+        
+        # 🔍 로깅: 백업 시점의 메타데이터 상태 확인
+        backup_type_count = sum(1 for backup in metadata_backup.values() if backup.get("type"))
+        backup_metadata_type_count = sum(
+            1 for backup in metadata_backup.values() 
+            if isinstance(backup.get("metadata"), dict) and 
+            backup.get("metadata").get("type")
+        )
+        self.logger.info(
+            f"🔍 [METADATA BACKUP] {len(metadata_backup)}개 문서의 메타데이터 백업 완료 "
+            f"(타입 정보: 최상위={backup_type_count}개, metadata={backup_metadata_type_count}개)"
+        )
+        
+        # 샘플 백업 메타데이터 로깅 (처음 2개만)
+        sample_backups = list(metadata_backup.items())[:2]
+        for doc_id, backup in sample_backups:
+            # 🔥 개선: doc_id가 정수인 경우 문자열로 변환
+            doc_id_str = str(doc_id) if not isinstance(doc_id, str) else doc_id
+            # 🔥 개선: doc_id_str이 이미 문자열인지 확인
+            if isinstance(doc_id_str, str):
+                doc_id_display = doc_id_str[:20] + "..." if len(doc_id_str) > 20 else doc_id_str
+            else:
+                doc_id_str_safe = str(doc_id_str) if doc_id_str else 'unknown'
+                doc_id_display = doc_id_str_safe[:20] + "..." if len(doc_id_str_safe) > 20 else doc_id_str_safe
+            self.logger.info(
+                f"🔍 [METADATA BACKUP SAMPLE] Doc ID={doc_id_display}: "
+                f"type={backup.get('type')}, "
+                f"metadata_type={backup.get('metadata', {}).get('type') if isinstance(backup.get('metadata'), dict) else 'N/A'}, "
+                f"has_statute_fields={bool(backup.get('statute_name') or backup.get('law_name') or backup.get('article_no'))}, "
+                f"has_case_fields={bool(backup.get('case_id') or backup.get('court') or backup.get('doc_id'))}"
+            )
+        
+        # 3. 🔥 최적화: 모든 사전 계산을 한 번에 수행
+        precomputed = {
+            "citations": self._precompute_citations(all_docs),
+            "keyword_scores": self._precompute_keyword_scores(all_docs, extracted_keywords),
+            "normalization_params": self._calculate_normalization_params(all_docs),
+            "similarity_matrix": {}  # MMR 사용 시에만 계산
+        }
+        
+        # MMR 사용 여부 결정 (문서 수가 많을 때만)
+        use_mmr = len(all_docs) > 10
+        if use_mmr:
+            precomputed["similarity_matrix"] = self._precompute_similarity_matrix(all_docs)
+        
+        # 4. 검색 타입별 점수 정규화 (사전 계산된 파라미터 사용)
+        normalized_docs = self._normalize_scores_fast(
+            all_docs,
+            precomputed["normalization_params"]
+        )
+        
+        # 5. 검색 타입별 가중치 동적 조정
+        weighted_docs = self._apply_dynamic_search_type_weights_fast(
+            normalized_docs,
+            query=query,
+            query_type=query_type
+        )
+        
+        # 6. 검색 타입별 특화 reranking (사전 계산된 값 사용)
+        specialized_docs = self._apply_search_type_specific_rerank_fast(
+            weighted_docs,
+            query=query,
+            extracted_keywords=extracted_keywords,
+            citation_cache=precomputed["citations"],
+            keyword_cache=precomputed["keyword_scores"]
+        )
+        
+        # 7. Cross-Encoder 재랭킹 (품질이 낮을 때만)
+        # 기존 multi_stage_rerank의 Cross-Encoder 로직 사용
+        cross_encoder_docs = specialized_docs
+        if search_quality < 0.85 and self.use_cross_encoder and query:
+            # Cross-Encoder 지연 로딩
+            if self._ensure_cross_encoder_loaded() and self.cross_encoder:
+                try:
+                    # 상위 후보만 Cross-Encoder 재랭킹
+                    rerank_candidates = specialized_docs[:min(top_k * 2, len(specialized_docs))]
+                    
+                    # 쿼리-문서 쌍 생성
+                    pairs = []
+                    for doc in rerank_candidates:
+                        # 🔥 개선: 텍스트 전처리 (HTML 태그 제거, 텍스트 정리, 길이 제한)
+                        raw_text = doc.get("text") or doc.get("content", "")
+                        text = self._preprocess_text_for_cross_encoder(raw_text, max_length=512)
+                        if text:  # 전처리 후에도 텍스트가 있으면 추가
+                            pairs.append([query, text])
+                    
+                    if pairs:
+                        # Cross-Encoder 점수 계산
+                        scores = self.cross_encoder.predict(
+                            pairs,
+                            batch_size=min(32, len(pairs)),
+                            show_progress_bar=False
+                        )
+                        
+                        # Cross-Encoder 점수 정규화 (0-1 범위로 정규화하여 기존 점수와 스케일 일치)
+                        if SKLEARN_AVAILABLE and len(scores) > 1:
+                            scores_array = np.array([float(s) for s in scores])
+                            min_score = scores_array.min()
+                            max_score = scores_array.max()
+                            if max_score > min_score:
+                                # Min-Max 정규화 (0-1 범위)
+                                normalized_scores = (scores_array - min_score) / (max_score - min_score)
+                            else:
+                                normalized_scores = scores_array
+                            scores = normalized_scores.tolist()
+                        
+                        # 점수 추가 및 판례 문서 점수 보정
+                        for i, doc in enumerate(rerank_candidates):
+                            if i < len(scores):
+                                raw_cross_encoder_score = float(scores[i])
+                                
+                                # 🔥 개선: 판례 문서 점수 보정 (Cross-Encoder 점수가 매우 낮은 경우)
+                                doc_type = doc.get("type", "") or (doc.get("metadata", {}).get("type", "") if isinstance(doc.get("metadata"), dict) else "")
+                                is_precedent = any(keyword in doc_type.lower() for keyword in ["precedent", "case", "case_paragraph", "판례"])
+                                
+                                # Cross-Encoder 점수가 매우 낮은 경우 (0.1 미만) 원본 점수에 더 높은 가중치 부여
+                                if is_precedent and raw_cross_encoder_score < 0.1:
+                                    # 판례 문서의 경우 Cross-Encoder 점수를 약간 보정 (최소 0.05로 설정)
+                                    adjusted_score = max(0.05, raw_cross_encoder_score * 1.5)
+                                    doc["cross_encoder_score"] = min(1.0, adjusted_score)
+                                    doc["cross_encoder_score_original"] = raw_cross_encoder_score  # 원본 점수 저장
+                                    self.logger.debug(
+                                        f"🔧 [PRECEDENT SCORE ADJUST] 통합 파이프라인에서 판례 문서 점수 보정: "
+                                        f"cross_encoder={raw_cross_encoder_score:.3f} < 0.1, "
+                                        f"adjusted={doc['cross_encoder_score']:.3f}"
+                                    )
+                                else:
+                                    doc["cross_encoder_score"] = raw_cross_encoder_score
+                        
+                        # Cross-Encoder 점수로 정렬
+                        rerank_candidates.sort(
+                            key=lambda x: x.get("cross_encoder_score", 0.0),
+                            reverse=True
+                        )
+                        
+                        # 나머지 문서와 합치기
+                        # 🔥 개선: 딕셔너리 객체 비교 대신 ID 기반 비교로 변경
+                        rerank_candidate_ids = {doc.get("id") or doc.get("chunk_id") or str(id(doc)) for doc in rerank_candidates}
+                        remaining = [d for d in specialized_docs if (d.get("id") or d.get("chunk_id") or str(id(d))) not in rerank_candidate_ids]
+                        cross_encoder_docs = rerank_candidates + remaining
+                except Exception as e:
+                    self.logger.warning(f"Cross-Encoder reranking failed: {e}")
+                    cross_encoder_docs = specialized_docs
+        
+        # 8. 통합 점수 계산 (사전 계산된 값 사용)
+        for doc in cross_encoder_docs:
+            unified_score = self._calculate_unified_score_fast(
+                doc,
+                query=query,
+                extracted_keywords=extracted_keywords,
+                citation_cache=precomputed["citations"],
+                keyword_cache=precomputed["keyword_scores"]
+            )
+            doc["final_rerank_score"] = unified_score
+        
+        # 🔥 개선: 문서 타입별(테이블별) reranking (law_inquiry인 경우)
+        if query_type == "law_inquiry":
+            # 문서 타입별로 분리
+            statute_docs = []
+            precedent_docs = []
+            other_docs = []
+            
+            for doc in cross_encoder_docs:
+                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                if not doc_type:
+                    # metadata에서 타입 확인
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        doc_type = metadata.get("type", "").lower() if metadata.get("type") else ""
+                
+                if "statute" in doc_type or "법령" in doc_type:
+                    statute_docs.append(doc)
+                elif "precedent" in doc_type or "판례" in doc_type or "case" in doc_type:
+                    precedent_docs.append(doc)
+                else:
+                    other_docs.append(doc)
+            
+            self.logger.info(
+                f"🔍 [TYPE-BASED RERANK] 문서 타입별 분리: "
+                f"법령={len(statute_docs)}개, 판례={len(precedent_docs)}개, 기타={len(other_docs)}개"
+            )
+            
+            # 각 타입별로 독립적으로 reranking 수행
+            reranked_by_type = []
+            
+            # 1. 법령 문서 reranking (최소 1개 보장)
+            if statute_docs:
+                statute_reranked = self._rerank_by_type(
+                    statute_docs,
+                    query=query,
+                    extracted_keywords=extracted_keywords,
+                    citation_cache=precomputed["citations"],
+                    keyword_cache=precomputed["keyword_scores"],
+                    min_count=1,  # 최소 1개 보장
+                    max_count=max(1, top_k // 2)  # 최대 top_k의 절반
+                )
+                reranked_by_type.extend(statute_reranked)
+                self.logger.info(
+                    f"✅ [TYPE-BASED RERANK] 법령 문서 reranking 완료: "
+                    f"{len(statute_reranked)}개 선택됨 (전체 {len(statute_docs)}개 중)"
+                )
+            
+            # 2. 판례 문서 reranking (최소 1개 보장)
+            if precedent_docs:
+                precedent_reranked = self._rerank_by_type(
+                    precedent_docs,
+                    query=query,
+                    extracted_keywords=extracted_keywords,
+                    citation_cache=precomputed["citations"],
+                    keyword_cache=precomputed["keyword_scores"],
+                    min_count=1,  # 최소 1개 보장
+                    max_count=max(1, top_k // 2)  # 최대 top_k의 절반
+                )
+                reranked_by_type.extend(precedent_reranked)
+                self.logger.info(
+                    f"✅ [TYPE-BASED RERANK] 판례 문서 reranking 완료: "
+                    f"{len(precedent_reranked)}개 선택됨 (전체 {len(precedent_docs)}개 중)"
+                )
+            
+            # 3. 기타 문서는 점수 순으로 추가 (남은 슬롯만큼)
+            remaining_slots = top_k - len(reranked_by_type)
+            if remaining_slots > 0 and other_docs:
+                other_docs_sorted = sorted(
+                    other_docs,
+                    key=lambda x: x.get("final_rerank_score", 0.0),
+                    reverse=True
+                )
+                reranked_by_type.extend(other_docs_sorted[:remaining_slots])
+            
+            # 타입별 reranking 결과를 최종 문서로 사용
+            final_docs = reranked_by_type
+            # 🔥 개선: 타입별 reranking 후에는 MMR 다양성 보장 스킵 (이미 타입별로 분리되어 있음)
+            use_mmr = False
+        else:
+            # 일반적인 경우 기존 로직 사용
+            # 9. 최종 정렬
+            final_docs = sorted(
+                cross_encoder_docs,
+                key=lambda x: x.get("final_rerank_score", 0.0),
+                reverse=True
+            )
+        
+        # 10. 다양성 보장 (MMR, 사전 계산된 유사도 행렬 사용)
+        # 🔥 개선: 타입별 reranking 후에는 MMR 스킵 (이미 타입별로 분리되어 있음)
+        if use_mmr:
+            diverse_docs = self._apply_mmr_diversity_fast(
+                final_docs,
+                query=query,
+                lambda_score=0.6,
+                top_k=top_k,
+                similarity_matrix=precomputed["similarity_matrix"]
+            )
+        else:
+            diverse_docs = final_docs[:top_k]
+        
+        # 🔥 개선: 최종 반환 전 메타데이터 복원
+        restored_count = 0
+        not_found_ids = []
+        
+        for doc in diverse_docs:
+            # 고유 ID 생성 (백업 시와 동일한 방식)
+            # 🔥 개선: doc_id를 항상 문자열로 정규화 (백업 시와 동일한 방식)
+            raw_doc_id = (
+                doc.get("id") or 
+                doc.get("chunk_id") or 
+                doc.get("document_id") or
+                None
+            )
+            
+            if raw_doc_id is not None:
+                # 정수인 경우 문자열로 변환
+                if isinstance(raw_doc_id, int):
+                    doc_id = str(raw_doc_id)
+                elif not isinstance(raw_doc_id, str):
+                    doc_id = str(raw_doc_id)
+                else:
+                    doc_id = raw_doc_id
+            else:
+                # 해시 기반 ID 생성 (이미 문자열)
+                doc_id = str(hash(str(doc.get("text", "")) + str(doc.get("content", "")) + str(doc.get("source", ""))))
+            
+            if doc_id and doc_id in metadata_backup:
+                backup = metadata_backup[doc_id]
+                restored_count += 1
+                
+                # metadata 복원
+                if not isinstance(doc.get("metadata"), dict):
+                    doc["metadata"] = {}
+                # 백업된 metadata 병합 (기존 값 보존하면서 백업 값으로 보완)
+                if isinstance(backup.get("metadata"), dict):
+                    # 백업된 metadata로 완전히 교체 (재랭킹 과정에서 손실된 메타데이터 복원)
+                    doc["metadata"].update(backup["metadata"])
+                
+                # 최상위 필드 복원 (백업된 값이 있으면 우선 적용)
+                # 🔥 개선: type 필드를 우선적으로 복원
+                for key in ["type", "statute_name", "law_name", "article_no", 
+                           "article_number", "clause_no", "item_no", "case_id", "court", 
+                           "ccourt", "doc_id", "casenames", "precedent_id", "source", 
+                           "source_description", "source_url"]:
+                    if backup.get(key) is not None:  # None이 아닌 경우에만 복원
+                        doc[key] = backup[key]
+                
+                # 🔥 개선: type이 unknown이면 재추론 시도
+                if doc.get("type", "").lower() == "unknown" or not doc.get("type"):
+                    try:
+                        from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                        doc_type_enum = DocumentType.from_metadata(doc)
+                        if doc_type_enum != DocumentType.UNKNOWN:
+                            doc["type"] = doc_type_enum.value
+                            # 🔥 개선: doc_id가 정수인 경우 문자열로 변환
+                            doc_id_str = str(doc_id) if doc_id else 'unknown'
+                            if isinstance(doc_id_str, str):
+                                doc_id_display = doc_id_str[:20] if len(doc_id_str) > 20 else doc_id_str
+                            else:
+                                doc_id_str_safe = str(doc_id_str) if doc_id_str else 'unknown'
+                                doc_id_display = doc_id_str_safe[:20] if len(doc_id_str_safe) > 20 else doc_id_str_safe
+                            self.logger.debug(
+                                f"🔍 [TYPE RESTORE] 복원 후 타입 재추론 성공: "
+                                f"doc_id={doc_id_display}, "
+                                f"type={doc_type_enum.value}"
+                            )
+                    except Exception as e:
+                        self.logger.debug(f"🔍 [TYPE RESTORE] 타입 재추론 실패: {e}")
+                
+                # 복원된 최상위 필드를 metadata에도 복사 (일관성 유지)
+                if isinstance(doc.get("metadata"), dict):
+                    for key in ["type", "statute_name", "law_name", "article_no", 
+                               "article_number", "clause_no", "item_no", "case_id", "court", 
+                               "ccourt", "doc_id", "casenames", "precedent_id"]:
+                        if doc.get(key) is not None and key not in doc["metadata"]:
+                            doc["metadata"][key] = doc[key]
+            else:
+                # ID 매칭 실패 시 대체 방법 시도 (text/content 기반 매칭)
+                if doc_id:
+                    not_found_ids.append(doc_id)
+                
+                # text나 content로 백업 찾기 시도
+                doc_text = doc.get("text") or doc.get("content", "")
+                if doc_text:
+                    for backup_id, backup in metadata_backup.items():
+                        backup_text = backup.get("text") or backup.get("content", "")
+                        if backup_text and doc_text[:100] == backup_text[:100]:  # 처음 100자로 매칭
+                            restored_count += 1
+                            # 메타데이터 복원 (위와 동일한 로직)
+                            if not isinstance(doc.get("metadata"), dict):
+                                doc["metadata"] = {}
+                            if isinstance(backup.get("metadata"), dict):
+                                doc["metadata"].update(backup["metadata"])
+                            
+                            for key in ["type", "statute_name", "law_name", "article_no", 
+                                       "case_id", "court", "doc_id", "casenames", "precedent_id"]:
+                                if backup.get(key) is not None:
+                                    doc[key] = backup[key]
+                            
+                            # 🔥 개선: type이 unknown이면 재추론 시도
+                            if doc.get("type", "").lower() == "unknown" or not doc.get("type"):
+                                try:
+                                    from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+                                    doc_type_enum = DocumentType.from_metadata(doc)
+                                    if doc_type_enum != DocumentType.UNKNOWN:
+                                        doc["type"] = doc_type_enum.value
+                                        # 🔥 개선: doc_id 타입 안전 처리
+                                        if doc_id:
+                                            doc_id_str_safe = str(doc_id) if not isinstance(doc_id, str) else doc_id
+                                            doc_id_display = doc_id_str_safe[:20] if len(doc_id_str_safe) > 20 else doc_id_str_safe
+                                        else:
+                                            doc_id_display = 'unknown'
+                                        self.logger.debug(
+                                            f"🔍 [TYPE RESTORE] 대체 방법으로 복원 후 타입 재추론 성공: "
+                                            f"doc_id={doc_id_display}, "
+                                            f"type={doc_type_enum.value}"
+                                        )
+                                except Exception as e:
+                                    self.logger.debug(f"🔍 [TYPE RESTORE] 타입 재추론 실패: {e}")
+                            
+                            if isinstance(doc.get("metadata"), dict):
+                                for key in ["type", "statute_name", "law_name", "article_no", 
+                                           "case_id", "court", "doc_id", "casenames", "precedent_id"]:
+                                    if doc.get(key) is not None and key not in doc["metadata"]:
+                                        doc["metadata"][key] = doc[key]
+                            break
+        
+        if not_found_ids:
+            self.logger.warning(
+                f"⚠️ [METADATA RESTORE] {len(not_found_ids)}개 문서의 ID 매칭 실패 (대체 방법 시도)"
+            )
+        
+        # 🔍 로깅: 복원 후 메타데이터 상태 확인
+        restored_type_count = sum(1 for doc in diverse_docs if doc.get("type"))
+        restored_metadata_type_count = sum(
+            1 for doc in diverse_docs 
+            if isinstance(doc.get("metadata"), dict) and 
+            doc.get("metadata").get("type")
+        )
+        self.logger.info(
+            f"✅ [METADATA RESTORE] {restored_count}/{len(diverse_docs)}개 문서의 메타데이터 복원 완료 "
+            f"(복원 후 타입 정보: 최상위={restored_type_count}개, metadata={restored_metadata_type_count}개)"
+        )
+        
+        # 샘플 복원 메타데이터 로깅 (처음 2개만)
+        sample_restored = diverse_docs[:2]
+        for idx, doc in enumerate(sample_restored, 1):
+            self.logger.info(
+                f"🔍 [METADATA RESTORE SAMPLE] Doc {idx}: "
+                f"type={doc.get('type')}, "
+                f"metadata_type={doc.get('metadata', {}).get('type') if isinstance(doc.get('metadata'), dict) else 'N/A'}, "
+                f"has_statute_fields={bool(doc.get('statute_name') or doc.get('law_name') or doc.get('article_no'))}, "
+                f"has_case_fields={bool(doc.get('case_id') or doc.get('court') or doc.get('doc_id'))}"
+            )
+        
+        # 🔥 개선: 반환 전 모든 문서의 doc_id를 문자열로 정규화 (타입 안전 처리)
+        for doc in diverse_docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            # doc_id 필드들을 모두 문자열로 변환
+            for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                if id_field in doc and doc[id_field] is not None:
+                    if isinstance(doc[id_field], int):
+                        doc[id_field] = str(doc[id_field])
+                    elif not isinstance(doc[id_field], str):
+                        doc[id_field] = str(doc[id_field])
+            
+            # metadata 내부의 doc_id도 정규화
+            if isinstance(doc.get('metadata'), dict):
+                for id_field in ['id', 'doc_id', 'chunk_id', 'document_id']:
+                    if id_field in doc['metadata'] and doc['metadata'][id_field] is not None:
+                        if isinstance(doc['metadata'][id_field], int):
+                            doc['metadata'][id_field] = str(doc['metadata'][id_field])
+                        elif not isinstance(doc['metadata'][id_field], str):
+                            doc['metadata'][id_field] = str(doc['metadata'][id_field])
+        
+        elapsed_time = time.time() - start_time
+        self.logger.info(
+            f"✅ [INTEGRATED RERANK] 통합 reranking 완료: "
+            f"{len(diverse_docs)}개 문서 (DB={len(db_results)}, "
+            f"Vector={len(vector_results)}, Keyword={len(keyword_results)}, "
+            f"시간={elapsed_time:.3f}초, 메타데이터 복원={restored_count}개)"
+        )
+        
+        return diverse_docs
 
 
 # 기본 인스턴스 생성

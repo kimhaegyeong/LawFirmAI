@@ -6,8 +6,12 @@
 import re
 from typing import Dict, Any, List, Optional
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SourceValidator:
@@ -35,7 +39,7 @@ class SourceValidator:
     ]
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def validate_source(self, source_type: str, source_data: Dict[str, Any]) -> Dict[str, Any]:
         """

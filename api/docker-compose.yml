@@ -12,7 +12,15 @@ services:
       - API_PORT=8000
       - DEBUG=true
       - CORS_ORIGINS=*
-      - DATABASE_URL=sqlite:///./data/api_sessions.db
+      # 데이터베이스 설정: DATABASE_URL을 직접 설정하거나 POSTGRES_* 환경변수 조합 사용
+      # 방법 1: DATABASE_URL 직접 설정
+      # - DATABASE_URL=postgresql://lawfirmai:lawfirmai@postgres:5432/lawfirmai
+      # 방법 2: POSTGRES_* 환경변수 조합 (DATABASE_URL이 없을 때 자동 생성)
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=lawfirmai
+      - POSTGRES_USER=lawfirmai
+      - POSTGRES_PASSWORD=lawfirmai
       - LANGGRAPH_ENABLED=true
     volumes:
       - ../data:/app/data

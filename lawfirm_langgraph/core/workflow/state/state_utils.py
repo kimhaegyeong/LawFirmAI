@@ -5,9 +5,15 @@ LegalWorkflowState 최적화를 위한 유틸리티 함수들
 """
 
 import logging
+
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Configuration constants
 MAX_RETRIEVED_DOCS = 10

@@ -7,9 +7,18 @@
 import logging
 from typing import Any, Dict, Optional
 
-from core.agents.prompt_chain_executor import PromptChainExecutor
-from core.agents.parsers.response_parsers import AnswerParser, ClassificationParser
-from core.agents.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.generation.builders.prompt_chain_executor import PromptChainExecutor
+except ImportError:
+    from core.generation.builders.prompt_chain_executor import PromptChainExecutor
+try:
+    from lawfirm_langgraph.core.agents.parsers.response_parsers import AnswerParser, ClassificationParser
+except ImportError:
+    from core.agents.parsers.response_parsers import AnswerParser, ClassificationParser
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class DirectAnswerHandler:

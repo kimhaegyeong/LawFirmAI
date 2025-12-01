@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sqlite3
 import json
 from typing import Dict, Any, List, Optional
@@ -12,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 import statistics
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FeedbackCollector:
@@ -20,14 +24,38 @@ class FeedbackCollector:
     
     def __init__(self, feedback_db_path: str = "./data/feedback.db"):
         self.feedback_db_path = feedback_db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
+        # 연결 풀 초기화 (필수)
+        try:
+            from core.data.connection_pool import get_connection_pool
+            self._connection_pool = get_connection_pool(self.feedback_db_path)
+            self.logger.debug("Using connection pool for feedback database")
+        except ImportError:
+            try:
+                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+                self._connection_pool = get_connection_pool(self.feedback_db_path)
+                self.logger.debug("Using connection pool for feedback database")
+            except ImportError:
+                raise RuntimeError(
+                    "Connection pool is required. "
+                    "Please ensure connection_pool module is available. "
+                    "Direct SQLite connections are not allowed per project rules."
+                )
+        if not self._connection_pool:
+            raise RuntimeError(
+                "Connection pool initialization failed. "
+                "Direct SQLite connections are not allowed per project rules."
+            )
         self._initialize_feedback_db()
     
     def _initialize_feedback_db(self):
         """피드백 데이터베이스 초기화"""
         Path(self.feedback_db_path).parent.mkdir(parents=True, exist_ok=True)
         
-        conn = sqlite3.connect(self.feedback_db_path)
+        # 연결 풀 필수 사용
+        if not self._connection_pool:
+            raise RuntimeError("Connection pool is required for feedback database initialization")
+        conn = self._connection_pool.get_connection()
         cursor = conn.cursor()
         
         # 피드백 테이블
@@ -73,13 +101,16 @@ class FeedbackCollector:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON user_feedback(created_at)')
         
         conn.commit()
-        conn.close()
+        # 연결 풀을 사용하므로 수동으로 닫지 않음
         self.logger.info("Feedback database initialized")
     
     def submit_feedback(self, feedback_data: Dict[str, Any]) -> bool:
         """피드백 제출"""
         try:
-            conn = sqlite3.connect(self.feedback_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -106,7 +137,7 @@ class FeedbackCollector:
             ))
             
             conn.commit()
-            conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             # 통계 업데이트
             self._update_feedback_stats(feedback_data.get("query_type", ""))
@@ -121,7 +152,10 @@ class FeedbackCollector:
     def _update_feedback_stats(self, query_type: str):
         """피드백 통계 업데이트"""
         try:
-            conn = sqlite3.connect(self.feedback_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             cursor = conn.cursor()
             
             # 해당 질문 유형의 모든 피드백 조회
@@ -158,7 +192,7 @@ class FeedbackCollector:
                 ))
             
             conn.commit()
-            conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
         except Exception as e:
             self.logger.error(f"Error updating feedback stats: {e}")
@@ -166,7 +200,10 @@ class FeedbackCollector:
     def get_feedback_stats(self, query_type: Optional[str] = None) -> Dict[str, Any]:
         """피드백 통계 조회"""
         try:
-            conn = sqlite3.connect(self.feedback_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -211,7 +248,7 @@ class FeedbackCollector:
                     "avg_helpful_rating": row[5] or 0.0
                 }
             
-            conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             return stats
             
         except Exception as e:
@@ -221,7 +258,10 @@ class FeedbackCollector:
     def get_recent_feedback(self, limit: int = 10) -> List[Dict[str, Any]]:
         """최근 피드백 조회"""
         try:
-            conn = sqlite3.connect(self.feedback_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -244,7 +284,10 @@ class FeedbackCollector:
     def get_feedback_by_query_type(self, query_type: str, limit: int = 20) -> List[Dict[str, Any]]:
         """질문 유형별 피드백 조회"""
         try:
-            conn = sqlite3.connect(self.feedback_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -268,7 +311,10 @@ class FeedbackCollector:
     def analyze_feedback_trends(self) -> Dict[str, Any]:
         """피드백 트렌드 분석"""
         try:
-            conn = sqlite3.connect(self.feedback_db_path)
+            # 연결 풀 필수 사용
+            if not self._connection_pool:
+                raise RuntimeError("Connection pool is required")
+            conn = self._connection_pool.get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -315,7 +361,7 @@ class FeedbackCollector:
             # 가장 낮은 점수 영역 찾기
             lowest_area = min(improvement_areas.items(), key=lambda x: x[1])
             
-            conn.close()
+            # 연결 풀을 사용하므로 수동으로 닫지 않음
             
             return {
                 "recent_stats": recent_stats,
@@ -335,7 +381,7 @@ class FeedbackAnalyzer:
     
     def __init__(self):
         self.feedback_collector = FeedbackCollector()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def generate_improvement_suggestions(self) -> List[Dict[str, Any]]:
         """개선 제안 생성"""

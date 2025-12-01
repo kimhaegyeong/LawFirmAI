@@ -39,6 +39,7 @@ function App() {
     referencesSidebarOpen,
     selectedMessageForReferences,
     selectedReferenceType,
+    selectedReferenceId,
     openReferencesSidebar,
     closeReferencesSidebar,
   } = useSidebar();
@@ -151,16 +152,20 @@ function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const sessionIdParam = urlParams.get('session_id');
       
-      if (sessionIdParam) {
+      // OAuth2 콜백인 경우 session_id는 토큰 교환용이므로 채팅 세션 ID로 사용하지 않음
+      const hasOAuthCallback = urlParams.get('code') && urlParams.get('state');
+      
+      if (sessionIdParam && !hasOAuthCallback) {
+        // OAuth2 콜백이 아닌 경우에만 채팅 세션 ID로 사용
         // URL 파라미터에서 세션 ID가 있으면 해당 세션 로드
-        loadSession(sessionIdParam)
-          .then(() => {
+        const loadSessionFromUrl = async () => {
+          try {
+            await loadSession(sessionIdParam);
             // URL에서 세션 ID 파라미터 제거
             urlParams.delete('session_id');
             const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
             window.history.replaceState({}, document.title, newUrl);
-          })
-          .catch((error) => {
+          } catch (error) {
             // 429 에러 처리 - 쿼터 정보 업데이트 (익명 사용자만)
             if (error && typeof error === 'object' && 'status' in error) {
               const apiError = error as AxiosError<{ quotaInfo?: { remaining: number; limit: number } }> & { status?: number; quotaInfo?: { remaining: number; limit: number } };
@@ -181,20 +186,32 @@ function App() {
             }
             
             // 404 오류는 세션이 존재하지 않는 정상적인 상황일 수 있음
-            const isNotFound = error?.status === 404 || error?.message?.includes('Session not found');
+            const apiError = error as Error & { status?: number; message?: string };
+            const isNotFound = apiError?.status === 404 || apiError?.message?.includes('Session not found');
             if (isNotFound) {
-              logger.warn(`Session not found in URL parameter: ${sessionIdParam}. The session may have been deleted or does not exist.`);
+              logger.warn(`Session not found in URL parameter: ${sessionIdParam}. The session may have been deleted or does not exist. Creating a new session.`);
               // URL에서 세션 ID 파라미터 제거 (존재하지 않는 세션 ID는 URL에 남겨두지 않음)
               urlParams.delete('session_id');
               const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
               window.history.replaceState({}, document.title, newUrl);
+              
+              // 새 세션 생성 (사용자 경험 개선)
+              try {
+                await newSession({}, true); // skipLoadSessions=true로 세션 목록 로드 건너뛰기
+                logger.info('Created new session after failed session load');
+              } catch (createError) {
+                logger.error('Failed to create new session after failed session load:', createError);
+              }
             } else {
               logger.error('Failed to load session from URL parameter:', error);
             }
-          });
+          }
+        };
+        
+        loadSessionFromUrl();
       }
     }
-  }, [loadSession, isAuthenticated, login, showToast]);
+  }, [loadSession, isAuthenticated, login, showToast, newSession]);
 
   // 세션 변경 시 메시지 로드
   useEffect(() => {
@@ -230,6 +247,29 @@ function App() {
     loadSessionMessages();
   }, [currentSession, updateMessages, clearMessages]);
 
+  // 로그인 상태 변경 시 세션 초기화
+  const prevIsAuthenticatedRef = useRef<boolean>(false);
+  useEffect(() => {
+    // 로그인 전 -> 로그인 후로 변경된 경우
+    if (!prevIsAuthenticatedRef.current && isAuthenticated) {
+      logger.info('User logged in. Checking current session...');
+      
+      // 현재 세션이 있으면 초기화하고 새 세션 생성
+      if (currentSession) {
+        logger.info('Clearing anonymous session and creating new session for logged-in user');
+        clearSession();
+        clearMessages();
+        
+        // 새 세션 생성 (skipLoadSessions=true로 세션 목록 로드 건너뛰기)
+        newSession({}, true).catch(err => {
+          logger.error('Failed to create new session after login:', err);
+        });
+      }
+    }
+    
+    // 이전 인증 상태 업데이트
+    prevIsAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated, currentSession, clearSession, clearMessages, newSession]);
 
   const handleSendMessage = async (message: string, attachments?: FileAttachment[]) => {
     // 파일이 있으면 Base64로 변환
@@ -461,8 +501,8 @@ function App() {
           onQuestionClick={handleRelatedQuestionClick}
           onSendMessage={handleSendMessage}
           onDocumentClick={handleDocumentClick}
-          onOpenReferencesSidebar={(message, selectedType) => {
-            openReferencesSidebar(message, selectedType);
+          onOpenReferencesSidebar={(message: ChatMessage, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation', referenceId?: string) => {
+            openReferencesSidebar(message, selectedType, referenceId);
           }}
           onRetryMessage={(messageId) => {
             const error = streamErrors.get(messageId);
@@ -470,10 +510,26 @@ function App() {
               const message = messages.find(m => m.id === messageId);
               if (message && message.role === 'assistant') {
                 const messageIndex = messages.findIndex(m => m.id === messageId);
+                
+                // 에러 메시지 제거
+                updateMessages((prev) => prev.filter(m => m.id !== messageId));
+                
+                // 에러 상태 제거
+                removeError(messageId);
+                
                 if (messageIndex > 0) {
                   const userMessage = messages[messageIndex - 1];
                   if (userMessage && userMessage.role === 'user') {
-                    handleStreamingMessage(userMessage.content, currentSession.session_id, userMessage.attachments, undefined, undefined, undefined, true);
+                    // 원래 질문으로 재실행
+                    handleStreamingMessage(
+                      userMessage.content, 
+                      currentSession.session_id, 
+                      userMessage.attachments, 
+                      undefined, 
+                      undefined, 
+                      undefined, 
+                      true // skipUserMessage: true
+                    );
                   }
                 }
               }
@@ -510,6 +566,7 @@ function App() {
           sourcesDetail={selectedMessageForReferences.metadata?.sources_detail}
           sourcesByType={selectedMessageForReferences.metadata?.sources_by_type}
           initialSelectedType={selectedReferenceType}
+          initialSelectedReferenceId={selectedReferenceId}
         />
       )}
     </MainLayout>

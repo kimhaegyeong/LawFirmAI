@@ -14,13 +14,15 @@ interface DocumentSidebarProps {
   isOpen: boolean;
   onClose: () => void;
   documentIndex: number | null;
-  sources?: string[];  // deprecated
-  sourcesDetail?: SourceInfo[];  // deprecated, 하위 호환성
-  sourcesByType?: SourcesByType;  // 우선 사용
+  sources?: string[];
+  sourcesDetail?: SourceInfo[];
+  sourcesByType?: SourcesByType;
   metadata?: Record<string, unknown>;
   sessionId?: string;
   messageId?: string;
 }
+
+type DocumentType = 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
 
 export function DocumentSidebar({
   isOpen,
@@ -70,7 +72,7 @@ export function DocumentSidebar({
     };
   }, [isOpen, onClose]);
 
-  // 안전한 배열 접근 헬퍼 함수 (타입 안전, 인덱스 검증 완료)
+  // 안전한 배열 접근 헬퍼 함수
   const getSafeArrayItem = <T,>(array: T[], index: number | null): T | undefined => {
     if (index === null || index < 0 || index >= array.length) {
       return undefined;
@@ -82,8 +84,8 @@ export function DocumentSidebar({
   const source = getSafeArrayItem(sources, documentIndex);
   const sourceDetail = getSafeArrayItem(effectiveSourcesDetail, documentIndex);
 
-  // 문서 타입 결정 (useMemo로 최적화)
-  const documentType = useMemo((): 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' => {
+  // 문서 타입 결정
+  const documentType = useMemo((): DocumentType => {
     if (sourceDetail) {
       if (sourceDetail.type === 'statute_article') return 'law';
       if (sourceDetail.type === 'case_paragraph') return 'precedent';
@@ -104,23 +106,23 @@ export function DocumentSidebar({
   // 문서 제목/이름
   const documentName = sourceDetail?.name || source || (documentIndex !== null ? `문서 ${documentIndex + 1}` : '');
 
-  // 문서 메타데이터 (useMemo로 최적화)
+  // 문서 메타데이터
   const docMetadata = useMemo(() => sourceDetail?.metadata || {}, [sourceDetail?.metadata]);
   
-  // URL 생성 (useMemo로 최적화)
+  // URL 생성
   const generatedUrl = useMemo(() => {
     if (sourceDetail?.url) return sourceDetail.url;
     
     const metadata = {
       ...docMetadata,
       ...sourceDetail,
-      law_id: docMetadata.law_id || sourceDetail?.metadata?.law_id,
-      mst: docMetadata.mst || sourceDetail?.metadata?.mst,
-      article_no: sourceDetail?.article_no || docMetadata.article_no,
-      effective_date: docMetadata.effective_date || sourceDetail?.metadata?.effective_date,
-      precedent_serial_number: docMetadata.precedent_serial_number || sourceDetail?.metadata?.precedent_serial_number,
-      decision_serial_number: docMetadata.decision_serial_number || sourceDetail?.metadata?.decision_serial_number,
-      interpretation_serial_number: docMetadata.interpretation_serial_number || sourceDetail?.metadata?.interpretation_serial_number,
+      law_id: getMetadataValue(docMetadata.law_id) || getMetadataValue(sourceDetail?.metadata?.law_id),
+      mst: getMetadataValue(docMetadata.mst) || getMetadataValue(sourceDetail?.metadata?.mst),
+      article_no: sourceDetail?.article_no || getMetadataValue(docMetadata.article_no),
+      effective_date: getMetadataValue(docMetadata.effective_date) || getMetadataValue(sourceDetail?.metadata?.effective_date),
+      precedent_serial_number: getMetadataValue(docMetadata.precedent_serial_number) || getMetadataValue(sourceDetail?.metadata?.precedent_serial_number),
+      decision_serial_number: getMetadataValue(docMetadata.decision_serial_number) || getMetadataValue(sourceDetail?.metadata?.decision_serial_number),
+      interpretation_serial_number: getMetadataValue(docMetadata.interpretation_serial_number) || getMetadataValue(sourceDetail?.metadata?.interpretation_serial_number),
       doc_id: getMetadataValue(sourceDetail?.metadata?.doc_id) || getMetadataValue(docMetadata.doc_id),
     };
     
@@ -140,10 +142,10 @@ export function DocumentSidebar({
     const metadata = {
       ...docMetadata,
       ...sourceDetail,
-      statute_name: sourceDetail?.statute_name || docMetadata.statute_name,
-      casenames: sourceDetail?.case_name || docMetadata.casenames,
-      org: sourceDetail?.org || docMetadata.org,
-      title: sourceDetail?.title || docMetadata.title,
+      statute_name: sourceDetail?.statute_name || getMetadataValue(docMetadata.statute_name),
+      casenames: sourceDetail?.case_name || getMetadataValue(docMetadata.casenames),
+      org: sourceDetail?.org || getMetadataValue(docMetadata.org),
+      title: sourceDetail?.title || getMetadataValue(docMetadata.title),
     };
     
     const urlType: LawUrlType = 
@@ -170,7 +172,7 @@ export function DocumentSidebar({
     value: string | number | undefined; 
     fieldName: string;
     isMonospace?: boolean;
-  }) => {
+  }): JSX.Element | null => {
     if (!value) return null;
     
     const valueStr = String(value);
@@ -199,10 +201,15 @@ export function DocumentSidebar({
     );
   };
 
+  // 메타데이터 값 가져오기 (타입 안전)
+  const getSafeMetadataValue = (key: string): string | number | undefined => {
+    // eslint-disable-next-line security/detect-object-injection
+    const value = key in docMetadata ? docMetadata[key] : undefined;
+    return getMetadataValue(value);
+  };
+
   return (
     <>
-      {/* 오버레이 제거 (dim 처리 안함) */}
-
       {/* 사이드바 */}
       <div
         className={`fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${
@@ -270,52 +277,70 @@ export function DocumentSidebar({
                 <div className="space-y-3">
                   <InfoField
                     label="법령명"
-                    value={sourceDetail?.statute_name || docMetadata.statute_name}
+                    value={sourceDetail?.statute_name || getSafeMetadataValue('statute_name')}
                     fieldName="statute_name"
                   />
-                  <InfoField
-                    label="조문"
-                    value={sourceDetail?.article_no || docMetadata.article_no ? `제${sourceDetail?.article_no || docMetadata.article_no}조` : undefined}
-                    fieldName="article_no"
-                  />
-                  <InfoField
-                    label="항"
-                    value={sourceDetail?.clause_no || docMetadata.clause_no ? `제${sourceDetail?.clause_no || docMetadata.clause_no}항` : undefined}
-                    fieldName="clause_no"
-                  />
-                  <InfoField
-                    label="호"
-                    value={sourceDetail?.item_no || docMetadata.item_no ? `제${sourceDetail?.item_no || docMetadata.item_no}호` : undefined}
-                    fieldName="item_no"
-                  />
+                  {(() => {
+                    const articleNo = sourceDetail?.article_no || getSafeMetadataValue('article_no');
+                    return articleNo ? (
+                      <InfoField
+                        label="조문"
+                        value={`제${articleNo}조`}
+                        fieldName="article_no"
+                      />
+                    ) : null;
+                  })()}
+                  {(() => {
+                    const clauseNo = sourceDetail?.clause_no || getSafeMetadataValue('clause_no');
+                    return clauseNo ? (
+                      <InfoField
+                        label="항"
+                        value={`제${clauseNo}항`}
+                        fieldName="clause_no"
+                      />
+                    ) : null;
+                  })()}
+                  {(() => {
+                    const itemNo = sourceDetail?.item_no || getSafeMetadataValue('item_no');
+                    return itemNo ? (
+                      <InfoField
+                        label="호"
+                        value={`제${itemNo}호`}
+                        fieldName="item_no"
+                      />
+                    ) : null;
+                  })()}
                   <InfoField
                     label="법령ID"
-                    value={getMetadataValue(docMetadata.law_id) || getMetadataValue(docMetadata.법령ID) || getMetadataValue(docMetadata.ID)}
+                    value={getSafeMetadataValue('law_id') || getSafeMetadataValue('법령ID') || getSafeMetadataValue('ID')}
                     fieldName="law_id"
                     isMonospace
                   />
                   <InfoField
                     label="법령 마스터번호 (MST)"
-                    value={getMetadataValue(docMetadata.mst) || getMetadataValue(docMetadata.MST) || getMetadataValue(docMetadata.lsi_seq)}
+                    value={getSafeMetadataValue('mst') || getSafeMetadataValue('MST') || getSafeMetadataValue('lsi_seq')}
                     fieldName="mst"
                     isMonospace
                   />
                   <InfoField
                     label="공포번호"
-                    value={getMetadataValue(docMetadata.proclamation_number) || getMetadataValue(docMetadata.공포번호)}
+                    value={getSafeMetadataValue('proclamation_number') || getSafeMetadataValue('공포번호')}
                     fieldName="proclamation_number"
                   />
                   <InfoField
                     label="시행일자"
-                    value={getMetadataValue(docMetadata.effective_date) || getMetadataValue(docMetadata.efYd) || getMetadataValue(docMetadata.시행일자)}
+                    value={getSafeMetadataValue('effective_date') || getSafeMetadataValue('efYd') || getSafeMetadataValue('시행일자')}
                     fieldName="effective_date"
                   />
-                  {docMetadata.title && (
-                    <div>
-                      <span className="text-xs font-medium text-slate-500">제목</span>
-                      <p className="text-sm text-slate-800 mt-1">{String(docMetadata.title)}</p>
-                    </div>
-                  )}
+                  {(() => {
+                    const title = getSafeMetadataValue('title');
+                    return title ? (
+                      <div>
+                        <span className="text-xs font-medium text-slate-500">제목</span>
+                        <p className="text-sm text-slate-800 mt-1">{String(title)}</p>
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
               )}
 
@@ -324,27 +349,27 @@ export function DocumentSidebar({
                 <div className="space-y-3">
                   <InfoField
                     label="사건명"
-                    value={sourceDetail?.case_name || docMetadata.casenames}
+                    value={sourceDetail?.case_name || getSafeMetadataValue('casenames')}
                     fieldName="case_name"
                   />
                   <InfoField
                     label="법원"
-                    value={sourceDetail?.court || docMetadata.court}
+                    value={sourceDetail?.court || getSafeMetadataValue('court')}
                     fieldName="court"
                   />
                   <InfoField
                     label="사건번호"
-                    value={sourceDetail?.case_number || getMetadataValue(docMetadata.doc_id)}
+                    value={sourceDetail?.case_number || getSafeMetadataValue('doc_id')}
                     fieldName="case_number"
                   />
                   <InfoField
                     label="판례일련번호"
-                    value={getMetadataValue(docMetadata.precedent_serial_number) || getMetadataValue(docMetadata.판례일련번호) || getMetadataValue(docMetadata.판례정보일련번호)}
+                    value={getSafeMetadataValue('precedent_serial_number') || getSafeMetadataValue('판례일련번호') || getSafeMetadataValue('판례정보일련번호')}
                     fieldName="precedent_serial_number"
                     isMonospace
                   />
                   {(() => {
-                    const announceDate = getMetadataValue(docMetadata.announce_date);
+                    const announceDate = getSafeMetadataValue('announce_date');
                     return announceDate ? (
                       <InfoField
                         label="선고일자"
@@ -356,77 +381,16 @@ export function DocumentSidebar({
                 </div>
               )}
 
-              {/* 결정례 정보 */}
-              {documentType === 'decision' && (
-                <div className="space-y-3">
-                  <InfoField
-                    label="기관"
-                    value={sourceDetail?.org || docMetadata.org}
-                    fieldName="org"
-                  />
-                  <InfoField
-                    label="일련번호"
-                    value={sourceDetail?.decision_number || getMetadataValue(docMetadata.doc_id)}
-                    fieldName="decision_number"
-                  />
-                  <InfoField
-                    label="헌재결정례일련번호"
-                    value={getMetadataValue(docMetadata.decision_serial_number) || getMetadataValue(docMetadata.헌재결정례일련번호)}
-                    fieldName="decision_serial_number"
-                    isMonospace
-                  />
-                  <InfoField
-                    label="결정일"
-                    value={sourceDetail?.decision_date || docMetadata.decision_date}
-                    fieldName="decision_date"
-                  />
-                  <InfoField
-                    label="결과"
-                    value={sourceDetail?.result || docMetadata.result}
-                    fieldName="result"
-                  />
-                </div>
-              )}
-
-              {/* 해석례 정보 */}
-              {documentType === 'interpretation' && (
-                <div className="space-y-3">
-                  <InfoField
-                    label="제목"
-                    value={sourceDetail?.title || docMetadata.title}
-                    fieldName="title"
-                  />
-                  <InfoField
-                    label="기관"
-                    value={sourceDetail?.org || docMetadata.org}
-                    fieldName="org"
-                  />
-                  <InfoField
-                    label="일련번호"
-                    value={sourceDetail?.interpretation_number || getMetadataValue(docMetadata.doc_id)}
-                    fieldName="interpretation_number"
-                  />
-                  <InfoField
-                    label="법령해석례일련번호"
-                    value={getMetadataValue(docMetadata.interpretation_serial_number) || getMetadataValue(docMetadata.법령해석례일련번호) || getMetadataValue(docMetadata.해석ID) || getMetadataValue(docMetadata.expcId)}
-                    fieldName="interpretation_serial_number"
-                    isMonospace
-                  />
-                  <InfoField
-                    label="회신일"
-                    value={sourceDetail?.response_date || docMetadata.response_date}
-                    fieldName="response_date"
-                  />
-                </div>
-              )}
-
-              {/* 기타 정보 */}
-              {documentType === 'regulation' && docMetadata.org && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">기관</span>
-                  <p className="text-sm text-slate-800 mt-1">{docMetadata.org}</p>
-                </div>
-              )}
+              {/* 기타 정보 (규정) */}
+              {documentType === 'regulation' && (() => {
+                const orgValue = getSafeMetadataValue('org');
+                return orgValue ? (
+                  <div>
+                    <span className="text-xs font-medium text-slate-500">기관</span>
+                    <p className="text-sm text-slate-800 mt-1">{String(orgValue)}</p>
+                  </div>
+                ) : null;
+              })()}
 
               {/* 원문 링크 및 검색 링크 */}
               <div className="pt-3 border-t border-slate-200 space-y-2">
@@ -489,6 +453,59 @@ export function DocumentSidebar({
                   <p className="text-sm text-slate-600 mt-1 break-words">{source}</p>
                 </div>
               )}
+
+              {/* 원천 정보 섹션 (접을 수 있는 섹션) */}
+              {(sourceDetail?.chunk_id || sourceDetail?.source_id || sourceDetail?.original_url || 
+                getSafeMetadataValue('chunk_id') || getSafeMetadataValue('source_id') || getSafeMetadataValue('original_url')) && (
+                <details className="border-t border-slate-200 pt-3 mt-3">
+                  <summary className="text-sm font-medium text-slate-600 cursor-pointer hover:text-slate-800">
+                    원천 정보
+                  </summary>
+                  <div className="mt-2 space-y-2 text-xs">
+                    <InfoField
+                      label="Source ID"
+                      value={(sourceDetail?.source_id ? String(sourceDetail.source_id) : undefined) || getSafeMetadataValue('source_id')}
+                      fieldName="source_id"
+                      isMonospace
+                    />
+                    <InfoField
+                      label="Chunk ID"
+                      value={(sourceDetail?.chunk_id ? String(sourceDetail.chunk_id) : undefined) || getSafeMetadataValue('chunk_id')}
+                      fieldName="chunk_id"
+                      isMonospace
+                    />
+                    {(() => {
+                      const originalUrl = sourceDetail?.original_url || getSafeMetadataValue('original_url');
+                      return originalUrl ? (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-slate-500">Original URL</span>
+                            <button
+                              onClick={() => {
+                                if (typeof originalUrl === 'string') {
+                                  window.open(originalUrl, '_blank', 'noopener,noreferrer');
+                                }
+                              }}
+                              className="p-1 hover:bg-slate-100 rounded transition-colors text-slate-400 hover:text-slate-600"
+                              title="새 창에서 열기"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <a
+                            href={String(originalUrl)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-600 hover:underline break-all"
+                          >
+                            {String(originalUrl)}
+                          </a>
+                        </div>
+                      ) : null;
+                    })()}
+                  </div>
+                </details>
+              )}
             </div>
           </div>
 
@@ -506,4 +523,3 @@ export function DocumentSidebar({
     </>
   );
 }
-

@@ -1,14 +1,48 @@
 ﻿# 품질 관리 (Quality Management)
 
-이 섹션은 답변 품질 개선, 키워드 시스템, 프롬프트 강화에 대한 문서를 포함합니다.
+이 섹션은 답변 품질 개선, 키워드 시스템, 프롬프트 강화, ML 평가 시스템에 대한 문서를 포함합니다.
 
 ## 📋 문서 목록
 
+### 검색 품질 개선
+- [검색 품질 평가 가이드](search_quality_evaluation_guide.md): 검색 품질 평가 방법 및 스크립트 사용법
 - [품질 개선 시스템](quality_improvement_system.md): 품질 개선 시스템 개요
+- [개선사항 목록](improvement_points.md): 테스트 결과 기반 개선사항 목록
+
+### 키워드 및 프롬프트 시스템
 - [키워드 확장 보고서](keyword_expansion_report.md): 키워드 확장 작업 결과
 - [하이브리드 키워드 시스템](hybrid_keyword_management.md): 하이브리드 키워드 관리 방법
 - [프롬프트 시스템 강화](prompt_system_enhancement.md): 프롬프트 시스템 개선 방법
-- [의미적 도메인 분류](semantic_domain_classification.md): 의미적 도메인 분류 방법
+
+### 임베딩 모델
+- [Ko-Legal-SBERT 재임베딩 계획](ko_legal_sbert_re_embedding_plan.md): Ko-Legal-SBERT 모델 설정 및 재임베딩 가이드 (모델 설정 포함)
+- [Ko-Legal-SBERT 재임베딩 진행 상황](ko_legal_sbert_re_embedding_progress.md): 재임베딩 작업 진행 상황
+
+## 📊 ML 평가 시스템
+
+### 최적화 및 성능 개선
+- [의사 쿼리 최적화 요약](pseudo_query_optimization_summary.md): 의사 쿼리 생성 최적화 결과 (문제점 및 해결책 포함)
+- [Ground Truth 생성 성능 개선](ground_truth_generation_performance_improvements.md): Ground Truth 생성 성능 개선 사항
+- [Gemini API 비용 최적화](gemini_api_cost_optimization.md): Gemini API 비용 최적화 방법
+- [메모리 최적화 요약](memory_optimization_summary.md): 메모리 최적화 작업 요약
+- [근사 Ground Truth 생성 계획](approximate_ground_truth_generation_plan.md): 클러스터링 기반 Ground Truth 생성 계획
+
+자세한 내용은 [ML 훈련 및 평가 시스템](../02_data/ml_training/README.md) 문서를 참조하세요.
+
+## 🚀 빠른 시작
+
+### 검색 품질 평가
+
+```bash
+# 빠른 테스트 (6개 쿼리)
+python lawfirm_langgraph/tests/scripts/quick_evaluation_test.py
+
+# 전체 평가 (80개 쿼리)
+python lawfirm_langgraph/tests/scripts/test_search_quality_evaluation.py
+
+# Before/After 비교
+python lawfirm_langgraph/tests/scripts/compare_search_quality.py
+```
 
 ## 🔗 관련 섹션
 

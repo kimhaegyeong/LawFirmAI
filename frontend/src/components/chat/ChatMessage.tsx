@@ -30,7 +30,7 @@ interface ChatMessageProps {
   sessionId?: string;
   onQuestionClick?: (question: string) => void;
   onDocumentClick?: (message: ChatMessageType, documentIndex: number) => void; // 문서 클릭 핸들러
-  onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void; // 참고자료 사이드바 열기 핸들러
+  onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation', referenceId?: string | null) => void; // 참고자료 사이드바 열기 핸들러
   isStreaming?: boolean; // 스트리밍 중인지 여부
   error?: StreamError; // 에러 상태
   onRetry?: () => void; // 재시도 핸들러
@@ -468,11 +468,11 @@ export function ChatMessage({
           </div>
         )}
         <div
-          className={`max-w-[80%] rounded-xl p-5 shadow-sm border ${
+          className={`w-full max-w-[80%] rounded-xl p-5 shadow-sm border ${
             isUser
               ? 'bg-blue-50 border-blue-200'
               : 'bg-white border-slate-200'
-          }`}
+          } ${!isUser ? 'min-h-[100px]' : ''}`}
         >
         {safeMessage.attachments && safeMessage.attachments.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
@@ -609,14 +609,38 @@ export function ChatMessage({
           {!isUser && (
             <div className="w-8 h-8 flex-shrink-0" />
           )}
-          <div className="max-w-[80%] rounded-xl p-5 shadow-sm border bg-white border-slate-200">
+          <div className="w-full max-w-[80%] flex-shrink-0 rounded-xl p-5 shadow-sm border bg-white border-slate-200 min-h-[80px]">
             {hasReferences && (
               <MessageReferencesSection
                 references={sourcesArray}
                 legalReferences={legalReferencesArray}
                 sources={sourcesArray}
                 sourcesDetail={sourcesDetailArray}
+                sourcesByType={sourcesByType}
                 onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
+                onReferenceClick={(ref, sourceDetail) => {
+                  let referenceId: string | undefined = undefined;
+                  if (sourceDetail?.case_number) {
+                    referenceId = String(sourceDetail.case_number);
+                  } else if (sourceDetail?.article_no) {
+                    referenceId = String(sourceDetail.article_no);
+                  } else if (sourceDetail?.decision_number) {
+                    referenceId = String(sourceDetail.decision_number);
+                  } else if (sourceDetail?.interpretation_number) {
+                    referenceId = String(sourceDetail.interpretation_number);
+                  } else if (sourceDetail?.metadata?.doc_id) {
+                    referenceId = String(sourceDetail.metadata.doc_id);
+                  } else if (ref.metadata?.doc_id) {
+                    referenceId = String(ref.metadata.doc_id);
+                  } else if (ref.metadata?.case_number) {
+                    referenceId = String(ref.metadata.case_number);
+                  } else if (ref.metadata?.article_no) {
+                    referenceId = String(ref.metadata.article_no);
+                  } else if (ref.id && typeof ref.id === 'string') {
+                    referenceId = ref.id;
+                  }
+                  onOpenReferencesSidebar?.(safeMessage, ref.type, referenceId);
+                }}
                 defaultExpanded={false}
               />
             )}

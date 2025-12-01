@@ -1,528 +1,123 @@
 # LawFirmAI - Cursor Development Rules
 
+## 📋 목차
+
+1. [프로젝트 개요](#프로젝트-개요)
+2. [프로젝트 구조 규칙](#프로젝트-구조-규칙)
+3. [상세 규칙 참조](#상세-규칙-참조)
+4. [성능 최적화 규칙](#성능-최적화-규칙)
+5. [문서화 규칙](#문서화-규칙)
+6. [보안 규칙](#보안-규칙)
+7. [배포 규칙](#배포-규칙)
+8. [Git 규칙](#git-규칙)
+9. [성능 모니터링 규칙](#성능-모니터링-규칙)
+10. [코드 리뷰 체크리스트](#코드-리뷰-체크리스트)
+11. [테스트 로그 파일 저장 규칙](#테스트-로그-파일-저장-규칙)
+
+---
+
 ## 프로젝트 개요
 - **프로젝트명**: LawFirmAI (법률 AI 어시스턴트)
 - **목표**: HuggingFace Spaces 배포를 위한 법률 AI 시스템 개발
-- **기술 스택**: FastAPI + React + KoBART/KoGPT-2 + FAISS + SQLite
+- **기술 스택**: LangGraph + FastAPI + React + Google Gemini 2.5 Flash Lite + FAISS + SQLite
 
 ## 프로젝트 구조 규칙
 
 ### 디렉토리 구조
 ```
 LawFirmAI/
+├── lawfirm_langgraph/      # 핵심 LangGraph 워크플로우 시스템
+│   ├── config/             # 설정 파일
+│   ├── core/               # 핵심 비즈니스 로직
+│   │   ├── workflow/       # LangGraph 워크플로우 (메인)
+│   │   ├── search/         # 검색 시스템
+│   │   ├── generation/     # 답변 생성 시스템
+│   │   ├── classification/ # 분류 시스템
+│   │   ├── processing/     # 데이터 처리
+│   │   ├── agents/         # 에이전트 및 유틸리티
+│   │   ├── services/       # 비즈니스 서비스
+│   │   ├── data/           # 데이터 레이어
+│   │   ├── shared/         # 공유 유틸리티
+│   │   └── utils/          # 유틸리티
+│   ├── tests/              # 테스트 코드
+│   └── data/               # 데이터 파일
+├── api/                    # FastAPI 애플리케이션
+│   ├── main.py            # FastAPI 메인 애플리케이션
+│   ├── requirements.txt   # FastAPI 의존성
+│   ├── routers/           # API 라우터
+│   ├── services/          # API 서비스
+│   ├── schemas/           # Pydantic 스키마
+│   └── middleware/        # 미들웨어
 ├── frontend/               # React 프론트엔드
 │   ├── src/                # React 소스 코드
 │   ├── package.json        # npm 의존성
 │   ├── vite.config.ts      # Vite 설정
-│   ├── Dockerfile          # React Docker 설정
-│   └── docker-compose.yml  # React 로컬 개발 환경
-├── api/                    # FastAPI 애플리케이션
-│   ├── main.py            # FastAPI 메인 애플리케이션
-│   ├── requirements.txt   # FastAPI 의존성
-│   ├── Dockerfile        # FastAPI Docker 설정
-│   └── docker-compose.yml # FastAPI 로컬 개발 환경
-├── source/                 # Core Modules (공통 소스 코드)
-│   ├── __init__.py
-│   ├── models/            # AI 모델 관련
-│   │   ├── __init__.py
-│   │   ├── kobart_model.py
-│   │   ├── sentence_bert.py
-│   │   └── model_manager.py
-│   ├── services/          # 비즈니스 로직
-│   │   ├── __init__.py
-│   │   ├── chat_service.py
-│   │   ├── rag_service.py
-│   │   ├── search_service.py
-│   │   └── analysis_service.py
-│   ├── data/              # 데이터 처리
-│   │   ├── __init__.py
-│   │   ├── database.py
-│   │   ├── vector_store.py
-│   │   └── data_processor.py
-│   ├── api/               # API 관련
-│   │   ├── __init__.py
-│   │   ├── endpoints.py
-│   │   ├── middleware.py
-│   │   └── schemas.py
-│   └── utils/             # 유틸리티
-│       ├── __init__.py
-│       ├── config.py
-│       ├── logger.py
-│       └── helpers.py
-├── data/                  # 데이터 파일
-│   ├── raw/               # 원본 데이터
-│   ├── processed/         # 전처리된 데이터
-│   └── embeddings/        # 벡터 임베딩
-├── tests/                 # 테스트 코드
-├── docs/                  # 문서
-├── scripts/               # 유틸리티 스크립트
-├── .env.example           # 환경 변수 템플릿
-├── .gitignore             # Git 무시 파일
-└── README.md              # 프로젝트 문서
+│   └── Dockerfile          # React Docker 설정
+├── scripts/                # 유틸리티 스크립트
+│   ├── checks/             # 체크 스크립트
+│   ├── ingest/             # 데이터 수집
+│   ├── rag/                # RAG 관련 스크립트
+│   └── tests/              # 테스트 스크립트
+├── data/                   # 데이터 파일
+│   ├── raw/                # 원본 데이터
+│   ├── processed/          # 전처리된 데이터
+│   └── embeddings/         # 벡터 임베딩
+├── docs/                   # 프로젝트 문서
+├── .env.example            # 환경 변수 템플릿
+├── .gitignore              # Git 무시 파일
+└── README.md               # 프로젝트 문서
 ```
 
-## 코딩 규칙
+## 상세 규칙 참조
 
-### 0. 코드 수정 우선 원칙 (CRITICAL)
+상세한 개발 규칙은 `docs/11.cursor_rules/` 폴더에 분리되어 있습니다:
 
-**기존 소스코드 수정을 최우선으로 하고, 신규 파일 생성은 꼭 필요한 경우에만 허용합니다.**
+- **`docs/11.cursor_rules/01_coding_rules.md`**: 코딩 규칙
+  - 코드 수정 우선 원칙 (CRITICAL)
+  - 코드 변경 최소화 원칙 (CRITICAL)
+  - 파일 명명 규칙
+  - Import 규칙
+  - 클래스 구조 규칙
+  - 에러 처리 규칙
+  - Linter 오류 방지 규칙 (CRITICAL)
 
-#### 원칙
-1. **기존 파일 수정 우선**
-   - 기능 추가/수정 시 기존 파일을 먼저 검토하고 수정
-   - 기존 클래스/함수에 기능을 확장하는 방식으로 구현
-   - 기존 코드 구조를 최대한 유지하면서 개선
+- **`docs/11.cursor_rules/02_tech_stack_rules.md`**: 기술 스택별 규칙
+  - Pydantic V2 규칙 (CRITICAL)
+  - FastAPI 규칙
+  - React 규칙
+  - AI 모델 규칙
+  - 한국어 불용어 처리 규칙 (CRITICAL)
+  - Batch File (.bat) 규칙
 
-2. **신규 파일 생성 조건**
-   - 기존 파일 수정으로는 요구사항을 충족할 수 없는 경우에만 허용
-   - 완전히 새로운 기능 영역이 필요한 경우
-   - 기존 파일이 이미 너무 크고 복잡하여 분리가 필요한 경우 (1000줄 이상)
-   - 아키텍처상 독립적인 모듈이 필요한 경우
+- **`docs/11.cursor_rules/03_langgraph_rules.md`**: LangGraph 개발 규칙 (CRITICAL)
+  - Node 정의 및 사용 규칙
+  - Edge 정의 및 사용 규칙
+  - Task 정의 및 사용 규칙
+  - StateGraph 구축 패턴
+  - Subgraph 사용 규칙
+  - State 관리 규칙
+  - 에러 처리 규칙
+  - 테스트 규칙
+  - 성능 최적화 규칙
+  - 금지 사항 및 체크리스트
 
-3. **파일 생성 전 체크리스트**
-   - [ ] 기존 파일에서 유사한 기능을 찾았는가?
-   - [ ] 기존 클래스/함수에 기능을 추가할 수 있는가?
-   - [ ] 기존 파일을 확장하는 방식으로 구현할 수 있는가?
-   - [ ] 신규 파일이 정말 필요한가? (아키텍처상 분리가 필요한가?)
+- **`docs/11.cursor_rules/04_database_rules.md`**: 데이터베이스 규칙
+  - 연결 풀링 시스템 사용 규칙 (CRITICAL)
+  - 기본 데이터베이스 규칙
 
-4. **권장 사항**
-   ```python
-   # ❌ 나쁜 예: 새로운 기능마다 새 파일 생성
-   # services/chat_service_v2.py
-   # services/chat_service_enhanced.py
-   # services/chat_service_improved.py
-   
-   # ✅ 좋은 예: 기존 파일에 기능 추가
-   # services/chat_service.py에 새로운 메서드 추가
-   class ChatService:
-       def process_message(self, message: str) -> str:
-           # 기존 기능
-           pass
-       
-       def process_message_with_context(self, message: str, context: str) -> str:
-           # 새로운 기능 추가
-           pass
-   ```
+- **`docs/11.cursor_rules/05_logging_rules.md`**: 로깅 규칙 (CRITICAL)
+  - 로거 생성 방법
+  - 환경 변수로 로그 레벨 제어
+  - Windows 환경 주의사항 (CRITICAL)
+  - 예외 로깅
+  - 외부 라이브러리 로깅 제어
 
-5. **예외 사항**
-   - 테스트 파일 (`test_*.py`, `*_test.py`)은 기능별로 분리 허용
-   - 설정 파일 (`config.py`, `settings.py`)은 환경별 분리 허용
-   - 문서 파일 (`*.md`)은 주제별 분리 허용
-   - 마이그레이션 스크립트는 버전별 분리 허용
+- **`docs/11.cursor_rules/06_testing_rules.md`**: 테스트 규칙
+  - 단위 테스트
+  - 통합 테스트
+  - LangGraph 질의 테스트 실행 규칙 (CRITICAL)
 
-6. **리팩토링 가이드**
-   - 기존 파일이 너무 커진 경우 (1000줄 이상):
-     - 먼저 기존 파일 내에서 클래스/함수로 모듈화 시도
-     - 그래도 부족한 경우에만 파일 분리 고려
-   - 중복 코드 발견 시:
-     - 공통 유틸리티 함수로 추출하여 기존 파일에 추가
-     - 여러 파일에서 사용되는 경우에만 별도 유틸리티 파일 생성
-
-### 0-1. 코드 변경 최소화 원칙 (CRITICAL)
-
-**원본 코드를 최대한 보존하고, 불필요한 주석이나 설명을 과도하게 추가하지 않습니다.**
-
-#### 원칙
-1. **원본 코드 보존 우선**
-   - 기존 코드의 구조와 스타일을 최대한 유지
-   - 기능 수정/추가 시에도 원본 코드의 형태를 최대한 보존
-   - 불필요한 리팩토링이나 스타일 변경 금지
-
-2. **주석 추가 제한**
-   - 기존 코드에 주석이 없는 경우, 새로 추가하지 않음
-   - 기존 주석이 있는 경우에만 유지하거나 최소한으로 수정
-   - 코드 자체로 이해 가능한 경우 주석 추가 금지
-   - 복잡한 로직이나 비즈니스 규칙이 있는 경우에만 최소한의 주석 허용
-
-3. **코드 변경 가이드라인**
-   ```python
-   # ❌ 나쁜 예: 과도한 주석 추가로 원본 코드 변경
-   def process_message(self, message: str) -> str:
-       """
-       메시지를 처리하는 함수입니다.
-       이 함수는 사용자로부터 받은 메시지를 분석하고
-       적절한 응답을 생성하여 반환합니다.
-       
-       Args:
-           message (str): 사용자가 입력한 메시지
-       
-       Returns:
-           str: 처리된 응답 메시지
-       """
-       # 메시지 전처리
-       processed = message.strip()
-       # 응답 생성
-       response = self._generate_response(processed)
-       # 결과 반환
-       return response
-   
-   # ✅ 좋은 예: 원본 코드 최대한 보존
-   def process_message(self, message: str) -> str:
-       processed = message.strip()
-       response = self._generate_response(processed)
-       return response
-   ```
-
-4. **주석 추가 허용 조건**
-   - 복잡한 알고리즘이나 비즈니스 로직의 경우
-   - 외부 API나 라이브러리의 특이한 동작을 설명하는 경우
-   - 버그 수정이나 임시 해결책을 표시하는 경우 (TODO, FIXME, HACK 등)
-   - 기존 주석이 잘못된 정보를 포함하고 있어 수정이 필요한 경우
-
-5. **금지 사항**
-   - 명확한 코드에 설명 주석 추가
-   - 변수명이나 함수명으로 충분히 설명되는 경우 주석 추가
-   - 기존 코드 스타일과 다른 주석 스타일 강제 적용
-   - 문서화 문자열(docstring)을 모든 함수에 강제로 추가
-
-6. **예외 사항**
-   - 공개 API나 라이브러리 함수는 docstring 필요
-   - 복잡한 수학적 알고리즘이나 비즈니스 규칙은 주석 허용
-   - 팀 내부 규칙으로 문서화가 필요한 경우
-
-### 1. 파일 명명 규칙
-- **Python 파일**: snake_case (예: `chat_service.py`)
-- **클래스**: PascalCase (예: `ChatService`)
-- **함수/변수**: snake_case (예: `process_message`)
-- **상수**: UPPER_SNAKE_CASE (예: `MAX_RETRY_COUNT`)
-
-### 2. Import 규칙
-```python
-# 표준 라이브러리
-import os
-import sys
-from typing import List, Dict, Optional
-
-# 서드파티 라이브러리
-import torch
-import numpy as np
-import pandas as pd
-from fastapi import FastAPI
-from transformers import AutoTokenizer
-
-# 로컬 모듈
-from source.models.kobart_model import KoBARTModel
-from source.services.chat_service import ChatService
-from source.utils.config import Config
-```
-
-### 3. 클래스 구조 규칙
-```python
-class ServiceName:
-    """서비스 클래스에 대한 간단한 설명"""
-    
-    def __init__(self, config: Config):
-        """초기화 메서드"""
-        self.config = config
-        self._initialize_components()
-    
-    def _initialize_components(self):
-        """내부 컴포넌트 초기화 (private 메서드)"""
-        pass
-    
-    def public_method(self, param: str) -> str:
-        """공개 메서드에 대한 설명"""
-        pass
-```
-
-### 4. 에러 처리 규칙
-```python
-import logging
-from typing import Optional
-
-logger = logging.getLogger(__name__)
-
-def safe_operation(self, data: str) -> Optional[str]:
-    """안전한 연산 수행"""
-    try:
-        result = self._process_data(data)
-        return result
-    except ValueError as e:
-        logger.error(f"Value error in safe_operation: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error in safe_operation: {e}")
-        raise
-```
-
-## 기술 스택별 규칙
-
-### 1. Pydantic V2 규칙 (CRITICAL)
-
-**모든 Pydantic 모델은 반드시 Pydantic V2 스타일을 사용해야 합니다.**
-
-#### 원칙
-1. **Validator 사용**
-   - `@validator` (V1) 사용 금지
-   - `@field_validator` (V2) 사용 필수
-   - 모든 validator는 `@classmethod` 데코레이터와 함께 사용
-
-2. **Import 규칙**
-   ```python
-   # ❌ 나쁜 예: Pydantic V1 스타일
-   from pydantic import BaseModel, Field, validator
-   
-   # ✅ 좋은 예: Pydantic V2 스타일
-   from pydantic import BaseModel, Field, field_validator
-   ```
-
-3. **Validator 작성 규칙**
-   ```python
-   from pydantic import BaseModel, Field, field_validator
-   from typing import Optional
-   import re
-   
-   class ExampleModel(BaseModel):
-       """예제 모델"""
-       session_id: Optional[str] = Field(None, description="세션 ID")
-       message: str = Field(..., min_length=1, max_length=10000)
-       
-       # ❌ 나쁜 예: Pydantic V1 스타일
-       @validator('session_id')
-       def validate_session_id(cls, v):
-           if v:
-               uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-               if not re.match(uuid_pattern, v, re.IGNORECASE):
-                   raise ValueError('유효하지 않은 세션 ID 형식입니다')
-           return v
-       
-       # ✅ 좋은 예: Pydantic V2 스타일
-       @field_validator('session_id')
-       @classmethod
-       def validate_session_id(cls, v):
-           if v:
-               uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-               if not re.match(uuid_pattern, v, re.IGNORECASE):
-                   raise ValueError('유효하지 않은 세션 ID 형식입니다')
-           return v
-       
-       @field_validator('message')
-       @classmethod
-       def validate_message(cls, v):
-           if not v or not v.strip():
-               raise ValueError('메시지는 비어있을 수 없습니다')
-           return v.strip()
-   ```
-
-4. **Config 클래스 규칙**
-   ```python
-   from pydantic import BaseModel, ConfigDict
-   
-   class ExampleModel(BaseModel):
-       """예제 모델"""
-       # ❌ 나쁜 예: Pydantic V1 스타일
-       class Config:
-           from_attributes = True
-           extra = "ignore"
-       
-       # ✅ 좋은 예: Pydantic V2 스타일
-       model_config = ConfigDict(
-           from_attributes=True,
-           extra="ignore"
-       )
-   ```
-
-5. **금지 사항**
-   - `@validator` 사용 금지
-   - `from pydantic import validator` 사용 금지
-   - Pydantic V1 스타일의 Config 클래스 사용 금지 (가능한 경우)
-
-6. **마이그레이션 체크리스트**
-   - [ ] 모든 `@validator`를 `@field_validator`로 변경했는가?
-   - [ ] 모든 validator 함수에 `@classmethod` 데코레이터를 추가했는가?
-   - [ ] import 문에서 `validator`를 `field_validator`로 변경했는가?
-   - [ ] Config 클래스를 `model_config`로 변경했는가? (가능한 경우)
-
-### 2. FastAPI 규칙
-```python
-# api/main.py
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Optional
-import sys
-import os
-
-# source 모듈 경로 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'source'))
-
-from services.chat_service import ChatService
-
-app = FastAPI(title="LawFirmAI API", version="1.0.0")
-
-class ChatRequest(BaseModel):
-    message: str
-    context: Optional[str] = None
-
-class ChatResponse(BaseModel):
-    response: str
-    confidence: float
-    sources: List[str]
-
-# 서비스 인스턴스 생성
-chat_service = ChatService()
-
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    """채팅 엔드포인트"""
-    try:
-        # 비즈니스 로직 처리
-        response = chat_service.process_message(request.message)
-        return ChatResponse(
-            response=response,
-            confidence=0.9,
-            sources=[]
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-```
-
-### 2. React 규칙
-```typescript
-// frontend/src/App.tsx
-import React, { useState } from 'react';
-import { ChatService } from './services/chatService';
-
-function App() {
-  const [message, setMessage] = useState('');
-  const [response, setResponse] = useState('');
-  const chatService = new ChatService();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const result = await chatService.processMessage(message);
-    setResponse(result);
-  };
-
-  return (
-    <div className="app">
-      <h1>법률 AI 어시스턴트</h1>
-      <form onSubmit={handleSubmit}>
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="법률 관련 질문을 입력하세요"
-        />
-        <button type="submit">전송</button>
-      </form>
-      {response && <div className="response">{response}</div>}
-    </div>
-  );
-}
-
-export default App;
-```
-
-### 3. 데이터베이스 규칙
-```python
-import sqlite3
-from contextlib import contextmanager
-from typing import List, Dict, Any
-
-class DatabaseManager:
-    """데이터베이스 관리 클래스"""
-    
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self._create_tables()
-    
-    @contextmanager
-    def get_connection(self):
-        """데이터베이스 연결 컨텍스트 매니저"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            yield conn
-        finally:
-            conn.close()
-    
-    def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
-        """쿼리 실행"""
-        with self.get_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
-```
-
-### 4. AI 모델 규칙
-```python
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from typing import List, Dict, Any
-
-class ModelManager:
-    """모델 관리 클래스"""
-    
-    def __init__(self, model_name: str, device: str = "cpu"):
-        self.model_name = model_name
-        self.device = device
-        self.model = None
-        self.tokenizer = None
-        self._load_model()
-    
-    def _load_model(self):
-        """모델 로딩"""
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
-            )
-            self.model.to(self.device)
-        except Exception as e:
-            raise RuntimeError(f"Failed to load model {self.model_name}: {e}")
-    
-    def generate_response(self, prompt: str, max_length: int = 512) -> str:
-        """응답 생성"""
-        inputs = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
-        
-        with torch.no_grad():
-            outputs = self.model.generate(
-                inputs,
-                max_length=max_length,
-                num_return_sequences=1,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id
-            )
-        
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return response
-```
-
-### 5. Batch File (.bat) 규칙
-```batch
-@echo off
-REM All REM comments in batch files must be written in English only
-REM This ensures compatibility across different Windows locales and prevents encoding issues
-REM Example of correct usage:
-REM Check if virtual environment exists
-REM Activate virtual environment
-REM Set environment variables
-
-REM Incorrect examples (DO NOT USE):
-REM 가상 환경 확인
-REM 환경 변수 설정
-
-REM Environment variables (defaults)
-if not defined API_HOST set "API_HOST=0.0.0.0"
-if not defined API_PORT set "API_PORT=8000"
-if not defined LOG_LEVEL set "LOG_LEVEL=info"
-
-REM Start server
-echo [INFO] Starting server...
-python -m uvicorn api.main:app --host %API_HOST% --port %API_PORT%
-```
-
-**Batch File 규칙 요약:**
-- **REM 주석**: 반드시 영어로만 작성
-- **이유**: 다양한 Windows 로케일에서 호환성 보장 및 인코딩 문제 방지
-- **echo 메시지**: 사용자에게 표시되는 메시지는 한글 사용 가능 (인코딩 설정 필요 시)
-- **변수명**: 영어 사용 권장
+**기존 파일**: `docs/11.cursor_rules/run_query_test_logging.md` - 테스트 로그 파일 저장 규칙 (상세 내용은 본 문서 하단 참조)
 
 ## 성능 최적화 규칙
 
@@ -573,143 +168,76 @@ class AsyncService:
         pass
 ```
 
-## 테스트 규칙
-
-### 1. 단위 테스트
-```python
-import pytest
-from unittest.mock import Mock, patch
-from source.services.chat_service import ChatService
-
-class TestChatService:
-    """ChatService 테스트 클래스"""
-    
-    def setup_method(self):
-        """테스트 설정"""
-        self.chat_service = ChatService()
-    
-    def test_process_message_success(self):
-        """메시지 처리 성공 테스트"""
-        message = "계약서 검토 요청"
-        result = self.chat_service.process_message(message)
-        assert isinstance(result, str)
-        assert len(result) > 0
-    
-    def test_process_message_empty_input(self):
-        """빈 입력 처리 테스트"""
-        with pytest.raises(ValueError):
-            self.chat_service.process_message("")
-    
-    @patch('source.models.kobart_model.KoBARTModel')
-    def test_process_message_with_mock(self, mock_model):
-        """모킹을 사용한 테스트"""
-        mock_model.return_value.generate.return_value = "테스트 응답"
-        result = self.chat_service.process_message("테스트")
-        assert result == "테스트 응답"
-```
-
-### 2. 통합 테스트
-```python
-# tests/integration/test_api.py
-import pytest
-import sys
-import os
-from fastapi.testclient import TestClient
-
-# source 모듈 경로 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'source'))
-
-from api.main import app
-
-client = TestClient(app)
-
-def test_chat_endpoint():
-    """채팅 엔드포인트 테스트"""
-    response = client.post(
-        "/api/chat",
-        json={"message": "계약서 검토 요청"}
-    )
-    assert response.status_code == 200
-    assert "response" in response.json()
-
-# tests/integration/test_frontend.tsx
-import React from 'react';
-import { render, screen } from '@testing-library/react';
-import App from '../../frontend/src/App';
-
-describe('App Component', () => {
-  it('renders the app correctly', () => {
-    render(<App />);
-    expect(screen.getByText('법률 AI 어시스턴트')).toBeInTheDocument();
-  });
-
-  it('handles message submission', async () => {
-    render(<App />);
-    const input = screen.getByPlaceholderText('법률 관련 질문을 입력하세요');
-    const button = screen.getByText('전송');
-    
-    // 테스트 로직
-  });
-});
-```
-
 ## 문서화 규칙
 
 **중요**: 문서화 규칙은 **새로운 코드 작성 시**에만 적용됩니다. 기존 코드에 문서화가 없는 경우, 강제로 추가하지 않습니다.
 
-### 1. 함수 문서화
+### 상세 기능 설명 작성 규칙 (CRITICAL)
+
+**상세 기능에 대한 설명은 반드시 `docs/` 폴더에만 작성합니다.**
+
+#### 원칙
+1. **상세 설명은 docs 폴더에만 작성**
+   - 기능의 상세한 설명, 아키텍처, 설계 의도 등은 `docs/` 폴더의 마크다운 파일에만 작성
+   - 코드 파일에는 최소한의 주석만 작성 (코드 자체로 이해 가능한 경우 주석 없음)
+   - 코드 내부에 긴 설명이나 문서화 문자열(docstring)을 과도하게 작성하지 않음
+
+2. **코드 파일 작성 규칙**
+   ```python
+   # ❌ 나쁜 예: 코드 파일에 상세 설명 작성
+   def process_legal_document(document: str) -> Dict[str, Any]:
+       """
+       법률 문서를 분석하고 처리하는 함수입니다.
+       
+       이 함수는 다음과 같은 단계로 동작합니다:
+       1. 문서를 전처리하여 불필요한 공백과 특수문자를 제거합니다.
+       2. 문서를 토큰화하여 단어 단위로 분리합니다.
+       3. 각 토큰에 대해 법률 용어 사전을 참조하여 의미를 분석합니다.
+       4. 분석 결과를 바탕으로 문서의 주요 내용을 추출합니다.
+       5. 추출된 내용을 구조화된 형식으로 반환합니다.
+       
+       성능 최적화를 위해 캐싱 메커니즘을 사용하며,
+       동시에 여러 문서를 처리할 수 있도록 비동기 처리를 지원합니다.
+       """
+       # 함수 구현
+       pass
+   
+   # ✅ 좋은 예: 코드 파일에는 최소한의 설명만
+   def process_legal_document(document: str) -> Dict[str, Any]:
+       """법률 문서를 분석하고 처리합니다."""
+       # 함수 구현
+       pass
+   ```
+
+3. **docs 폴더 구조**
+   - `docs/01_getting_started/`: 시작 가이드
+   - `docs/02_data/`: 데이터 관련 문서
+   - `docs/03_rag_system/`: RAG 시스템 문서
+   - `docs/04_models/`: 모델 관련 문서
+   - `docs/05_quality/`: 품질 관련 문서
+   - `docs/06_deployment/`: 배포 관련 문서
+   - `docs/07_api/`: API 관련 문서
+   - `docs/08_features/`: 기능 상세 설명
+   - `docs/09_user_guide/`: 사용자 가이드
+   - `docs/10_technical_reference/`: 기술 참고 문서
+   - `docs/11.cursor_rules/`: 커서 규칙 문서 (상세 규칙은 여기 참조)
+
+### 함수 및 클래스 문서화
 ```python
 def process_legal_document(
     document: str,
     document_type: str = "contract",
     analysis_depth: int = 1
 ) -> Dict[str, Any]:
-    """
-    법률 문서를 분석하고 처리합니다.
-    
-    Args:
-        document (str): 분석할 문서 내용
-        document_type (str, optional): 문서 유형. Defaults to "contract".
-        analysis_depth (int, optional): 분석 깊이 (1-5). Defaults to 1.
-    
-    Returns:
-        Dict[str, Any]: 분석 결과 딕셔너리
-            - summary: 문서 요약
-            - issues: 발견된 문제점
-            - recommendations: 권장사항
-            - confidence: 신뢰도 점수
-    
-    Raises:
-        ValueError: 문서가 비어있거나 유효하지 않은 경우
-        RuntimeError: 분석 과정에서 오류가 발생한 경우
-    
-    Example:
-        >>> result = process_legal_document("계약서 내용...", "contract", 2)
-        >>> print(result["summary"])
-    """
+    """법률 문서를 분석하고 처리합니다."""
+    pass
+
+class LegalDocumentAnalyzer:
+    """법률 문서 분석을 위한 클래스"""
     pass
 ```
 
-### 2. 클래스 문서화
-```python
-class LegalDocumentAnalyzer:
-    """
-    법률 문서 분석을 위한 클래스
-    
-    이 클래스는 계약서, 판례, 법령 등의 법률 문서를 분석하고
-    중요한 정보를 추출하는 기능을 제공합니다.
-    
-    Attributes:
-        model_manager (ModelManager): AI 모델 관리자
-        config (Config): 설정 객체
-        cache (Dict): 분석 결과 캐시
-    
-    Example:
-        >>> analyzer = LegalDocumentAnalyzer(config)
-        >>> result = analyzer.analyze_contract(contract_text)
-    """
-    pass
-```
+**참고**: 상세한 문서화 예시는 `docs/10_technical_reference/development_rules.md` 참조
 
 ## 보안 규칙
 
@@ -810,7 +338,7 @@ COPY --from=builder /root/.local /home/app/.local
 
 # 애플리케이션 코드 복사
 COPY --chown=app:app api/ ./api/
-COPY --chown=app:app source/ ./source/
+COPY --chown=app:app lawfirm_langgraph/ ./lawfirm_langgraph/
 
 # PATH 설정
 ENV PATH=/home/app/.local/bin:$PATH
@@ -875,25 +403,7 @@ Closes #123
 
 ## 성능 모니터링 규칙
 
-### 1. 로깅 설정
-```python
-import logging
-import sys
-from datetime import datetime
-
-def setup_logging(log_level: str = "INFO"):
-    """로깅 설정"""
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(f'logs/lawfirm_ai_{datetime.now().strftime("%Y%m%d")}.log')
-        ]
-    )
-```
-
-### 2. 메트릭 수집
+### 1. 메트릭 수집
 ```python
 import time
 from functools import wraps
@@ -918,8 +428,13 @@ def measure_time(func):
 - [ ] **신규 파일 생성이 정말 필요한가?** (기존 파일 수정으로 불가능한가?)
 - [ ] **원본 코드를 최대한 보존했는가?** (CRITICAL)
 - [ ] **불필요한 주석을 과도하게 추가하지 않았는가?** (CRITICAL)
+- [ ] **상세 기능 설명이 docs 폴더에만 작성되었는가?** (코드 파일에 상세 설명 작성 금지) (CRITICAL)
 - [ ] **Pydantic V2 스타일을 사용했는가?** (`@field_validator` 사용, `@validator` 사용 금지) (CRITICAL)
-- [ ] 코드가 프로젝트 구조 규칙을 따르는가?
+- [ ] **한국어 불용어 처리 시 KoNLPy를 우선적으로 사용했는가?** (KoNLPy 사용 가능 시 형태소 분석 사용, 폴백 구현 필수) (CRITICAL)
+- [ ] **데이터베이스 연결 풀링 시스템을 사용했는가?** (`sqlite3.connect()` 직접 호출 금지, `get_connection_pool()` 사용 필수) (CRITICAL)
+- [ ] **Linter 오류가 없는가?** (사용되지 않는 변수, 플레이스홀더 없는 f-string, 사용되지 않는 import 등) (CRITICAL)
+- [ ] **LangGraph Node/Edge/Task를 올바르게 사용했는가?** (Node 시그니처, State 관리, 라우팅 함수 등) (CRITICAL)
+- [ ] 코드가 프로젝트 구조 규칙을 따르는가? (`lawfirm_langgraph/` 구조 사용)
 - [ ] 함수와 클래스에 적절한 문서화가 있는가?
 - [ ] 에러 처리가 적절히 구현되어 있는가?
 - [ ] 테스트 코드가 작성되어 있는가?
@@ -933,6 +448,74 @@ def measure_time(func):
 - [ ] 비동기 처리가 필요한 부분에 적용되었는가?
 - [ ] 캐싱 전략이 적절한가?
 - [ ] 모니터링이 가능한가?
+
+## 테스트 로그 파일 저장 규칙
+
+### run_query_test.py 로그 파일 저장
+
+**run_query_test.py** 스크립트를 실행할 때 로그를 파일로 저장하여 분석할 수 있습니다.
+
+#### 자동 로그 파일 생성 (기본)
+
+기본적으로 로그 파일은 자동으로 생성됩니다:
+
+```bash
+python lawfirm_langgraph/tests/scripts/run_query_test.py "계약 해지 사유에 대해 알려주세요"
+```
+
+**로그 파일 위치**: `logs/test/run_query_test_YYYYMMDD_HHMMSS.log`
+
+#### 환경 변수 설정
+
+**로그 파일 경로 지정**:
+```powershell
+$env:TEST_LOG_FILE="logs/test/my_test.log"
+python lawfirm_langgraph/tests/scripts/run_query_test.py "질의 내용"
+```
+
+**로그 디렉토리 변경**:
+```powershell
+$env:TEST_LOG_DIR="logs/custom_test"
+python lawfirm_langgraph/tests/scripts/run_query_test.py "질의 내용"
+```
+
+**로그 레벨 설정**:
+```powershell
+$env:TEST_LOG_LEVEL="DEBUG"  # DEBUG, INFO, WARNING, ERROR
+python lawfirm_langgraph/tests/scripts/run_query_test.py "질의 내용"
+```
+
+#### 로그 분석 예시
+
+**성능 메트릭 추출**:
+```powershell
+Select-String -Pattern "PERFORMANCE|process_search_results_combined|expand_keywords" logs/test/run_query_test_*.log
+```
+
+**Keyword Coverage 추출**:
+```powershell
+Select-String -Pattern "Keyword Coverage" logs/test/run_query_test_*.log
+```
+
+**에러 로그 추출**:
+```powershell
+Select-String -Pattern "ERROR|❌|⚠️" logs/test/run_query_test_*.log
+```
+
+**메타데이터 오타 확인**:
+```powershell
+Select-String -Pattern "interpretation_id|interpretatiion_id|interpretattion_id|Normalized typo|Fixed typo" logs/test/run_query_test_*.log
+```
+
+#### 환경 변수 요약
+
+| 환경 변수 | 설명 | 기본값 |
+|---------|------|--------|
+| `TEST_LOG_FILE` | 로그 파일 경로 (전체 경로) | 자동 생성 |
+| `TEST_LOG_DIR` | 로그 디렉토리 | `logs/test` |
+| `TEST_LOG_LEVEL` | 로그 레벨 | `INFO` |
+
+**자세한 내용**: `docs/11.cursor_rules/run_query_test_logging.md` 참조
 
 ---
 

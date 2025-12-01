@@ -34,10 +34,20 @@ tests/
 │   ├── processing/            # core/processing 테스트
 │   │   ├── test_extractors.py
 │   │   └── test_parsers.py
-│   └── agents/                # core/agents 테스트
-│       ├── test_handlers.py
-│       ├── test_extractors.py
-│       └── test_parsers.py
+│   ├── agents/                # core/agents 테스트
+│   │   ├── test_handlers.py
+│   │   ├── test_extractors.py
+│   │   └── test_parsers.py
+│   └── workflow/              # core/workflow 테스트 (리팩토링된 구조)
+│       ├── test_classification_nodes.py
+│       ├── test_search_nodes.py
+│       ├── test_document_nodes.py
+│       ├── test_answer_nodes.py
+│       ├── test_agentic_nodes.py
+│       ├── test_ethical_rejection_node.py
+│       ├── test_subgraphs.py
+│       ├── test_edges.py
+│       └── test_registry.py
 │
 ├── integration/               # 통합 테스트
 │   ├── test_workflow_service.py
@@ -52,15 +62,32 @@ tests/
 │   ├── test_sources_detail.py
 │   └── test_unified_source_formatter.py
 │
+│
+│   ├── test_processing_extractors.py
+│   ├── test_processing_quality_validators.py
+│   ├── test_processing_reasoning_extractor.py
+│   ├── test_processing_response_parsers.py
+│   ├── test_prompt_builders.py
+│   ├── test_state_definitions.py
+│   ├── test_state_modular_states.py
+│   ├── test_state_utils.py
+│   ├── test_tools_legal_search_tools.py
+│   ├── test_utils_workflow_constants.py
+│   ├── test_utils_workflow_routes.py
+│   ├── test_workflow_legal_workflow_enhanced.py
+│   ├── test_workflow_service.py
+│   └── test_workflow_utils.py
+│
 ├── config/                    # 설정 관련 테스트
-│   └── test_config.py         # LangGraphConfig 테스트
+│   ├── test_config.py         # LangGraphConfig 테스트
+│   └── test_app_config.py     # AppConfig 테스트
 │
 ├── scripts/                   # 테스트 실행 스크립트
-│   ├── run_all_tests.py
-│   ├── run_tests_manual.py
-│   ├── run_single_query_test.py      # 기존 단일 질의 테스트 (레거시)
-│   ├── run_single_query_test_stream.py
-│   └── run_query_test.py              # 개선된 단일 질의 테스트 (권장)
+│   ├── run_query_test.py      # 메인 쿼리 테스트 스크립트 (권장)
+│   └── ...                    # 기타 테스트 스크립트들
+│
+├── run_coverage.py            # 커버리지 측정 스크립트 (Windows 호환)
+├── run_tests_manual.py        # 수동 테스트 실행 스크립트
 │
 └── fixtures/                   # 테스트 픽스처 및 데이터
     └── data/                   # 테스트 데이터 디렉토리
@@ -107,6 +134,17 @@ tests/
 - `test_extractors.py`: Extractors 테스트
 - `test_parsers.py`: Parsers 테스트
 
+#### unit/workflow/ (리팩토링된 구조)
+- `test_classification_nodes.py`: ClassificationNodes 클래스 테스트
+- `test_search_nodes.py`: SearchNodes 클래스 테스트
+- `test_document_nodes.py`: DocumentNodes 클래스 테스트
+- `test_answer_nodes.py`: AnswerNodes 클래스 테스트
+- `test_agentic_nodes.py`: AgenticNodes 클래스 테스트
+- `test_ethical_rejection_node.py`: EthicalRejectionNode 클래스 테스트
+- `test_subgraphs.py`: 서브그래프 (ClassificationSubgraph, SearchSubgraph 등) 테스트
+- `test_edges.py`: 엣지 빌더 (ClassificationEdges, SearchEdges 등) 테스트
+- `test_registry.py`: 레지스트리 패턴 (NodeRegistry, SubgraphRegistry) 테스트
+
 ### 통합 테스트 (integration/)
 
 - `test_workflow_service.py`: LangGraphWorkflowService 클래스 테스트
@@ -125,21 +163,27 @@ tests/
 ### 설정 테스트 (config/)
 
 - `test_config.py`: LangGraphConfig 클래스 테스트, CheckpointStorageType Enum 테스트
+- `test_app_config.py`: AppConfig 클래스 테스트
 
 ## 실행 방법
 
 ### 전체 테스트 실행
 
 ```bash
-# 수동 테스트 실행 스크립트 (권장 - pytest 버퍼 문제 우회)
-python lawfirm_langgraph/tests/scripts/run_tests_manual.py
+# pytest 직접 사용 (권장)
+pytest lawfirm_langgraph/tests/ -v -s --capture=no
 
-# pytest 직접 사용
-pytest lawfirm_langgraph/tests/ -v
+# Windows 환경에서 버퍼 이슈가 있는 경우
+$env:PYTHONUNBUFFERED=1; pytest lawfirm_langgraph/tests/ -v -s --capture=no
 
-# run_all_tests.py 사용 (pytest 기반)
-python lawfirm_langgraph/tests/scripts/run_all_tests.py
+# 수동 테스트 실행 스크립트 (pytest 버퍼 문제 우회)
+python lawfirm_langgraph/tests/run_tests_manual.py
 ```
+
+**Windows 환경 개선 사항:**
+- `-s` 옵션과 `--capture=no` 옵션으로 출력 버퍼링 비활성화
+- `PYTHONUNBUFFERED=1` 환경 변수 설정으로 Python 출력 버퍼링 비활성화
+- `run_coverage.py`는 Windows 버퍼 이슈를 해결하기 위해 개선되었습니다
 
 ### 단위 테스트만 실행
 
@@ -151,6 +195,11 @@ pytest lawfirm_langgraph/tests/unit/ -v
 pytest lawfirm_langgraph/tests/unit/utils/ -v
 pytest lawfirm_langgraph/tests/unit/data/ -v
 pytest lawfirm_langgraph/tests/unit/services/ -v
+
+# 워크플로우 노드 테스트 (리팩토링된 구조)
+pytest lawfirm_langgraph/tests/unit/workflow/ -v
+pytest lawfirm_langgraph/tests/unit/workflow/test_classification_nodes.py -v
+pytest lawfirm_langgraph/tests/unit/workflow/test_search_nodes.py -v
 ```
 
 ### 통합 테스트만 실행
@@ -189,16 +238,6 @@ python lawfirm_langgraph/tests/scripts/run_query_test.py -f query.txt
 - 간소화된 코드 구조
 - LangGraph 최신 로직 반영
 
-#### 기존 버전 (레거시)
-
-```bash
-# 기본 질의로 테스트 실행
-python lawfirm_langgraph/tests/scripts/run_single_query_test.py
-
-# 커스텀 질의로 테스트 실행
-python lawfirm_langgraph/tests/scripts/run_single_query_test.py "계약서 작성 시 주의할 사항은 무엇인가요?"
-```
-
 ### 특정 테스트 실행
 
 ```bash
@@ -215,11 +254,14 @@ pytest lawfirm_langgraph/tests/config/test_config.py::TestLangGraphConfig::test_
 ### 커버리지 리포트
 
 ```bash
-# 커버리지 리포트 생성
-pytest lawfirm_langgraph/tests/ --cov=lawfirm_langgraph --cov-report=html
+# run_coverage.py 사용 (권장 - Windows 호환)
+python lawfirm_langgraph/tests/run_coverage.py
+
+# pytest 직접 사용
+pytest lawfirm_langgraph/tests/ --cov=lawfirm_langgraph --cov-report=html --cov-report=term-missing
 
 # HTML 리포트 확인
-# htmlcov/index.html 파일을 브라우저에서 열기
+# lawfirm_langgraph/htmlcov/index.html 파일을 브라우저에서 열기
 ```
 
 ## 테스트 픽스처
@@ -235,6 +277,15 @@ pytest lawfirm_langgraph/tests/ --cov=lawfirm_langgraph --cov-report=html
 - `mock_answer_generator`: Mock AnswerGenerator - 답변 생성기 모의 객체
 - `cleanup_test_files`: 테스트 파일 정리 - 테스트 후 생성된 파일 정리
 - `setup_test_environment`: 테스트 환경 설정 (autouse) - 자동으로 테스트 환경 변수 설정
+- `mock_workflow_instance`: Mock 워크플로우 인스턴스 (노드 클래스용)
+- `classification_nodes`: ClassificationNodes 인스턴스
+- `search_nodes`: SearchNodes 인스턴스
+- `document_nodes`: DocumentNodes 인스턴스
+- `answer_nodes`: AnswerNodes 인스턴스
+- `agentic_nodes`: AgenticNodes 인스턴스
+- `ethical_rejection_node`: EthicalRejectionNode 인스턴스
+- `node_registry`: NodeRegistry 인스턴스
+- `subgraph_registry`: SubgraphRegistry 인스턴스
 
 ## 테스트 작성 가이드
 
@@ -276,7 +327,11 @@ class TestNewFeature:
 2. **비동기 테스트**: `@pytest.mark.asyncio` 데코레이터 사용
 3. **환경 변수**: 테스트 환경은 자동으로 설정됨 (`conftest.py`의 `setup_test_environment`)
 4. **파일 정리**: 테스트 생성 파일은 `cleanup_test_files` 픽스처로 정리
-5. **Import 경로**: 모든 테스트는 `lawfirm_langgraph.core.*` 형식의 import 경로 사용
+5. **Import 경로**: 
+   - Core 모듈: `lawfirm_langgraph.core.*` 형식
+   - LangGraph Core 모듈: `lawfirm_langgraph.langgraph_core.*` 형식
+   - Generation 모듈: `lawfirm_langgraph.core.generation.validators.*`, `lawfirm_langgraph.core.generation.formatters.*` 형식
+6. **Windows 환경**: pytest 직접 사용 시 `-s --capture=no` 옵션과 `PYTHONUNBUFFERED=1` 환경 변수 사용 권장 (버퍼 이슈 해결)
 
 ## 문제 해결
 
@@ -301,10 +356,19 @@ pip install pytest-asyncio
 - Mock 패치 경로 확인
 - 실제 import 경로와 Mock 경로 일치 확인
 
-### pytest 버퍼 문제
+### pytest 버퍼 문제 (Windows)
 
-- `run_tests_manual.py` 사용 (권장)
-- 또는 pytest 실행 시 `-s` 옵션 사용: `pytest lawfirm_langgraph/tests/ -v -s`
+- pytest 직접 사용 (권장) - `-s --capture=no` 옵션과 `PYTHONUNBUFFERED=1` 환경 변수로 Windows 버퍼 이슈 해결
+- `run_coverage.py` 사용 - 커버리지 측정 시 Windows 호환
+- 또는 pytest 실행 시 `-s --capture=no` 옵션 사용: `pytest lawfirm_langgraph/tests/ -v -s --capture=no`
+
+### Import 경로 변경 사항
+
+일부 모듈의 경로가 변경되었습니다:
+
+- `core.services.source_validator` → `core.generation.validators.source_validator`
+- `core.services.unified_source_formatter` → `core.generation.formatters.unified_source_formatter`
+- `DocumentProcessor` → `LegalDocumentProcessor` (core/processing/processors/)
 
 ## 참고
 

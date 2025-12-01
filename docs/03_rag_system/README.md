@@ -4,8 +4,16 @@
 
 ## 📋 문서 목록
 
+### 핵심 아키텍처
 - **[LangChain RAG 아키텍처](rag_architecture.md)**: LangChain 기반 RAG 시스템의 상세 아키텍처 및 구현
-- **[하이브리드 검색 구현 가이드](hybrid_search_guide.md)**: 하이브리드 검색 시스템 구현 방법
+- **[LangGraph 통합 가이드](langgraph_integration_guide.md)**: LangGraph 통합 및 개발 가이드
+- **[LangChain/LangGraph 개발 규칙](langchain_langgraph_development_rules.md)**: 개발 규칙 및 가이드라인
+
+### MLflow 통합
+- **[MLflow 통합 가이드](mlflow_guide.md)**: MLflow를 활용한 인덱스 관리, 검색 품질 최적화, 최적 파라미터 통합 종합 가이드
+
+### 성능 개선
+- **[RAG 검색 성능 개선 계획](rag_search_performance_improvement_plan.md)**: 검색 성능 개선 계획 및 방안
 
 ## 🎯 현재 상태
 

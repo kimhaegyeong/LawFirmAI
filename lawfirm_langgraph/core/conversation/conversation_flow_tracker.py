@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -16,13 +20,10 @@ from .conversation_manager import ConversationContext, ConversationTurn
 try:
     from core.classification.analyzers.emotion_intent_analyzer import EmotionIntentAnalyzer
 except ImportError:
-    # 호환성을 위한 fallback
-    try:
-        from core.services.emotion_intent_analyzer import EmotionIntentAnalyzer
-    except ImportError:
-        EmotionIntentAnalyzer = None
+    # 호환성을 위한 fallback (더 이상 services에 없음)
+    EmotionIntentAnalyzer = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -56,7 +57,7 @@ class ConversationFlowTracker:
         Args:
             max_pattern_history: 최대 패턴 이력 수
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_pattern_history = max_pattern_history
         
         # 감정/의도 분석기
@@ -754,7 +755,12 @@ class ConversationFlowTracker:
         try:
             handler = self._get_classification_handler()
             if not handler:
-                self.logger.warning("ClassificationHandler not available, using fallback")
+                # ClassificationHandler 초기화 실패 시 상세 로깅
+                self.logger.warning(
+                    f"ClassificationHandler not available, using fallback. "
+                    f"This may affect classification accuracy. "
+                    f"Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+                )
                 return self._classify_question_type_fallback(query)
             
             question_type, confidence = handler.classify_with_llm(query)

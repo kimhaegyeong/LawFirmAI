@@ -61,7 +61,9 @@ for doc in result['results']:
 ## API 문서 구조
 
 - **[API 설계 명세서](docs/07_api/API_Documentation.md)** - LawFirmAI API 전체 명세
-- **[국가법령정보 OPEN API 가이드](docs/07_api/open_law/README.md)** - 외부 API 연동 가이드
-- **[API별 상세 가이드](docs/07_api/open_law/README.md)** - 각 API별 상세 문서
+- **[Open Law API 데이터 수집 가이드](docs/07_api/open_law/ingestion/README.md)** - 데이터 수집 가이드
+- **[Open Law API 빠른 시작](docs/07_api/open_law/ingestion/QUICK_START.md)** - 빠른 시작 가이드
+- **[Open Law API 환경 설정](docs/07_api/open_law/ingestion/SETUP.md)** - 환경 설정 가이드
+- **[판례 데이터 청킹 전략](docs/07_api/open_law/ingestion/CHUNKING.md)** - 청킹 전략 가이드
 
 

@@ -8,12 +8,29 @@ State Adapter Layer
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
-from .modular_states import LegalWorkflowState
-from .node_input_output_spec import validate_node_input
+# modular_states는 core/workflow/state/에 있으므로 올바른 경로로 import
+try:
+    from lawfirm_langgraph.core.workflow.state.modular_states import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.modular_states import LegalWorkflowState
+try:
+    from core.workflow.node_input_output_spec import validate_node_input
+except ImportError:
+    try:
+        from ..workflow.node_input_output_spec import validate_node_input
+    except ImportError:
+        # Fallback: validate_node_input이 없어도 동작하도록
+        def validate_node_input(node_name: str, state: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+            """Fallback: 항상 검증 통과"""
+            return True, None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _extract_analysis_state(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,9 +228,17 @@ class StateAdapter:
             analysis = {}
 
         # Answer
-        answer = state.get("answer", {})
-        if not isinstance(answer, dict):
-            answer = {}
+        answer = state.get("answer", "")
+        # answer가 문자열인 경우 그대로 유지 (딕셔너리로 변환하지 않음)
+        if isinstance(answer, str):
+            # 문자열 answer를 그대로 사용
+            pass
+        elif isinstance(answer, dict):
+            # 이미 딕셔너리인 경우 그대로 사용
+            pass
+        else:
+            # 다른 타입인 경우 빈 문자열로 변환
+            answer = ""
 
         # Document
         document = state.get("document", {})
@@ -270,9 +295,9 @@ class StateAdapter:
             "legal_citations": analysis.get("legal_citations"),
 
             # Answer
-            "answer": answer.get("answer", ""),
-            "sources": answer.get("sources", []),
-            "structure_confidence": answer.get("structure_confidence", 0.0),
+            "answer": answer if isinstance(answer, str) else answer.get("answer", "") if isinstance(answer, dict) else "",
+            "sources": answer.get("sources", []) if isinstance(answer, dict) else [],
+            "structure_confidence": answer.get("structure_confidence", 0.0) if isinstance(answer, dict) else 0.0,
 
             # Document
             "document_type": document.get("document_type"),

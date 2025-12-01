@@ -6,13 +6,17 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
 from .conversation_manager import ConversationContext, ConversationTurn
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -31,7 +35,7 @@ class MultiTurnQuestionHandler:
     
     def __init__(self):
         """다중 턴 질문 처리기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 대명사 패턴 정의
         self.pronoun_patterns = {

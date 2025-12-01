@@ -5,22 +5,45 @@ LangGraph 설정 관리 모듈
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
-from dotenv import load_dotenv
+# 환경 변수 로드 (중앙 집중식 로더 사용)
+try:
+    import sys
+    from pathlib import Path
+    
+    # 프로젝트 루트 찾기
+    _current_file = Path(__file__)
+    _core_dir = _current_file.parent.parent.parent
+    _langgraph_dir = _core_dir.parent
+    _project_root = _langgraph_dir.parent
+    
+    # 공통 로더 사용
+    if str(_project_root) not in sys.path:
+        sys.path.insert(0, str(_project_root))
+    from utils.env_loader import ensure_env_loaded
+    
+    # 프로젝트 루트 .env 파일 명시적으로 로드 (중복 방지)
+    ensure_env_loaded(_project_root)
+except ImportError:
+    # 공통 로더가 없으면 환경 변수만 사용
+    pass
 
-# .env 파일 로드
-load_dotenv()
+logger = get_logger(__name__)
 
-logger = logging.getLogger(__name__)
+# 설정 캐시 (싱글톤)
+_cached_config: Optional['LangGraphConfig'] = None
 
 
 class CheckpointStorageType(Enum):
     """체크포인트 저장소 타입"""
-    SQLITE = "sqlite"
     POSTGRES = "postgres"
     REDIS = "redis"
 
@@ -30,7 +53,7 @@ class LangGraphConfig:
     """LangGraph 설정 클래스"""
 
     # 체크포인트 설정
-    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.SQLITE
+    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.POSTGRES
     checkpoint_db_path: str = "./data/checkpoints/langgraph.db"
     checkpoint_ttl: int = 3600  # 1시간
 
@@ -44,10 +67,6 @@ class LangGraphConfig:
     google_model: str = "gemini-2.5-flash-lite"  # .env 파일의 설정에 맞게 변경
     google_api_key: str = ""
 
-    # 기존 Ollama 설정 (백업용)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:3b"
-    ollama_timeout: int = 15
 
     # LangGraph 활성화 설정
     langgraph_enabled: bool = True
@@ -90,21 +109,38 @@ class LangGraphConfig:
     use_agentic_mode: bool = False  # Agentic AI 모드 활성화 (Tool Use/Function Calling)
 
     @classmethod
-    def from_env(cls) -> 'LangGraphConfig':
-        """환경 변수에서 설정 로드"""
+    def from_env(cls, force_reload: bool = False) -> 'LangGraphConfig':
+        """
+        환경 변수에서 설정 로드 (캐싱 적용)
+        
+        Args:
+            force_reload: True이면 캐시 무시하고 새로 로드 (기본값: False)
+            
+        Returns:
+            LangGraphConfig 인스턴스
+        """
+        # global 선언을 먼저 해야 함
+        global _cached_config
+        
+        if not force_reload and _cached_config is not None:
+            logger.debug("LangGraphConfig reused from cache")
+            return _cached_config
+        
         config = cls()
 
         # LangGraph 활성화 설정
         config.langgraph_enabled = os.getenv("LANGGRAPH_ENABLED", "true").lower() == "true"
 
         # 체크포인트 설정
-        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "sqlite")
-        if checkpoint_storage == "sqlite":
-            config.checkpoint_storage = CheckpointStorageType.SQLITE
-        elif checkpoint_storage == "postgres":
+        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "postgres")
+        if checkpoint_storage == "postgres":
             config.checkpoint_storage = CheckpointStorageType.POSTGRES
         elif checkpoint_storage == "redis":
             config.checkpoint_storage = CheckpointStorageType.REDIS
+        else:
+            # 알 수 없는 타입은 postgres로 폴백
+            logger.warning(f"Unknown checkpoint storage type: {checkpoint_storage}, using postgres")
+            config.checkpoint_storage = CheckpointStorageType.POSTGRES
 
         config.checkpoint_db_path = os.getenv("LANGGRAPH_CHECKPOINT_DB", config.checkpoint_db_path)
         config.checkpoint_ttl = int(os.getenv("CHECKPOINT_TTL", config.checkpoint_ttl))
@@ -119,10 +155,6 @@ class LangGraphConfig:
         config.google_model = os.getenv("GOOGLE_MODEL", config.google_model)
         config.google_api_key = os.getenv("GOOGLE_API_KEY", config.google_api_key)
 
-        # Ollama 설정 (백업용)
-        config.ollama_base_url = os.getenv("OLLAMA_BASE_URL", config.ollama_base_url)
-        config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
-        config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
 
         # Langfuse 설정
         config.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
@@ -180,6 +212,10 @@ class LangGraphConfig:
         config.use_agentic_mode = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
 
         logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
+        
+        # 캐시 저장
+        _cached_config = config
+        
         return config
 
     def validate(self) -> List[str]:
@@ -200,8 +236,6 @@ class LangGraphConfig:
             if self.recursion_limit <= 0:
                 errors.append("RECURSION_LIMIT must be positive")
 
-            if self.ollama_timeout <= 0:
-                errors.append("OLLAMA_TIMEOUT must be positive")
 
         return errors
 
@@ -214,9 +248,6 @@ class LangGraphConfig:
             "max_iterations": self.max_iterations,
             "recursion_limit": self.recursion_limit,
             "enable_streaming": self.enable_streaming,
-            "ollama_base_url": self.ollama_base_url,
-            "ollama_model": self.ollama_model,
-            "ollama_timeout": self.ollama_timeout,
             "langgraph_enabled": self.langgraph_enabled,
             "langfuse_enabled": self.langfuse_enabled,
             "langsmith_enabled": self.langsmith_enabled,

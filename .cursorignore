@@ -1,47 +1,241 @@
 # Cursor ignore file - controls which files Cursor can edit
-# .env 파일은 보안상 편집하지 않도록 설정
-.env
-# .env.example은 접근 가능하도록 허용 (환경 변수 템플릿 파일)
-!.env.example
-!**/.env.example
+# This file uses gitignore-style patterns to exclude files from Cursor's editing capabilities
 
-# 기타 민감한 파일들
+# ============================================================================
+# Security & Sensitive Files
+# ============================================================================
+.env
+.env.local
+.env.*.local
 *.key
 *.pem
 *.p12
 *.pfx
+*.crt
+*.cert
 secrets/
 credentials/
+*.secret
+*.token
 
-# 로그 파일들
-logs/
-*.log
+# Allow .env.example files (templates)
+!.env.example
+!**/.env.example
 
-# 캐시 및 임시 파일들
+# ============================================================================
+# Log Files
+# ============================================================================
+# First, ignore all logs directories and log files
+# logs/**
+# *.log
+# *.log.*
+*.out
+# Then, explicitly allow specific log directories (exceptions must come after general patterns)
+!logs/test/
+!logs/test/**
+!logs/test/**/*.log
+!logs/test/**/*.log.*
+!lawfirm_langgraph/logs/
+!lawfirm_langgraph/logs/**
+!lawfirm_langgraph/logs/**/*.log
+
+# ============================================================================
+# Python Cache & Compiled Files
+# ============================================================================
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================================================
+# Virtual Environments
+# ============================================================================
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# ============================================================================
+# Testing & Coverage
+# ============================================================================
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
 
-# 데이터베이스 파일들 (읽기 전용)
+# ============================================================================
+# Database Files (Read-only)
+# ============================================================================
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
+data/database/*.db
+data/database/*.sqlite
+data/database/*.sqlite3
 
-# 모델 파일들 (큰 파일들)
+# ============================================================================
+# AI Model Files (Large binary files)
+# ============================================================================
 *.bin
 *.safetensors
 *.h5
+*.hdf5
 *.pkl
+*.pickle
 *.joblib
+*.onnx
+*.tflite
+*.pb
+models/
+data/ml_models/
+data/ml_training/
 
-# 체크포인트 파일들
+# ============================================================================
+# Checkpoints & Training Artifacts
+# ============================================================================
 checkpoints/
 *.ckpt
 *.pt
 *.pth
+*.weights
+data/checkpoints/
+data/training/
+data/ml_training/
+
+# ============================================================================
+# Vector Store & Embeddings (Large files)
+# ============================================================================
+*.index
+*.faiss
+*.index.chunk_ids.json
+data/vector_store/
+data/embeddings/
+data/*.index
+data/*.faiss
+
+# ============================================================================
+# MLflow & Experiment Tracking
+# ============================================================================
+mlruns/
+mlflow/
+.mlflow/
+wandb/
+.wandb/
+tensorboard_logs/
+runs/
+
+# ============================================================================
+# Node.js & Frontend Build Artifacts
+# ============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.npm
+.eslintcache
+.stylelintcache
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/out/
+frontend/.vite/
+frontend/coverage/
+
+# ============================================================================
+# IDE & Editor Files
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================================
+# Backup & Temporary Files
+# ============================================================================
+*.bak
+*.backup
+*.tmp
+*.temp
+*.old
+*.orig
+*~
+*.swp
+*.swo
+data/*.backup
+data/*.bak
+
+# ============================================================================
+# Docker & Container Files (Generated)
+# ============================================================================
+.dockerignore
+docker-compose.override.yml
+
+# ============================================================================
+# OS Files
+# ============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ============================================================================
+# Large Data Files
+# ============================================================================
+data/raw/
+data/processed/
+data/cache/
+data/progress/
+data/performance_logs/
+data/prompt_performance/
+data/ml_feedback/
+data/ml_metrics/
+data/ml_config/
+data/evaluation/
+data/reports/
+data/extracted_terms/
+data/aihub/
+
+# ============================================================================
+# Documentation Build Output
+# ============================================================================
+docs/_build/
+docs/.doctrees/
+site/

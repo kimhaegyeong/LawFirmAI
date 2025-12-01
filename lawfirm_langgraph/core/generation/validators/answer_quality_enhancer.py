@@ -5,11 +5,22 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
 # 개별 품질 향상 모듈들 import
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, QuestionType
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+try:
+    from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    from core.classification.classifiers.question_classifier import QuestionType
 from .confidence_calculator import ConfidenceCalculator
 from .keyword_coverage_enhancer import KeywordCoverageEnhancer
 from .answer_structure_enhancer import AnswerStructureEnhancer, QuestionType as StructureQuestionType
@@ -22,7 +33,7 @@ class AnswerQualityEnhancer:
     
     def __init__(self):
         """초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 개별 품질 향상 모듈들 초기화
         self.prompt_manager = UnifiedPromptManager()

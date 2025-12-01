@@ -7,6 +7,10 @@
 import os
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import requests
 import asyncio
 import aiohttp
@@ -15,9 +19,12 @@ from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import hashlib
 
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LegalDataUpdater:

@@ -25,7 +25,10 @@ from functools import lru_cache
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.services.answer_structure_enhancer import QuestionType
+try:
+    from lawfirm_langgraph.core.generation.formatters.answer_structure_enhancer import QuestionType
+except ImportError:
+    from core.generation.formatters.answer_structure_enhancer import QuestionType
 
 @dataclass
 class ClassificationResult:

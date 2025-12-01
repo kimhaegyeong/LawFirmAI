@@ -24,7 +24,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
 from source.data.data_processor import LegalDataProcessor
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 from scripts.data_processing.auto_data_detector import AutoDataDetector
 

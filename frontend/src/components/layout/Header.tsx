@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Menu, Scale, LogOut, User, LogIn, Settings, Trash2 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { DeleteAccountModal } from '../auth/DeleteAccountModal';
+import logger from '../../utils/logger';
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -15,6 +16,18 @@ export function Header({ onMenuClick }: HeaderProps) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // 디버깅: 인증 상태 확인
+  useEffect(() => {
+    logger.info('[Header] Auth state:', {
+      isAuthenticated,
+      hasUser: !!user,
+      userAuthenticated: user?.authenticated,
+      userId: user?.user_id,
+      email: user?.email,
+      name: user?.name
+    });
+  }, [isAuthenticated, user]);
 
   const handleLogout = () => {
     if (confirm('로그아웃하시겠습니까?')) {
@@ -56,7 +69,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           <h1 className="text-xl font-bold text-slate-800">법률 AI 어시스턴트</h1>
         </div>
       </div>
-      {isAuthenticated && user ? (
+      {(isAuthenticated || user?.authenticated) && user ? (
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-slate-700">
             {user.picture ? (

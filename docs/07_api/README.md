@@ -76,3 +76,4 @@ docker-compose up
 - [보안 점검 계획서](SECURITY_CHECKLIST.md) - 보안 점검 계획서
 - [API 문서](API_Documentation.md) - 상세 API 문서
 - [API 엔드포인트](api_endpoints.md) - API 엔드포인트 목록
+- [스트리밍 기능 가이드](streaming_guide.md) - 실시간 스트리밍 기능 사용 가이드

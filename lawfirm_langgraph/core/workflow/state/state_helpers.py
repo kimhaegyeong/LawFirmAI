@@ -14,6 +14,10 @@ Flat 및 Modular 구조 모두 지원하는 State 접근 헬퍼 함수들
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List
 
 from .modular_states import (
@@ -29,7 +33,7 @@ from .modular_states import (
     ValidationState,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ============================================
@@ -95,6 +99,10 @@ def get_search(state: LegalWorkflowState) -> Dict[str, Any]:
 
 def set_search(state: LegalWorkflowState, data: Dict[str, Any]):
     """검색 결과 설정"""
+    # ensure_state_group을 먼저 호출하여 search 그룹이 확실히 존재하도록 보장
+    ensure_state_group(state, "search")
+    
+    # search 그룹이 None인 경우에만 기본값으로 초기화
     if state["search"] is None:
         from .modular_states import create_default_search
         state["search"] = create_default_search(get_query(state))
@@ -103,14 +111,81 @@ def set_search(state: LegalWorkflowState, data: Dict[str, Any]):
 
 
 def get_retrieved_docs(state: LegalWorkflowState) -> List[Dict[str, Any]]:
-    """검색된 문서만 반환"""
+    """
+    검색된 문서 반환 (여러 위치에서 확인)
+    
+    우선순위:
+    1. state["retrieved_docs"] (최상위)
+    2. state["search"]["retrieved_docs"]
+    3. state["common"]["search"]["retrieved_docs"]
+    4. state["metadata"]["retrieved_docs"]
+    5. state["metadata"]["search"]["retrieved_docs"]
+    """
+    # 1. 최상위 레벨
+    if "retrieved_docs" in state and state["retrieved_docs"]:
+        return state["retrieved_docs"] if isinstance(state["retrieved_docs"], list) else []
+    
+    # 2. search 그룹
     search = get_search(state)
-    return search.get("retrieved_docs", [])
+    if search.get("retrieved_docs"):
+        return search["retrieved_docs"] if isinstance(search["retrieved_docs"], list) else []
+    
+    # 3. common.search 그룹
+    if "common" in state and isinstance(state.get("common"), dict):
+        common_search = state["common"].get("search", {})
+        if isinstance(common_search, dict) and common_search.get("retrieved_docs"):
+            return common_search["retrieved_docs"] if isinstance(common_search["retrieved_docs"], list) else []
+    
+    # 4. metadata 최상위
+    metadata = state.get("metadata", {})
+    if isinstance(metadata, dict):
+        if metadata.get("retrieved_docs"):
+            return metadata["retrieved_docs"] if isinstance(metadata["retrieved_docs"], list) else []
+        # 5. metadata.search
+        metadata_search = metadata.get("search", {})
+        if isinstance(metadata_search, dict) and metadata_search.get("retrieved_docs"):
+            return metadata_search["retrieved_docs"] if isinstance(metadata_search["retrieved_docs"], list) else []
+    
+    return []
 
 
 def set_retrieved_docs(state: LegalWorkflowState, docs: List[Dict[str, Any]]):
-    """검색된 문서 설정"""
-    set_search(state, {"retrieved_docs": docs})
+    """
+    검색된 문서 설정 (여러 위치에 저장하여 일관성 보장)
+    
+    저장 위치:
+    1. state["retrieved_docs"] (주 저장 위치)
+    2. state["search"]["retrieved_docs"]
+    3. state["common"]["search"]["retrieved_docs"]
+    4. state["metadata"]["retrieved_docs"]
+    5. state["metadata"]["search"]["retrieved_docs"]
+    """
+    if not isinstance(docs, list):
+        docs = []
+    
+    # 1. 최상위 레벨 (주 저장 위치)
+    state["retrieved_docs"] = docs
+    
+    # 2. search 그룹
+    ensure_state_group(state, "search")
+    state["search"]["retrieved_docs"] = docs
+    
+    # 3. common.search 그룹
+    if "common" not in state:
+        state["common"] = {}
+    if "search" not in state["common"]:
+        state["common"]["search"] = {}
+    state["common"]["search"]["retrieved_docs"] = docs
+    
+    # 4. metadata에도 저장 (복구를 위해)
+    metadata = state.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["retrieved_docs"] = docs
+    if "search" not in metadata:
+        metadata["search"] = {}
+    metadata["search"]["retrieved_docs"] = docs
+    state["metadata"] = metadata
 
 
 # ============================================
@@ -199,7 +274,7 @@ def set_answer(state: LegalWorkflowState, data: Dict[str, Any]):
         answer_text = state["answer"]
         from .modular_states import create_default_answer
         state["answer"] = create_default_answer()
-        state["answer"]["content"] = answer_text  # type: ignore
+        state["answer"]["answer"] = answer_text  # type: ignore
     
     if state.get("answer") is None:
         from .modular_states import create_default_answer

@@ -10,7 +10,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter, SourceInfo
+from lawfirm_langgraph.core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter, SourceInfo
 
 
 def test_unified_source_formatter():

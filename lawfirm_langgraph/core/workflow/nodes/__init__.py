@@ -15,7 +15,7 @@ try:
         QueryEnhancementChainBuilder,
     )
     from core.shared.wrappers.node_wrappers import with_state_optimization
-    from core.agents.node_input_output_spec import NodeIOSpec, NodeCategory
+    from core.workflow.node_input_output_spec import NodeIOSpec, NodeCategory
     from core.workflow.builders.prompt_builders import PromptBuilder, QueryBuilder
 except ImportError:
     # Fallback: 기존 경로 (호환성 유지)
@@ -30,6 +30,14 @@ except ImportError:
     from .node_input_output_spec import NodeIOSpec, NodeCategory
     from .prompt_builders import PromptBuilder, QueryBuilder
 
+# Phase 1: 노드 모듈화 - 노드 클래스들 추가
+from .classification_nodes import ClassificationNodes
+from .search_nodes import SearchNodes
+from .document_nodes import DocumentNodes
+from .answer_nodes import AnswerNodes
+from .agentic_nodes import AgenticNodes
+from .ethical_rejection_node import EthicalRejectionNode
+
 __all__ = [
     "AnswerGenerationChainBuilder",
     "ClassificationChainBuilder",
@@ -41,4 +49,11 @@ __all__ = [
     "NodeCategory",
     "PromptBuilder",
     "QueryBuilder",
+    # Phase 1: 노드 모듈화
+    "ClassificationNodes",
+    "SearchNodes",
+    "DocumentNodes",
+    "AnswerNodes",
+    "AgenticNodes",
+    "EthicalRejectionNode",
 ]

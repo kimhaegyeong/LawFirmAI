@@ -7,7 +7,6 @@
 import logging
 import os
 import re
-import math
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -19,10 +18,91 @@ PRECEDENT_PATTERN = re.compile(r'대법원|법원.*\d{4}[다나마]\d+')
 class SearchResultProcessor:
     """검색 결과 처리 프로세서"""
     
-    def __init__(self, logger: Optional[logging.Logger] = None, result_merger=None, result_ranker=None):
+    def __init__(self, logger: Optional[logging.Logger] = None, result_merger=None, result_ranker=None, weight_config=None):
         self.logger = logger or logging.getLogger(__name__)
         self.result_merger = result_merger
         self.result_ranker = result_ranker
+        
+        # 가중치 설정 (경험적 추정 기반)
+        # 주의: 이 가중치는 법률 도메인 특성에 대한 일반적인 가정에 기반합니다.
+        # 실제 테스트를 통해 최적화가 필요하며, 검색 점수 기반 동적 가중치가 우선 적용됩니다.
+        # 
+        # 근거:
+        # - 법령 조회: 정확한 조문 번호 매칭이 중요하지만, 의미적 검색도 중요 (추정)
+        # - 판례 검색: 유사 사례 찾기가 중요하므로 의미적 검색 강조 (추정)
+        # - 일반 질문: 균형이 중요 (추정)
+        #
+        # 개선 이력:
+        # - 2024년: 검색 점수 보호를 위해 법령 조회 semantic 가중치 증가 (0.3 → 0.45)
+        # - 검색 점수 >= 0.8일 때는 동적 가중치 사용 (semantic: 0.7-0.85)
+        # - 검색 점수 < 0.6일 때는 이 고정 가중치 사용
+        if weight_config is None:
+            self.weight_config = {
+                "hybrid_law": {"semantic": 0.45, "keyword": 0.55},
+                "hybrid_case": {"semantic": 0.65, "keyword": 0.35},
+                "hybrid_general": {"semantic": 0.5, "keyword": 0.5},
+                "doc_type_boost": {"statute": 1.2, "case": 1.15},
+                "quality_weight": 0.2,
+                "keyword_adjustment": 1.8
+            }
+        else:
+            self.weight_config = weight_config
+        # Phase 3: KeywordExtractor 초기화 (형태소 분석용)
+        self.keyword_extractor = None
+        try:
+            from core.search.optimizers.keyword_extractor import KeywordExtractor
+            self.keyword_extractor = KeywordExtractor(use_morphology=True, logger_instance=self.logger)
+        except Exception as e:
+            self.logger.debug(f"KeywordExtractor initialization failed: {e}, will use fallback matching")
+        
+        # Ko-Legal-SBERT 임베딩 모델 초기화 (Keyword Coverage 개선용)
+        self.embedding_model = None
+        self._keyword_embedding_cache = {}  # 키워드 임베딩 캐시
+        try:
+            SENTENCE_TRANSFORMERS_AVAILABLE = False
+            try:
+                from sentence_transformers import SentenceTransformer
+                SENTENCE_TRANSFORMERS_AVAILABLE = True
+            except ImportError:
+                pass
+            
+            if SENTENCE_TRANSFORMERS_AVAILABLE:
+                # ModelCacheManager 사용 (다른 클래스와 동일한 패턴)
+                try:
+                    from lawfirm_langgraph.core.utils.model_cache_manager import get_model_cache_manager
+                    get_model_cache_manager_func = get_model_cache_manager
+                except ImportError:
+                    try:
+                        from core.utils.model_cache_manager import get_model_cache_manager
+                        get_model_cache_manager_func = get_model_cache_manager
+                    except ImportError:
+                        get_model_cache_manager_func = None
+                
+                embedding_model_name = os.getenv("EMBEDDING_MODEL", "woong0322/ko-legal-sbert-finetuned")
+                embedding_model_name = embedding_model_name.strip().strip('"').strip("'")
+                
+                if get_model_cache_manager_func:
+                    try:
+                        model_cache = get_model_cache_manager_func()
+                        self.embedding_model = model_cache.get_model(
+                            embedding_model_name,
+                            fallback_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                        )
+                        if self.embedding_model:
+                            self.logger.debug(f"✅ [KEYWORD COVERAGE] Loaded embedding model (cached): {embedding_model_name}")
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [KEYWORD COVERAGE] Failed to load via cache manager: {e}")
+                        self.embedding_model = None
+                else:
+                    # 직접 로드 (최후의 수단)
+                    try:
+                        self.embedding_model = SentenceTransformer(embedding_model_name)
+                        self.logger.debug(f"✅ [KEYWORD COVERAGE] Loaded embedding model (direct): {embedding_model_name}")
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [KEYWORD COVERAGE] Failed to load {embedding_model_name}: {e}")
+                        self.embedding_model = None
+        except Exception as e:
+            self.logger.debug(f"⚠️ [KEYWORD COVERAGE] Embedding model initialization failed: {e}, will use exact matching only")
     
     def merge_search_results(
         self,
@@ -97,6 +177,56 @@ class SearchResultProcessor:
         """키워드별 중요도 가중치 계산"""
         keyword_weights = {}
         
+        # extracted_keywords가 비어있을 때 쿼리에서 키워드 추출 (폴백)
+        if not extracted_keywords:
+            # 한국어 단어 추출 (2글자 이상) - re는 파일 상단에서 이미 import됨
+            korean_words = re.findall(r'[가-힣]+', query)
+            extracted_keywords = [w for w in korean_words if len(w) >= 2]
+            
+            # 불용어 제거
+            stopwords = {'은', '는', '이', '가', '을', '를', '에', '의', '와', '과', '도', '로', '으로', 
+                        '에서', '에게', '한테', '께', '에게서', '한테서', '께서', '의', '것', '수', '등', 
+                        '및', '또한', '또', '그리고', '또는', '또한', '또', '그리고', '또는', '또한',
+                        '무엇', '어떤', '어떻게', '언제', '어디', '누구', '왜', '어떤', '무엇인가',
+                        '시', '할', '하는', '된', '되는', '이다', '입니다', '있습니다', '합니다'}
+            extracted_keywords = [kw for kw in extracted_keywords if kw not in stopwords]
+            
+            # 쿼리 타입/법률 분야 기반 기본 키워드 추가
+            query_type_keywords = {
+                "precedent_search": ["판례", "사건", "판결", "대법원"],
+                "law_inquiry": ["법률", "조문", "법령", "규정", "조항"],
+                "legal_advice": ["조언", "해석", "권리", "의무", "책임"],
+                "procedure_guide": ["절차", "방법", "대응", "소송"],
+                "term_explanation": ["의미", "정의", "개념", "해석"]
+            }
+            field_keywords = {
+                "family": ["가족", "이혼", "양육", "상속", "부부"],
+                "civil": ["민사", "계약", "손해배상", "채권", "채무"],
+                "criminal": ["형사", "범죄", "처벌", "형량"],
+                "labor": ["노동", "근로", "해고", "임금", "근로자"],
+                "corporate": ["기업", "회사", "주주", "법인"]
+            }
+            
+            # 타입/분야 키워드 추가
+            if query_type in query_type_keywords:
+                extracted_keywords.extend(query_type_keywords[query_type])
+            if legal_field in field_keywords:
+                extracted_keywords.extend(field_keywords[legal_field])
+            
+            # 중복 제거 및 정리
+            extracted_keywords = list(set(extracted_keywords))
+            extracted_keywords = [kw for kw in extracted_keywords if kw and len(kw.strip()) >= 2]
+            
+            if not extracted_keywords:
+                # 최후의 폴백: 쿼리의 주요 단어 사용
+                words = query.split()
+                extracted_keywords = [w.strip() for w in words if len(w.strip()) >= 2][:10]
+            
+            self.logger.debug(
+                f"🔍 [KEYWORD WEIGHTS] extracted_keywords가 비어있어 쿼리에서 추출: "
+                f"{len(extracted_keywords)}개 키워드 (query='{query[:50]}...')"
+            )
+        
         if not extracted_keywords:
             return keyword_weights
         
@@ -168,7 +298,222 @@ class SearchResultProcessor:
                 for kw in keyword_weights:
                     keyword_weights[kw] = keyword_weights[kw] / max_weight
         
+        # keyword_weights 계산 결과 로깅
+        if keyword_weights:
+            self.logger.info(
+                f"🔍 [KEYWORD WEIGHTS] 계산 완료: "
+                f"총 {len(keyword_weights)}개 키워드, "
+                f"총 가중치={total_weight:.3f}, "
+                f"최대 가중치={max_weight:.3f}, "
+                f"상위 5개={dict(list(sorted(keyword_weights.items(), key=lambda x: x[1], reverse=True))[:5])}"
+            )
+        else:
+            self.logger.warning(
+                f"🔍 [KEYWORD WEIGHTS] keyword_weights가 비어있음: "
+                f"extracted_keywords={extracted_keywords}, query='{query[:50]}'"
+            )
+        
         return keyword_weights
+    
+    def calculate_keyword_coverage(
+        self,
+        query: str,
+        extracted_keywords: List[str],
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """키워드 커버리지 계산 (Ko-Legal-SBERT 기반 강화 버전)"""
+        
+        if not extracted_keywords:
+            import re
+            korean_words = re.findall(r'[가-힣]+', query)
+            extracted_keywords = [w for w in korean_words if len(w) >= 2]
+            
+            stopwords = {'은', '는', '이', '가', '을', '를', '에', '의', '와', '과', '도', '로', '으로'}
+            extracted_keywords = [kw for kw in extracted_keywords if kw not in stopwords]
+        
+        if not extracted_keywords:
+            self.logger.warning("⚠️ [KEYWORD COVERAGE] extracted_keywords가 비어있음")
+            return 0.0
+        
+        # 1. 직접 매칭 (빠른 필터링)
+        covered_keywords = set()
+        total_keyword_matches = 0
+        
+        for doc in results:
+            content = doc.get("content", "") or doc.get("text", "")
+            if not content:
+                continue
+            
+            content_lower = content.lower()
+            doc_matched_keywords = set()
+            
+            for keyword in extracted_keywords:
+                keyword_lower = keyword.lower()
+                if keyword_lower in content_lower:
+                    covered_keywords.add(keyword_lower)
+                    doc_matched_keywords.add(keyword_lower)
+                    total_keyword_matches += 1
+            
+            if doc_matched_keywords:
+                self.logger.debug(
+                    f"🔍 [KEYWORD COVERAGE] 문서 직접 매칭: "
+                    f"doc_id={doc.get('id', 'unknown')[:20]}, "
+                    f"matched={len(doc_matched_keywords)}/{len(extracted_keywords)}"
+                )
+        
+        # 직접 매칭 커버리지 계산
+        direct_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+        
+        # 2. 의미적 매칭 (Ko-Legal-SBERT) - 직접 매칭이 부족한 경우만 수행
+        semantic_matches = {}
+        if direct_coverage < 0.6 and self.embedding_model:  # 60% 미만일 때만 의미적 매칭
+            semantic_matches = self._semantic_keyword_matching(
+                extracted_keywords, results, covered_keywords, threshold=0.7
+            )
+            if semantic_matches:
+                # 의미적으로 매칭된 키워드 추가 (가중치 0.9 적용)
+                for keyword_lower in semantic_matches.keys():
+                    if keyword_lower not in covered_keywords:
+                        covered_keywords.add(keyword_lower)
+                        total_keyword_matches += 0.9  # 의미적 매칭은 0.9 가중치
+        
+        # 최종 커버리지 계산
+        final_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+        
+        # 가중치 적용 (의미적 매칭 포함)
+        weighted_coverage = min(1.0, final_coverage * (1 + total_keyword_matches / len(extracted_keywords) / 10))
+        
+        self.logger.info(
+            f"📊 [KEYWORD COVERAGE] 계산 완료: "
+            f"direct={direct_coverage:.3f}, "
+            f"final={final_coverage:.3f}, "
+            f"weighted={weighted_coverage:.3f}, "
+            f"covered={len(covered_keywords)}/{len(extracted_keywords)}, "
+            f"semantic_matches={len(semantic_matches)}, "
+            f"total_matches={total_keyword_matches:.1f}"
+        )
+        
+        return weighted_coverage
+    
+    def _semantic_keyword_matching(
+        self,
+        extracted_keywords: List[str],
+        results: List[Dict[str, Any]],
+        already_covered: set,
+        threshold: float = 0.7
+    ) -> Dict[str, float]:
+        """Ko-Legal-SBERT 기반 의미적 키워드 매칭"""
+        if not self.embedding_model or not extracted_keywords:
+            return {}
+        
+        try:
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            # 매칭되지 않은 키워드만 처리
+            unmatched_keywords = [
+                kw for kw in extracted_keywords 
+                if kw.lower() not in already_covered
+            ]
+            
+            if not unmatched_keywords:
+                return {}
+            
+            # 키워드 임베딩 생성 (캐시 활용)
+            keyword_embeddings = []
+            keyword_list = []
+            for keyword in unmatched_keywords:
+                keyword_lower = keyword.lower()
+                if keyword_lower in self._keyword_embedding_cache:
+                    keyword_embeddings.append(self._keyword_embedding_cache[keyword_lower])
+                    keyword_list.append(keyword_lower)
+                else:
+                    try:
+                        emb = self.embedding_model.encode([keyword], show_progress_bar=False)[0]
+                        self._keyword_embedding_cache[keyword_lower] = emb
+                        keyword_embeddings.append(emb)
+                        keyword_list.append(keyword_lower)
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [SEMANTIC MATCH] Failed to encode keyword '{keyword}': {e}")
+                        continue
+            
+            if not keyword_embeddings:
+                return {}
+            
+            keyword_embeddings = np.array(keyword_embeddings)
+            
+            # 문서 텍스트 배치 처리
+            semantic_matches = {}
+            doc_texts = []
+            doc_indices = []
+            
+            for idx, doc in enumerate(results):
+                content = doc.get("content", "") or doc.get("text", "")
+                if isinstance(content, str) and content:
+                    # 문서를 문장 단위로 분리하여 더 정확한 매칭
+                    import re
+                    sentences = re.split(r'[.!?。！？\n]+', content)
+                    # 각 문장을 최대 512자로 제한
+                    for sentence in sentences[:5]:  # 최대 5개 문장만 처리
+                        if len(sentence.strip()) > 10:
+                            doc_texts.append(sentence[:512])
+                            doc_indices.append((idx, keyword_list))
+            
+            if not doc_texts:
+                return {}
+            
+            # 배치 임베딩 생성
+            try:
+                doc_embeddings = self.embedding_model.encode(
+                    doc_texts, 
+                    show_progress_bar=False, 
+                    batch_size=8
+                )
+                
+                # 배치 유사도 계산
+                for doc_idx, (doc_idx_orig, keywords_for_doc) in enumerate(doc_indices):
+                    if doc_idx >= len(doc_embeddings):
+                        continue
+                    
+                    doc_embedding = doc_embeddings[doc_idx]
+                    
+                    try:
+                        # 코사인 유사도 계산
+                        similarities = cosine_similarity(
+                            [doc_embedding],
+                            keyword_embeddings
+                        )[0]
+                        
+                        for idx, similarity in enumerate(similarities):
+                            if similarity >= threshold:
+                                keyword_lower = keywords_for_doc[idx] if idx < len(keywords_for_doc) else unmatched_keywords[idx].lower()
+                                # 최고 유사도만 저장
+                                if keyword_lower not in semantic_matches:
+                                    semantic_matches[keyword_lower] = similarity
+                                else:
+                                    semantic_matches[keyword_lower] = max(semantic_matches[keyword_lower], similarity)
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ [SEMANTIC MATCH] Similarity calculation error: {e}")
+                        continue
+                
+                if semantic_matches:
+                    self.logger.debug(
+                        f"✅ [SEMANTIC MATCH] Found {len(semantic_matches)} semantic matches "
+                        f"(threshold={threshold})"
+                    )
+                
+            except Exception as e:
+                self.logger.debug(f"⚠️ [SEMANTIC MATCH] Batch embedding failed: {e}")
+                return {}
+            
+            return semantic_matches
+            
+        except ImportError:
+            self.logger.debug("⚠️ [SEMANTIC MATCH] sklearn not available, skipping semantic matching")
+            return {}
+        except Exception as e:
+            self.logger.debug(f"⚠️ [SEMANTIC MATCH] Semantic matching failed: {e}")
+            return {}
     
     def calculate_keyword_match_score(
         self,
@@ -179,6 +524,14 @@ class SearchResultProcessor:
         """문서에 대한 키워드 매칭 점수 계산"""
         doc_content = document.get("content", "")
         if not doc_content:
+            doc_content = document.get("text", "") or document.get("content_text", "")
+        
+        if not doc_content:
+            self.logger.debug(
+                f"🔍 [KEYWORD MATCH] 문서에 content 없음: "
+                f"doc_id={document.get('id', 'unknown')}, "
+                f"keys={list(document.keys())[:10]}"
+            )
             return {
                 "keyword_match_score": 0.0,
                 "keyword_coverage": 0.0,
@@ -188,9 +541,17 @@ class SearchResultProcessor:
         
         doc_content_lower = doc_content.lower()
         
+        # keyword 점수 계산 디버깅 로깅
+        if not keyword_weights:
+            self.logger.warning(
+                f"🔍 [KEYWORD MATCH] keyword_weights가 비어있음: "
+                f"doc_id={document.get('id', 'unknown')}, query='{query[:50]}'"
+            )
+        
         matched_keywords = []
         total_weight = 0.0
         matched_weight = 0.0
+        unmatched_keywords = []
         
         # 개선 #2: 법률 용어 보너스 점수를 위한 패턴 정의
         legal_term_patterns = [
@@ -205,16 +566,110 @@ class SearchResultProcessor:
             
             total_weight += weight
             keyword_lower = keyword.lower()
+            is_matched = False
+            match_type = "none"  # none, exact, partial, compound
             
+            # Phase 3: 1. 직접 문자열 매칭
             if keyword_lower in doc_content_lower:
                 matched_keywords.append(keyword)
                 matched_weight += weight
+                is_matched = True
+                match_type = "exact"
                 
                 keyword_count = doc_content_lower.count(keyword_lower)
                 if keyword_count > 1:
                     matched_weight += weight * 0.1 * min(2, keyword_count - 1)
+            else:
+                unmatched_keywords.append((keyword, weight, "exact_fail"))
+            
+            # 우선순위 3: 부분 매칭 강화 (법령명, 조문번호 등)
+            if not is_matched:
+                # 법령명 부분 매칭 (예: "민법" → "민법", "민법상" 등)
+                if "법" in keyword:
+                    law_name = keyword.replace("법", "")
+                    if law_name in doc_content_lower or keyword in doc_content_lower:
+                        matched_keywords.append(keyword)
+                        matched_weight += weight * 0.8  # 부분 매칭은 80% 가중치
+                        is_matched = True
+                        match_type = "partial"
+                # 조문번호 부분 매칭 (예: "제750조" → "750조", "제 750 조" 등)
+                elif "제" in keyword and "조" in keyword:
+                    article_no = re.search(r'\d+', keyword)
+                    if article_no and article_no.group() in doc_content_lower:
+                        matched_keywords.append(keyword)
+                        matched_weight += weight * 0.9  # 조문번호는 90% 가중치
+                        is_matched = True
+                        match_type = "partial"
+            
+            # Phase 3: 2. 형태소 분석 기반 부분 매칭 (직접 매칭이 없는 경우)
+            if not is_matched and self.keyword_extractor:
+                try:
+                    # 키워드의 형태소 분석
+                    keyword_morphs = self.keyword_extractor._okt.morphs(keyword) if self.keyword_extractor._okt else []
+                    keyword_nouns = self.keyword_extractor._okt.nouns(keyword) if self.keyword_extractor._okt else []
+                    
+                    # 문서 내용의 형태소 분석 (일부만)
+                    doc_sample = doc_content[:1000]  # 성능 최적화를 위해 일부만 분석
+                    doc_morphs = self.keyword_extractor._okt.morphs(doc_sample) if self.keyword_extractor._okt else []
+                    doc_nouns = self.keyword_extractor._okt.nouns(doc_sample) if self.keyword_extractor._okt else []
+                    
+                    # 형태소 기반 부분 매칭 확인
+                    if keyword_morphs:
+                        matched_morphs = sum(1 for morph in keyword_morphs if morph in doc_morphs)
+                        morph_ratio = matched_morphs / len(keyword_morphs) if keyword_morphs else 0.0
+                        
+                        if morph_ratio >= 0.6:  # 60% 이상 매칭
+                            matched_keywords.append(keyword)
+                            matched_weight += weight * morph_ratio * 0.7  # 부분 매칭은 70% 가중치
+                            is_matched = True
+                            match_type = "partial"
+                    
+                    # 명사 기반 매칭 확인
+                    if not is_matched and keyword_nouns:
+                        matched_nouns = sum(1 for noun in keyword_nouns if noun in doc_nouns)
+                        noun_ratio = matched_nouns / len(keyword_nouns) if keyword_nouns else 0.0
+                        
+                        if noun_ratio >= 0.5:  # 50% 이상 매칭
+                            matched_keywords.append(keyword)
+                            matched_weight += weight * noun_ratio * 0.6  # 명사 매칭은 60% 가중치
+                            is_matched = True
+                            match_type = "partial"
+                    
+                except Exception as e:
+                    self.logger.debug(f"Morphological matching error for keyword '{keyword}': {e}")
+            
+            # Phase 3: 3. 복합어 분리 및 매칭 (직접 매칭이 없는 경우)
+            if not is_matched:
+                # 복합어 패턴 (예: "손해배상" → "손해", "배상")
+                compound_patterns = [
+                    (r'손해배상', ['손해', '배상']),
+                    (r'불법행위', ['불법', '행위']),
+                    (r'계약해지', ['계약', '해지']),
+                    (r'계약해제', ['계약', '해제']),
+                    (r'손해배상청구권', ['손해배상', '청구권', '손해', '배상']),
+                ]
                 
-                # 개선 #2: 법률 용어 보너스 점수 추가
+                for pattern, parts in compound_patterns:
+                    if re.search(pattern, keyword):
+                        # 복합어의 구성 요소가 모두 문서에 있는지 확인
+                        matched_parts = sum(1 for part in parts if part in doc_content_lower)
+                        part_ratio = matched_parts / len(parts) if parts else 0.0
+                        
+                        if part_ratio >= 0.7:  # 70% 이상 구성 요소 매칭
+                            matched_keywords.append(keyword)
+                            matched_weight += weight * part_ratio * 0.8  # 복합어 매칭은 80% 가중치
+                            is_matched = True
+                            match_type = "compound"
+                            # unmatched에서 제거
+                            unmatched_keywords = [u for u in unmatched_keywords if u[0] != keyword]
+                            break
+                        else:
+                            # 복합어 매칭 실패
+                            if not any(u[0] == keyword for u in unmatched_keywords):
+                                unmatched_keywords.append((keyword, weight, f"compound_partial_{part_ratio:.2f}"))
+            
+            # 개선 #2: 법률 용어 보너스 점수 추가 (매칭된 경우에만)
+            if is_matched:
                 for pattern, bonus_multiplier in legal_term_patterns:
                     if re.search(pattern, keyword):
                         matched_weight += weight * (bonus_multiplier - 1.0) * 0.3
@@ -223,6 +678,30 @@ class SearchResultProcessor:
         keyword_coverage = len(matched_keywords) / max(1, len(keyword_weights))
         keyword_match_score = matched_weight / max(0.1, total_weight) if total_weight > 0 else 0.0
         weighted_keyword_score = min(1.0, matched_weight / max(1, len(keyword_weights)))
+        
+        # keyword 점수가 낮은 경우 상세 로깅
+        doc_id = document.get("id") or document.get("chunk_id") or document.get("doc_id") or "unknown"
+        # 🔥 개선: doc_id 타입 안전 처리 (int일 수 있음)
+        doc_id_str = str(doc_id)[:50] if doc_id and doc_id != "unknown" else "unknown"
+        if keyword_match_score < 0.3 and len(keyword_weights) > 0:
+            self.logger.debug(
+                f"🔍 [KEYWORD MATCH LOW SCORE] doc_id={doc_id_str}, "
+                f"keyword_match_score={keyword_match_score:.3f}, "
+                f"weighted_keyword_score={weighted_keyword_score:.3f}, "
+                f"keyword_coverage={keyword_coverage:.3f}, "
+                f"matched={len(matched_keywords)}/{len(keyword_weights)}, "
+                f"matched_keywords={matched_keywords[:5]}, "
+                f"unmatched_count={len(unmatched_keywords)}, "
+                f"total_weight={total_weight:.3f}, matched_weight={matched_weight:.3f}, "
+                f"content_preview={doc_content[:100].replace(chr(10), ' ')}"
+            )
+            # 매칭 실패한 상위 키워드 로깅
+            if unmatched_keywords:
+                top_unmatched = sorted(unmatched_keywords, key=lambda x: x[1], reverse=True)[:5]
+                self.logger.debug(
+                    f"🔍 [KEYWORD MATCH] 매칭 실패한 상위 키워드: "
+                    f"{[(kw, f'weight={w:.3f}', reason) for kw, w, reason in top_unmatched]}"
+                )
         
         return {
             "keyword_match_score": keyword_match_score,
@@ -238,22 +717,94 @@ class SearchResultProcessor:
         search_params: Dict[str, Any],
         query_type: Optional[str] = None
     ) -> float:
-        """가중치를 적용한 최종 점수 계산"""
+        """개선된 가중치 계산: 단순화 및 LIKE 검색 반영"""
+        
+        # 1. 기본 점수 추출
         base_relevance = (
             document.get("relevance_score", 0.0) or
+            document.get("similarity", 0.0) or
             document.get("combined_score", 0.0) or
-            document.get("score", 0.0)
+            document.get("score", 0.0) or
+            0.0
         )
         
         keyword_match = keyword_scores.get("weighted_keyword_score", 0.0)
+        keyword_coverage = keyword_scores.get("keyword_coverage", 0.0)
         
         search_type = document.get("search_type", "")
-        type_weight = 1.4 if search_type == "semantic" else 0.9
-        
         doc_type = document.get("type", "").lower() if document.get("type") else ""
         source_type = document.get("source_type", "").lower() if document.get("source_type") else ""
         
-        # 개선 #7: 법령 조문 타입 문서에 대한 가중치 증가
+        # 2. LIKE 검색 점수 보정
+        keyword_match_normalized = self._adjust_keyword_score_for_like_search(
+            keyword_score=keyword_match,
+            search_type=search_type
+        )
+        
+        # 3. 질문 유형별 가중치 (동적)
+        dynamic_weights = self.calculate_dynamic_weights(
+            query_type=query_type,
+            search_quality=search_params.get("overall_quality", 0.7),
+            document_count=search_params.get("document_count", 10)
+        )
+        
+        # 4. 하이브리드 점수 계산 (가중치 설정 사용)
+        # 개선: 검색 점수가 높으면 키워드 매칭 점수 영향 완화
+        # 검색 점수가 높다는 것은 문서가 질의와 매우 관련이 높다는 의미
+        if base_relevance >= 0.80:
+            # 검색 점수가 매우 높으면 (0.8 이상) 키워드 매칭 점수 영향 감소
+            # 검색 점수에 더 높은 가중치 부여
+            if query_type == "law_inquiry" or query_type == "statute":
+                hybrid_score = (
+                    0.7 * base_relevance +  # 검색 점수에 더 높은 가중치 (0.3 → 0.7)
+                    0.3 * keyword_match_normalized
+                )
+            elif query_type == "precedent_search" or query_type == "case":
+                hybrid_score = (
+                    0.85 * base_relevance +  # 검색 점수에 더 높은 가중치 (0.7 → 0.85)
+                    0.15 * keyword_match_normalized
+                )
+            else:
+                hybrid_score = (
+                    0.75 * base_relevance +  # 검색 점수에 더 높은 가중치 (0.5 → 0.75)
+                    0.25 * keyword_match_normalized
+                )
+        elif base_relevance >= 0.60:
+            # 검색 점수가 높으면 (0.6 이상) 키워드 매칭 점수 영향 약간 감소
+            if query_type == "law_inquiry" or query_type == "statute":
+                hybrid_score = (
+                    0.5 * base_relevance +  # 중간 가중치
+                    0.5 * keyword_match_normalized
+                )
+            elif query_type == "precedent_search" or query_type == "case":
+                hybrid_score = (
+                    0.75 * base_relevance +  # 검색 점수에 더 높은 가중치
+                    0.25 * keyword_match_normalized
+                )
+            else:
+                hybrid_score = (
+                    0.65 * base_relevance +  # 검색 점수에 더 높은 가중치
+                    0.35 * keyword_match_normalized
+                )
+        else:
+            # 검색 점수가 낮으면 기존 가중치 설정 사용
+            if query_type == "law_inquiry" or query_type == "statute":
+                hybrid_score = (
+                    self.weight_config["hybrid_law"]["semantic"] * base_relevance + 
+                    self.weight_config["hybrid_law"]["keyword"] * keyword_match_normalized
+                )
+            elif query_type == "precedent_search" or query_type == "case":
+                hybrid_score = (
+                    self.weight_config["hybrid_case"]["semantic"] * base_relevance + 
+                    self.weight_config["hybrid_case"]["keyword"] * keyword_match_normalized
+                )
+            else:
+                hybrid_score = (
+                    self.weight_config["hybrid_general"]["semantic"] * base_relevance + 
+                    self.weight_config["hybrid_general"]["keyword"] * keyword_match_normalized
+                )
+        
+        # 5. 문서 타입별 부스팅 (가중치 설정 사용)
         is_statute_article = (
             doc_type == "statute_article" or 
             source_type == "statute_article" or
@@ -263,74 +814,94 @@ class SearchResultProcessor:
             document.get("search_type") == "direct_statute"
         )
         
-        doc_type_weight = 1.0
+        doc_type_boost = 1.0
         if is_statute_article:
-            # 개선 #7: statute_article 타입 문서 가중치 증가 (1.3 → 1.5)
-            doc_type_weight = 1.5
-        elif "법령" in doc_type or "law" in doc_type:
-            doc_type_weight = 1.3
-        elif "판례" in doc_type or "precedent" in doc_type:
-            doc_type_weight = 1.15
-        else:
-            doc_type_weight = 0.85
+            doc_type_boost = self.weight_config["doc_type_boost"]["statute"] if (query_type == "law_inquiry" or query_type == "statute") else 1.1
+        elif "case" in doc_type or "precedent" in doc_type or "case_paragraph" in doc_type:
+            doc_type_boost = self.weight_config["doc_type_boost"]["case"] if (query_type == "precedent_search" or query_type == "case") else 1.05
         
-        query_type_weight = 1.0
-        if query_type:
-            if query_type == "precedent_search" and ("판례" in doc_type or "precedent" in doc_type):
-                query_type_weight = 1.4
-            elif query_type == "law_inquiry":
-                if is_statute_article:
-                    # 개선 #7: law_inquiry와 statute_article 매칭 시 가중치 추가 (1.4 → 1.6)
-                    query_type_weight = 1.6
-                elif "법령" in doc_type or "law" in doc_type:
-                    query_type_weight = 1.4
-        
-        category_boost = document.get("category_boost", 1.0)
-        field_match_score = document.get("field_match_score", 0.5)
-        category_bonus = (category_boost * 0.7 + field_match_score * 0.3)
-        
-        normalized_relevance = base_relevance
-        if normalized_relevance < 0:
-            normalized_relevance = 0.0
-        elif normalized_relevance > 1.0:
-            normalized_relevance = 1.0 + (math.log1p(normalized_relevance - 1.0) / 10.0)
-            normalized_relevance = min(1.5, normalized_relevance)
-        
-        dynamic_weights = self.calculate_dynamic_weights(
-            query_type=query_type,
-            search_quality=search_params.get("overall_quality", 0.7),
-            document_count=search_params.get("document_count", 10)
+        # 6. 문서 품질 점수 추가
+        content = document.get("content", "") or document.get("text", "")
+        quality_score = self._calculate_document_quality_score(
+            content=content,
+            keyword_coverage=keyword_coverage,
+            doc_type=doc_type
         )
         
-        # 개선 #7: 법령 조문 문서에 대한 보너스 점수 추가
-        statute_bonus = 0.0
-        if is_statute_article:
-            # 법령명과 조문번호 매칭 시 보너스 점수 추가
-            metadata = document.get("metadata", {})
-            if metadata.get("statute_name") and metadata.get("article_no"):
-                statute_bonus = 0.2
-            else:
-                statute_bonus = 0.1
-        
+        # 7. 최종 점수 계산 (가중치 설정 사용)
+        quality_weight = self.weight_config["quality_weight"]
+        base_weight = 1.0 - quality_weight
         final_score = (
-            normalized_relevance * dynamic_weights["relevance"] +
-            keyword_match * dynamic_weights["keyword"] +
-            (normalized_relevance * doc_type_weight * query_type_weight) * dynamic_weights["type"] +
-            (type_weight - 1.0) * dynamic_weights["search_type"] +
-            category_bonus * dynamic_weights["category"] +
-            statute_bonus
+            hybrid_score * doc_type_boost * base_weight +  # 기본 점수
+            quality_score * quality_weight  # 품질 점수
         )
         
-        if normalized_relevance <= 0.0 and keyword_match <= 0.0:
-            # 개선 #7: 법령 조문은 최소 점수 보정
-            if is_statute_article:
-                final_score = max(0.3, final_score)
-            else:
-                final_score = 0.15
-        else:
-            final_score = max(0.0, final_score)
+        # 8. 점수 범위 제한 및 안정화
+        final_score = self._normalize_score(final_score, min_val=0.0, max_val=1.0)
         
-        return min(1.5, max(0.0, final_score))
+        # 9. 최소 점수 보정 (법령 조문 등)
+        if is_statute_article and final_score < 0.3:
+            final_score = max(0.3, final_score)
+        
+        return final_score
+    
+    def _adjust_keyword_score_for_like_search(
+        self,
+        keyword_score: float,
+        search_type: str
+    ) -> float:
+        """LIKE 검색 점수 보정"""
+        if search_type == "keyword" or search_type == "text2sql":
+            # LIKE 검색은 최대 0.5이므로, 이를 0.0~1.0 범위로 확장
+            # 가중치 설정의 조정값 사용
+            adjustment = self.weight_config.get("keyword_adjustment", 1.8)
+            adjusted = min(1.0, keyword_score * adjustment)  # 0.5 -> 0.9 (기본값)
+            return adjusted
+        return keyword_score
+    
+    def _calculate_document_quality_score(
+        self,
+        content: str,
+        keyword_coverage: float,
+        doc_type: str
+    ) -> float:
+        """문서 품질 점수 계산"""
+        if not content:
+            return 0.0
+        
+        quality = 0.0
+        
+        # 1. 적절한 길이 (50~500자: 최적)
+        content_length = len(content)
+        if 50 <= content_length <= 500:
+            quality += 0.4
+        elif 500 < content_length <= 1000:
+            quality += 0.3
+        elif content_length > 1000:
+            quality += 0.2
+        else:
+            quality += 0.1
+        
+        # 2. 키워드 커버리지
+        quality += keyword_coverage * 0.3
+        
+        # 3. 문서 타입 적합성
+        if doc_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+            quality += 0.3
+        else:
+            quality += 0.2
+        
+        return min(1.0, quality)
+    
+    def _normalize_score(self, score: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
+        """점수 정규화 (안정화)"""
+        if score < min_val:
+            return min_val
+        elif score > max_val:
+            # 초과 점수는 로그 스케일로 완화
+            excess = score - max_val
+            return max_val + (excess / (1.0 + excess * 10))
+        return score
     
     def calculate_dynamic_weights(
         self,
@@ -338,33 +909,36 @@ class SearchResultProcessor:
         search_quality: float = 0.7,
         document_count: int = 10
     ) -> Dict[str, float]:
-        """동적 가중치 계산"""
+        """개선된 동적 가중치 계산"""
         base_weights = {
-            "relevance": 0.40,
-            "keyword": 0.35,
-            "type": 0.15,
-            "search_type": 0.05,
-            "category": 0.05
+            "relevance": 0.50,  # 증가 (0.40 -> 0.50)
+            "keyword": 0.30,    # 감소 (0.35 -> 0.30, LIKE 검색 반영)
+            "quality": 0.15,   # 신규 추가
+            "type": 0.05       # 감소 (0.15 -> 0.05)
         }
         
-        if query_type == "law_inquiry":
-            base_weights["keyword"] += 0.05
-            base_weights["relevance"] -= 0.05
-        elif query_type == "precedent_search":
-            base_weights["relevance"] += 0.05
-            base_weights["keyword"] -= 0.05
+        # 질문 유형별 조정
+        if query_type == "law_inquiry" or query_type == "statute":
+            base_weights["keyword"] = 0.40  # 법령 질문: keyword 중요
+            base_weights["relevance"] = 0.35
+        elif query_type == "precedent_search" or query_type == "case":
+            base_weights["relevance"] = 0.60  # 판례 질문: semantic 중요
+            base_weights["keyword"] = 0.20
         
+        # 검색 품질에 따른 조정
         if search_quality < 0.5:
             base_weights["keyword"] += 0.1
             base_weights["relevance"] -= 0.1
         elif search_quality > 0.8:
-            base_weights["relevance"] += 0.05
-            base_weights["keyword"] -= 0.05
+            base_weights["relevance"] += 0.1
+            base_weights["keyword"] -= 0.1
         
+        # 문서 수에 따른 조정
         if document_count < 5:
             base_weights["relevance"] += 0.05
             base_weights["keyword"] -= 0.05
         
+        # 정규화
         total = sum(base_weights.values())
         if total > 0:
             base_weights = {k: v / total for k, v in base_weights.items()}
@@ -461,7 +1035,7 @@ class SearchResultProcessor:
         non_citation.sort(key=lambda x: x.get("final_weighted_score", x.get("relevance_score", 0.0)), reverse=True)
         
         if citation_boosted:
-            self.logger.info(f"🔍 [SEARCH FILTERING] Citation boost applied: {len(citation_boosted)} documents with citations prioritized")
+            self.logger.debug(f"🔍 [SEARCH FILTERING] Citation boost applied: {len(citation_boosted)} documents with citations prioritized")
         
         return citation_boosted + non_citation
     
@@ -512,7 +1086,7 @@ class SearchResultProcessor:
             filtered_docs.append(doc)
         
         if debug_mode:
-            self.logger.info(f"📊 [SEARCH RESULTS] Filtering statistics - Weighted: {len(weighted_docs)}, Filtered: {len(filtered_docs)}, Skipped (content): {skipped_content}, Skipped (score): {skipped_score}")
+            self.logger.debug(f"📊 [SEARCH RESULTS] Filtering statistics - Weighted: {len(weighted_docs)}, Filtered: {len(filtered_docs)}, Skipped (content): {skipped_content}, Skipped (score): {skipped_score}")
             
             if skipped_content > 0 and skipped_content_details:
                 self.logger.warning(f"⚠️ [SEARCH RESULTS] Content 필터링 제외 상세 (상위 {len(skipped_content_details)}개): {skipped_content_details}")

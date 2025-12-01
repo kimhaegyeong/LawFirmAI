@@ -5,10 +5,14 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class WorkflowValidator:
@@ -223,80 +227,84 @@ class WorkflowValidator:
         evaluate_semantic_func=None,
         evaluate_keyword_func=None
     ) -> Dict[str, Any]:
-        """검색 품질 평가"""
-        total_results = len(semantic_results) + len(keyword_results)
-        should_skip_quality_eval = total_results >= 10 and len(semantic_results) >= 5
+        """검색 품질 평가 (개선된 버전)"""
+        all_results = semantic_results + keyword_results
         
-        if should_skip_quality_eval:
-            semantic_quality = {
-                "score": 0.8,
-                "result_count": len(semantic_results),
-                "needs_retry": False
-            }
-            keyword_quality = {
-                "score": 0.7,
-                "result_count": len(keyword_results),
-                "needs_retry": False
-            }
-            self.logger.debug(f"Skipping quality evaluation (results: {total_results} >= 10)")
-        else:
-            if evaluate_semantic_func:
-                semantic_quality = evaluate_semantic_func(
-                    semantic_results=semantic_results,
-                    query=query,
-                    query_type=query_type_str,
-                    min_results=search_params.get("semantic_k", 10) // 2
-                )
-            else:
-                semantic_quality = self.evaluate_semantic_search_quality(
-                    semantic_results=semantic_results,
-                    query=query,
-                    query_type=query_type_str,
-                    min_results=search_params.get("semantic_k", 10) // 2
-                )
-            
-            if evaluate_keyword_func:
-                keyword_quality = evaluate_keyword_func(
-                    keyword_results=keyword_results,
-                    query=query,
-                    query_type=query_type_str,
-                    min_results=search_params.get("keyword_limit", 20) // 2
-                )
-            else:
-                keyword_quality = self.evaluate_keyword_search_quality(
-                    keyword_results=keyword_results,
-                    query=query,
-                    query_type=query_type_str,
-                    min_results=search_params.get("keyword_limit", 20) // 2
-                )
+        # 1. Relevance 점수 계산
+        relevance_scores = [
+            doc.get("relevance_score", doc.get("final_weighted_score", 0.0))
+            for doc in all_results
+        ]
+        avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
         
-        total_results = len(semantic_results) + len(keyword_results)
-        if total_results == 0:
-            overall_quality = 0.05
-        else:
-            if len(semantic_results) > 0 and len(keyword_results) > 0:
-                overall_quality = (semantic_quality["score"] + keyword_quality["score"]) / 2.0
-            elif len(semantic_results) > 0:
-                overall_quality = semantic_quality["score"]
-            else:
-                overall_quality = keyword_quality["score"]
-                if semantic_quality["result_count"] == 0:
-                    bonus = min(0.2, keyword_quality["score"] * 0.3)
-                    overall_quality = min(1.0, overall_quality + bonus)
-                    self.logger.info(
-                        f"📊 [SEARCH QUALITY] Semantic search failed, applying bonus to keyword score: "
-                        f"{keyword_quality['score']:.3f} -> {overall_quality:.3f} (+{bonus:.3f})"
-                    )
-            if overall_quality == 0:
-                overall_quality = 0.1
+        # 2. Coverage 점수 계산 (개선)
+        doc_count_coverage = min(1.0, len(all_results) / 10.0)
         
-        needs_retry = semantic_quality["needs_retry"] or keyword_quality["needs_retry"]
+        extracted_keywords = search_params.get("extracted_keywords", [])
+        keyword_coverage = 0.0
+        if extracted_keywords:
+            covered_keywords = set()
+            for doc in all_results:
+                content = doc.get("content", "") or doc.get("text", "")
+                if content:
+                    content_lower = content.lower()
+                    for keyword in extracted_keywords:
+                        if keyword.lower() in content_lower:
+                            covered_keywords.add(keyword.lower())
+            keyword_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+        
+        type_distribution = {}
+        for doc in all_results:
+            doc_type = doc.get("type") or doc.get("source_type", "unknown")
+            type_distribution[doc_type] = type_distribution.get(doc_type, 0) + 1
+        diversity_coverage = min(1.0, len(type_distribution) / 4.0)
+        
+        # 3. Sufficiency 점수 계산
+        min_docs_sufficiency = 1.0 if len(all_results) >= 5 else len(all_results) / 5.0
+        
+        content_quality = 0.0
+        valid_contents = 0
+        for doc in all_results:
+            content = doc.get("content", "") or doc.get("text", "")
+            if content and len(content.strip()) >= 10:
+                valid_contents += 1
+        content_quality = valid_contents / len(all_results) if all_results else 0.0
+        
+        sufficiency = (min_docs_sufficiency * 0.6 + content_quality * 0.4)
+        
+        # 4. 최종 품질 점수 계산
+        coverage = (doc_count_coverage * 0.3 + keyword_coverage * 0.4 + diversity_coverage * 0.3)
+        overall_quality = (avg_relevance * 0.4 + coverage * 0.4 + sufficiency * 0.2)
+        
+        # 5. 최소 품질 보장 (검색 결과가 있으면 최소 0.4)
+        if len(all_results) > 0:
+            overall_quality = max(0.4, overall_quality)
+        
+        # 기존 로직과 호환성을 위한 semantic_quality, keyword_quality 생성
+        semantic_quality = {
+            "score": avg_relevance,
+            "result_count": len(semantic_results),
+            "needs_retry": overall_quality < 0.5 and len(semantic_results) < 5
+        }
+        keyword_quality = {
+            "score": avg_relevance,
+            "result_count": len(keyword_results),
+            "needs_retry": overall_quality < 0.5 and len(keyword_results) < 5
+        }
+        
+        needs_retry = overall_quality < 0.5 and len(all_results) < 10
         
         return {
             "semantic_quality": semantic_quality,
             "keyword_quality": keyword_quality,
             "overall_quality": overall_quality,
-            "needs_retry": needs_retry
+            "needs_retry": needs_retry,
+            "relevance": avg_relevance,
+            "coverage": coverage,
+            "sufficiency": sufficiency,
+            "doc_count": len(all_results),
+            "keyword_coverage": keyword_coverage,
+            "diversity": diversity_coverage
         }
     
     def evaluate_semantic_search_quality(

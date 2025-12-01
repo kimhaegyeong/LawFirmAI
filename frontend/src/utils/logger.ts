@@ -1,11 +1,22 @@
 import log from 'loglevel';
+import { getEnvironmentDefaults, isDebugEnabled } from './environment';
 
-const isDev = import.meta.env.DEV;
+// 환경별 기본값 가져오기
+const envDefaults = getEnvironmentDefaults();
+const logLevel = import.meta.env.VITE_LOG_LEVEL || envDefaults.logLevel;
 
-if (isDev) {
+// 로그 레벨 설정
+if (logLevel === 'debug') {
   log.setLevel('debug');
-} else {
+} else if (logLevel === 'info') {
+  log.setLevel('info');
+} else if (logLevel === 'warn') {
   log.setLevel('warn');
+} else if (logLevel === 'error') {
+  log.setLevel('error');
+} else {
+  // 기본값: 환경에 따라 설정
+  log.setLevel(isDebugEnabled() ? 'debug' : 'warn');
 }
 
 // 원본 메서드 저장
@@ -37,7 +48,7 @@ const emojis = {
 // 스타일이 적용된 로거 생성
 const createStyledLogger = (level: keyof typeof originalMethods) => {
   return (...args: unknown[]) => {
-    if (isDev) {
+    if (isDebugEnabled()) {
       const timestamp = new Date().toISOString();
       // eslint-disable-next-line security/detect-object-injection
       const prefix = `%c[${timestamp}] ${emojis[level]} [${level.toUpperCase()}]`;
@@ -66,17 +77,17 @@ log.error = createStyledLogger('error');
 export const createCategoryLogger = (category: string, color: string) => {
   return {
     trace: (...args: unknown[]) => {
-      if (isDev) {
+      if (isDebugEnabled()) {
         console.trace(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
       }
     },
     debug: (...args: unknown[]) => {
-      if (isDev) {
+      if (isDebugEnabled()) {
         console.debug(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
       }
     },
     info: (...args: unknown[]) => {
-      if (isDev) {
+      if (isDebugEnabled()) {
         console.info(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
       }
     },

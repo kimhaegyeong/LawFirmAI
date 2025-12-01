@@ -6,11 +6,50 @@ Configuration Management
 
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
+
+# 환경 변수 로드 (프로젝트 루트 .env 파일 사용)
+# core/utils/config.py -> core/utils/ -> core/ -> lawfirm_langgraph/ -> 프로젝트 루트
+try:
+    _config_file_dir = Path(__file__).parent
+    _core_dir = _config_file_dir.parent
+    _langgraph_dir = _core_dir.parent
+    _project_root = _langgraph_dir.parent
+    
+    # 공통 로더 사용 (프로젝트 루트 .env 파일 우선 로드)
+    try:
+        if str(_project_root) not in sys.path:
+            sys.path.insert(0, str(_project_root))
+        from utils.env_loader import ensure_env_loaded, load_all_env_files
+        
+        # 프로젝트 루트 .env 파일 명시적으로 로드
+        ensure_env_loaded(_project_root)
+        # load_all_env_files는 ensure_env_loaded 내부에서 호출되므로 중복 호출 방지
+        # loaded_files = load_all_env_files(_project_root)  # 중복 호출 제거
+        # 로드 완료 로그는 ensure_env_loaded 내부에서 출력되므로 별도 로그 불필요
+    except ImportError:
+        # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
+        try:
+            from dotenv import load_dotenv
+            
+            # 프로젝트 루트 .env 먼저 로드
+            root_env = _project_root / ".env"
+            if root_env.exists():
+                load_dotenv(dotenv_path=str(root_env), override=False)
+            
+            # lawfirm_langgraph/.env 로드 (덮어쓰기)
+            langgraph_env = _langgraph_dir / ".env"
+            if langgraph_env.exists():
+                load_dotenv(dotenv_path=str(langgraph_env), override=True)
+        except ImportError:
+            pass  # python-dotenv가 없으면 환경 변수만 사용
+except Exception:
+    pass  # 환경 변수 로드 실패 시 기본값 사용
 
 # 한글 출력을 위한 인코딩 설정
 if sys.platform == "win32":
@@ -34,8 +73,20 @@ if sys.platform == "win32":
     os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 
+# 환경 변수 경고 메시지 중복 출력 방지
+_warned_env_vars = set()
+
+
 class Config(BaseSettings):
-    """설정 관리 클래스"""
+    """
+    설정 관리 클래스 (레거시)
+    
+    ⚠️ DEPRECATED: 이 클래스는 레거시입니다.
+    새로운 코드에서는 `lawfirm_langgraph.config.app_config.Config`를 사용하세요.
+    
+    이 클래스는 하위 호환성을 위해 유지되지만, SQLite는 더 이상 지원하지 않습니다.
+    PostgreSQL만 지원합니다.
+    """
     
     model_config = ConfigDict(protected_namespaces=('settings_',))
 
@@ -70,10 +121,26 @@ class Config(BaseSettings):
     active_model_version: str = Field(default="default@1.0", env="ACTIVE_MODEL_VERSION")
     embeddings_base_dir: str = Field(default="./data/embeddings", env="EMBEDDINGS_BASE_DIR")
     versioned_database_dir: str = Field(default="./data/database", env="VERSIONED_DATABASE_DIR")
-    # External Vector Store Configuration
-    vector_store_version: Optional[str] = Field(default=None, env="VECTOR_STORE_VERSION")
-    use_external_vector_store: bool = Field(default=False, env="USE_EXTERNAL_VECTOR_STORE")
-    external_vector_store_base_path: Optional[str] = Field(default=None, env="EXTERNAL_VECTOR_STORE_BASE_PATH")
+    # MLflow Configuration
+    mlflow_tracking_uri: Optional[str] = Field(default=None, env="MLFLOW_TRACKING_URI")
+    mlflow_run_id: Optional[str] = Field(default=None, env="MLFLOW_RUN_ID")
+    mlflow_experiment_name: str = Field(default="faiss_index_versions", env="MLFLOW_EXPERIMENT_NAME")
+    use_mlflow_index: bool = Field(default=True, env="USE_MLFLOW_INDEX")
+    
+    # Optimized Search Parameters Configuration
+    optimized_search_params_path: Optional[str] = Field(
+        default="data/ml_config/optimized_search_params.json",
+        env="OPTIMIZED_SEARCH_PARAMS_PATH"
+    )
+    
+    # Search Quality Improvement Features
+    enable_search_improvements: bool = Field(default=True, env="ENABLE_SEARCH_IMPROVEMENTS")
+    use_adaptive_weights: bool = Field(default=True, env="USE_ADAPTIVE_WEIGHTS")
+    use_adaptive_threshold: bool = Field(default=True, env="USE_ADAPTIVE_THRESHOLD")
+    use_diversity_ranking: bool = Field(default=True, env="USE_DIVERSITY_RANKING")
+    use_metadata_enhancement: bool = Field(default=True, env="USE_METADATA_ENHANCEMENT")
+    use_quality_scoring: bool = Field(default=True, env="USE_QUALITY_SCORING")
+    use_advanced_reranker: bool = Field(default=False, env="USE_ADVANCED_RERANKER")
 
     # Logging Configuration
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
@@ -147,7 +214,21 @@ class Config(BaseSettings):
         return not self.debug
 
     def __init__(self, **kwargs):
-        """초기화 시 환경변수 파일 로딩"""
+        """
+        초기화 시 환경변수 파일 로딩
+        
+        ⚠️ DEPRECATED: 이 클래스는 레거시입니다.
+        새로운 코드에서는 `lawfirm_langgraph.config.app_config.Config`를 사용하세요.
+        """
+        import warnings
+        warnings.warn(
+            "core.utils.config.Config is deprecated. "
+            "Use lawfirm_langgraph.config.app_config.Config instead. "
+            "This class will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         # 환경변수 파일 로딩
         self.Settings._load_env_file(".env")
         
@@ -183,22 +264,132 @@ class Config(BaseSettings):
         
         super().__init__(**kwargs)
 
-        # 데이터베이스 경로 검증 및 기본값 설정
-        if self.database_path is None:
-            # 환경변수가 없으면 기본값 사용 (하지만 경고 출력)
-            self.database_path = "./data/lawfirm_v2.db"
-            print("⚠️ DATABASE_PATH 환경변수가 설정되지 않았습니다. 기본값을 사용합니다: ./data/lawfirm_v2.db")
-            print("   .env 파일에 DATABASE_PATH를 설정하는 것을 권장합니다.")
+        # 데이터베이스 URL 설정 (PostgreSQL 전용, SQLite 지원 제거)
+        # 1. DATABASE_URL이 환경변수에 있으면 우선 사용
+        if not self.database_url:
+            # 2. PostgreSQL 환경변수 조합 (DATABASE_URL이 없을 때 사용)
+            # 프로젝트 루트 .env 파일의 설정을 우선 사용 (21-29줄)
+            postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+            postgres_port = os.getenv("POSTGRES_PORT", "5432")
+            postgres_db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+            postgres_user = os.getenv("POSTGRES_USER", "lawfirmai")
+            postgres_password = os.getenv("POSTGRES_PASSWORD", "local_password")
+            
+            # URL 인코딩 (특수문자 처리)
+            from urllib.parse import quote_plus
+            encoded_password = quote_plus(postgres_password)
+            
+            # PostgreSQL URL 생성
+            self.database_url = f"postgresql://{postgres_user}:{encoded_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+        
+        # SQLite URL이 설정되어 있으면 무시하고 PostgreSQL 환경변수로 조합
+        if self.database_url and self.database_url.startswith("sqlite://"):
+            import warnings
+            import logging
+            logger = logging.getLogger(__name__)
+            warnings.warn(
+                f"SQLite URL detected and will be ignored: {self.database_url}. "
+                "SQLite is no longer supported. Using PostgreSQL configuration from POSTGRES_* environment variables.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            logger.warning(
+                f"SQLite URL detected and will be ignored: {self.database_url}. "
+                "Using PostgreSQL configuration from POSTGRES_* environment variables."
+            )
+            # SQLite URL 무시
+            self.database_url = ""
+        
+        # database_url이 없거나 비어있는 경우 PostgreSQL 환경변수로 조합
+        if not self.database_url or self.database_url.strip() == "":
+            from urllib.parse import quote_plus
+            postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+            postgres_port = os.getenv("POSTGRES_PORT", "5432")
+            postgres_db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+            postgres_user = os.getenv("POSTGRES_USER", "lawfirmai")
+            postgres_password = os.getenv("POSTGRES_PASSWORD", "local_password")
+            
+            encoded_password = quote_plus(postgres_password)
+            self.database_url = f"postgresql://{postgres_user}:{encoded_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Database URL generated from POSTGRES_* environment variables: postgresql://{postgres_user}:***@{postgres_host}:{postgres_port}/{postgres_db}")
+        
+        # 최종 검증: SQLite URL이 여전히 있으면 에러
+        if self.database_url and self.database_url.startswith("sqlite://"):
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"SQLite URL detected: {self.database_url}")
+            raise ValueError(
+                "SQLite is no longer supported. Please use PostgreSQL. "
+                "Set DATABASE_URL to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database) "
+                "or configure POSTGRES_* environment variables in .env file (lines 21-29)."
+            )
+        
+        # DATABASE_PATH는 더 이상 사용하지 않음 (레거시 호환성 유지)
+        # DATABASE_PATH가 설정되어 있으면 무시하고 경고만 출력
+        if self.database_path:
+            import warnings
+            warnings.warn(
+                "DATABASE_PATH is deprecated. Use DATABASE_URL or POSTGRES_* environment variables instead. "
+                "SQLite is no longer supported. Please use PostgreSQL.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+    
+    def configure_logging(self) -> None:
+        """
+        Config의 log_level을 사용하여 전역 로깅 설정
+        
+        이 메서드는 Config 인스턴스의 log_level 속성을 사용하여
+        전역 로깅 레벨을 설정합니다.
+        
+        사용 예시:
+            config = Config()
+            config.configure_logging()  # config.log_level 사용
+        """
+        try:
+            from .logger import configure_global_logging
+            configure_global_logging(self.log_level)
+        except ImportError:
+            # logger 모듈이 없으면 기본 설정
+            import logging
+            log_level_map = {
+                "CRITICAL": logging.CRITICAL,
+                "ERROR": logging.ERROR,
+                "WARNING": logging.WARNING,
+                "INFO": logging.INFO,
+                "DEBUG": logging.DEBUG,
+            }
+            log_level = log_level_map.get(self.log_level.upper(), logging.INFO)
+            logging.basicConfig(
+                level=log_level,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
 
-        if self.database_url is None:
-            # database_path를 기반으로 database_url 생성
-            if self.database_path:
-                # 상대 경로를 절대 경로로 변환
-                db_path = self.database_path
-                if not os.path.isabs(db_path):
-                    # 상대 경로인 경우 현재 디렉토리 기준으로 처리
-                    db_path = os.path.abspath(db_path)
-                self.database_url = f"sqlite:///{db_path}"
-            else:
-                self.database_url = "sqlite:///./data/lawfirm_v2.db"
-                print("⚠️ DATABASE_URL 환경변수가 설정되지 않았습니다. 기본값을 사용합니다.")
+
+# 전역 설정 인스턴스 (지연 초기화)
+_config_instance: Optional[Config] = None
+_config_lock = threading.Lock()
+
+
+def get_config() -> Config:
+    """설정 인스턴스 가져오기 (지연 초기화 싱글톤)
+    
+    ⚠️ DEPRECATED: 이 함수는 레거시입니다.
+    새로운 코드에서는 `lawfirm_langgraph.config.app_config.get_config()`를 사용하세요.
+    
+    Returns:
+        Config: 설정 인스턴스 (싱글톤)
+    
+    Note:
+        첫 호출 시에만 초기화되며, 이후 호출은 캐시된 인스턴스를 반환합니다.
+        이는 설정 로드 시간을 크게 단축시킵니다.
+    """
+    global _config_instance
+    if _config_instance is None:
+        with _config_lock:
+            # Double-check locking pattern
+            if _config_instance is None:
+                _config_instance = Config()
+    return _config_instance

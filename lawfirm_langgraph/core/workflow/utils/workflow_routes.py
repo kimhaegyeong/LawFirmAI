@@ -7,13 +7,26 @@ LangGraph 워크플로우의 조건부 라우팅 로직을 독립 모듈로 분�
 import logging
 from typing import Any, Dict, Optional
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import (
-    QualityThresholds,
-    RetryConfig,
-    WorkflowConstants,
-)
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import (
+        QualityThresholds,
+        RetryConfig,
+        WorkflowConstants,
+    )
+except ImportError:
+    from core.workflow.utils.workflow_constants import (
+        QualityThresholds,
+        RetryConfig,
+        WorkflowConstants,
+    )
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class QueryComplexity:
@@ -250,6 +263,48 @@ class WorkflowRoutes:
         self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: query_type={query_type} not in complex_types")
         return "skip"
 
+    def should_skip_final_node(self, state: LegalWorkflowState) -> str:
+        """
+        generate_answer_final 노드 스킵 여부 결정 (성능 최적화)
+        
+        Returns:
+            "skip": 최종 노드 스킵 (이미 검증/포맷팅 완료)
+            "finalize": 최종 노드 실행 (검증/포맷팅 필요)
+        """
+        try:
+            # skip_final_node 플래그 확인
+            metadata = state.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            skip_final_node = metadata.get("skip_final_node", False)
+            
+            # 답변 확인
+            answer = state.get("answer", "") or (metadata.get("answer") if isinstance(metadata, dict) else "")
+            if not answer and "search" in state:
+                search_group = state.get("search", {})
+                if isinstance(search_group, dict):
+                    answer = search_group.get("answer", "")
+            has_valid_answer = answer and len(str(answer).strip()) >= 10
+            
+            # needs_regeneration 확인
+            needs_regeneration = (
+                state.get("needs_regeneration", False) or
+                metadata.get("needs_regeneration", False) or
+                False
+            )
+            
+            # 스킵 조건: skip_final_node 플래그가 있고, 유효한 답변이 있고, 재생성이 필요 없으면 스킵
+            if skip_final_node and has_valid_answer and not needs_regeneration:
+                self.logger.info("⚡ [PERFORMANCE] Skipping generate_answer_final node (already validated and formatted)")
+                return "skip"
+            
+            # 그 외의 경우 최종 노드 실행
+            self.logger.debug(f"🔍 [FINAL NODE] Will execute: skip_final_node={skip_final_node}, has_answer={has_valid_answer}, needs_regeneration={needs_regeneration}")
+            return "finalize"
+        except Exception as e:
+            self.logger.warning(f"Error in should_skip_final_node: {e}, defaulting to finalize")
+            return "finalize"
+    
     def should_retry_generation(self, state: LegalWorkflowState) -> str:
         """
         1단계: 답변 생성 후 재시도 여부 결정

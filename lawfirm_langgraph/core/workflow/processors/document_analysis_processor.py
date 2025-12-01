@@ -8,15 +8,34 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from core.processing.extractors import DocumentExtractor
-from core.processing.parsers.response_parsers import DocumentParser
-from core.workflow.builders.prompt_chain_executor import PromptChainExecutor
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.state_utils import (
-    MAX_DOCUMENT_CONTENT_LENGTH,
-    MAX_RETRIEVED_DOCS,
-    prune_retrieved_docs,
-)
+try:
+    from lawfirm_langgraph.core.processing.extractors import DocumentExtractor
+except ImportError:
+    from core.processing.extractors import DocumentExtractor
+try:
+    from lawfirm_langgraph.core.processing.parsers.response_parsers import DocumentParser
+except ImportError:
+    from core.processing.parsers.response_parsers import DocumentParser
+try:
+    from lawfirm_langgraph.core.workflow.builders.prompt_chain_executor import PromptChainExecutor
+except ImportError:
+    from core.workflow.builders.prompt_chain_executor import PromptChainExecutor
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_utils import (
+        MAX_DOCUMENT_CONTENT_LENGTH,
+        MAX_RETRIEVED_DOCS,
+        prune_retrieved_docs,
+    )
+except ImportError:
+    from core.workflow.state.state_utils import (
+        MAX_DOCUMENT_CONTENT_LENGTH,
+        MAX_RETRIEVED_DOCS,
+        prune_retrieved_docs,
+    )
 
 
 class DocumentAnalysisProcessor:

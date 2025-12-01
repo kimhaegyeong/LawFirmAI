@@ -6,10 +6,30 @@
 
 ## 🎯 최적화 목표
 
-- **응답 시간 단축**: 10초 → 2초 이하
+- **응답 시간 단축**: 18-27초 → 10-15초 (40-50% 개선)
 - **메모리 효율성**: 모델 재사용으로 메모리 절약
 - **동시 처리**: 여러 요청 병렬 처리
-- **캐싱**: 동일 질문에 대한 빠른 응답
+- **캐싱**: 동일 질문에 대한 빠른 응답 (90-95% 시간 단축)
+
+## 📊 최적화 성과 요약
+
+### 적용된 최적화 항목
+
+| 최적화 항목 | 적용 노드 | 개선율 | 절감 시간 |
+|------------|----------|--------|----------|
+| 문서 타입 복구 최적화 (O(n²) → O(n)) | process_search_results_combined | 80-90% | - |
+| 중복 제거 알고리즘 최적화 | execute_searches_parallel | 60-70% | - |
+| 동적 타임아웃 및 조기 종료 | execute_searches_parallel | 30-40% | 3-5초 |
+| 문서 필터링 벡터화 | process_search_results_combined | 50-60% | 0.5-1.8초 |
+| 검색 결과 캐싱 (히트) | 전체 워크플로우 | 90-95% | 17-25초 |
+
+### 전체 성능 개선 효과
+
+- **중간 규모 문서 (10-50개)**: 18-27초 → 15-22초 (15-20% 개선)
+- **대량 문서 (50개 이상)**: 25-35초 → 20-28초 (20-25% 개선)
+- **캐시 히트 (동일 쿼리)**: 18-27초 → 1-2초 (90-95% 개선)
+
+자세한 내용은 [성능 최적화 적용 요약](../performance_optimization_summary.md)을 참조하세요.
 
 ## 🔧 최적화된 컴포넌트
 
@@ -638,8 +658,12 @@ async def real_time_monitoring():
 
 ### 관련 문서
 - [성능 최적화 완료 보고서](performance_optimization_report.md)
-- [API 문서](../07_api/)
-- [개발 가이드](../10_technical_reference/development_rules.md)
+- [LangGraph 성능 최적화 제안서](../../performance_optimization_proposal.md)
+- [성능 개선 제안서](../../performance_optimization_proposals.md)
+- [성능 개선 적용 요약](../../performance_optimization_summary.md)
+- [LangGraph 리팩토링 계획](../../refactoring_plan_langgraph.md)
+- [API 문서](../../07_api/)
+- [개발 가이드](../../10_technical_reference/development_rules.md)
 
 ### 외부 자료
 - [Python asyncio 공식 문서](https://docs.python.org/3/library/asyncio.html)
@@ -649,5 +673,6 @@ async def real_time_monitoring():
 ---
 
 **작성일**: 2025년 1월 10일  
+**최종 업데이트**: 2025년 1월 20일  
 **작성자**: LawFirmAI 개발팀  
-**문서 버전**: 1.0
+**문서 버전**: 2.0

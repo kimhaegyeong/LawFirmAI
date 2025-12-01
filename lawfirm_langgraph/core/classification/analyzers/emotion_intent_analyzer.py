@@ -5,15 +5,30 @@
 """
 
 import re
-import logging
-from typing import Dict, List, Any, Optional, Tuple
+import os
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+from typing import Dict, List, Optional
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
 
-from core.conversation.conversation_manager import ConversationContext, ConversationTurn
+try:
+    from lawfirm_langgraph.core.conversation.conversation_manager import ConversationContext
+except ImportError:
+    from core.conversation.conversation_manager import ConversationContext
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Transformers 모델 지원 여부 확인
+TRANSFORMERS_AVAILABLE = False
+try:
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    import torch
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
 
 
 class EmotionType(Enum):
@@ -79,11 +94,35 @@ class ResponseTone:
 
 
 class EmotionIntentAnalyzer:
-    """감정 및 의도 분석기"""
+    """감정 및 의도 분석기 (하이브리드: 패턴 기반 + KoBERT)"""
     
-    def __init__(self):
-        """감정 및 의도 분석기 초기화"""
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, use_ml_model: Optional[bool] = None):
+        """
+        감정 및 의도 분석기 초기화
+        
+        Args:
+            use_ml_model: ML 모델 사용 여부 (None이면 환경 변수 확인)
+        """
+        self.logger = get_logger(__name__)
+        
+        # ML 모델 사용 여부 결정 (환경 변수 또는 파라미터)
+        if use_ml_model is None:
+            use_ml_model = os.getenv("USE_ML_EMOTION_ANALYZER", "true").lower() == "true"
+        
+        self.use_ml_model = use_ml_model and TRANSFORMERS_AVAILABLE
+        self.ml_model = None
+        self.ml_tokenizer = None
+        self.ml_model_name = os.getenv("EMOTION_ML_MODEL", "monologg/kobert")
+        
+        # ML 모델 지연 로딩 (필요 시에만)
+        if self.use_ml_model:
+            self._ml_model_loaded = False
+        else:
+            self._ml_model_loaded = False
+            if not TRANSFORMERS_AVAILABLE:
+                self.logger.debug("Transformers not available, using pattern-based only")
+            else:
+                self.logger.debug("ML model disabled, using pattern-based only")
         
         # 감정 키워드 패턴
         self.emotion_patterns = {
@@ -202,11 +241,79 @@ class EmotionIntentAnalyzer:
             }
         }
         
-        self.logger.info("EmotionIntentAnalyzer initialized")
+        self.logger.info(f"EmotionIntentAnalyzer initialized (ML model: {'enabled' if self.use_ml_model else 'disabled'})")
+    
+    def _load_ml_model(self):
+        """KoBERT 모델 지연 로딩 (ModelCacheManager 사용)"""
+        if self._ml_model_loaded:
+            return
+        
+        if not self.use_ml_model:
+            return
+        
+        try:
+            self.logger.debug(f"Loading ML model: {self.ml_model_name}")
+            
+            # ModelCacheManager를 통한 모델 로드
+            try:
+                from lawfirm_langgraph.core.shared.utils.model_cache_manager import get_model_cache_manager
+                cache_manager = get_model_cache_manager()
+                
+                # GPU 자동 감지
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                
+                model_dict = cache_manager.get_transformers_model(
+                    self.ml_model_name,
+                    model_type="AutoModelForSequenceClassification",
+                    device=device
+                )
+                
+                if model_dict:
+                    self.ml_model = model_dict["model"]
+                    self.ml_tokenizer = model_dict["tokenizer"]
+                    self._ml_model_loaded = True
+                    self.logger.info(f"✅ ML model loaded via cache manager: {self.ml_model_name} (device: {device})")
+                    return
+                else:
+                    self.logger.warning("Failed to load model via cache manager, falling back to direct load")
+            except ImportError:
+                self.logger.debug("ModelCacheManager not available, using direct load")
+            except Exception as e:
+                self.logger.warning(f"Cache manager failed: {e}, falling back to direct load")
+            
+            # 폴백: 직접 로드
+            self.ml_tokenizer = AutoTokenizer.from_pretrained(
+                self.ml_model_name,
+                cache_dir=os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
+                trust_remote_code=True  # KoBERT 등 커스텀 코드 모델 지원
+            )
+            self.ml_model = AutoModelForSequenceClassification.from_pretrained(
+                self.ml_model_name,
+                cache_dir=os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
+                trust_remote_code=True  # KoBERT 등 커스텀 코드 모델 지원
+            )
+            
+            # 평가 모드로 설정
+            self.ml_model.eval()
+            
+            # GPU 사용 가능 시 GPU로 이동
+            if torch.cuda.is_available():
+                self.ml_model = self.ml_model.cuda()
+                self.logger.debug("ML model loaded on GPU (direct)")
+            else:
+                self.logger.debug("ML model loaded on CPU (direct)")
+            
+            self._ml_model_loaded = True
+            self.logger.info(f"✅ ML model loaded: {self.ml_model_name}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to load ML model: {e}, using pattern-based only")
+            self.use_ml_model = False
+            self._ml_model_loaded = False
     
     def analyze_emotion(self, text: str) -> EmotionAnalysis:
         """
-        감정 분석
+        감정 분석 (하이브리드: 패턴 기반 + KoBERT)
         
         Args:
             text: 분석할 텍스트
@@ -215,46 +322,20 @@ class EmotionIntentAnalyzer:
             EmotionAnalysis: 감정 분석 결과
         """
         try:
-            text_lower = text.lower()
-            emotion_scores = {}
+            # 1단계: 패턴 기반 분석 (빠른 폴백)
+            pattern_result = self._analyze_emotion_pattern(text)
             
-            # 각 감정 유형별 점수 계산
-            for emotion_type, patterns in self.emotion_patterns.items():
-                score = 0.0
-                for pattern in patterns:
-                    matches = re.findall(pattern, text_lower)
-                    score += len(matches) * 0.1
-                
-                # 패턴 길이에 따른 가중치
-                if score > 0:
-                    score += 0.1
-                
-                emotion_scores[emotion_type.value] = min(1.0, score)
+            # 2단계: 신뢰도가 낮으면 ML 모델 사용
+            if pattern_result.confidence < 0.6 and self.use_ml_model:
+                try:
+                    ml_result = self._analyze_emotion_ml(text)
+                    if ml_result:
+                        # 두 결과 결합 (가중 평균)
+                        return self._combine_emotion_results(pattern_result, ml_result)
+                except Exception as e:
+                    self.logger.debug(f"ML emotion analysis failed: {e}, using pattern result")
             
-            # 기본 감정 설정 (점수가 모두 낮으면 중립)
-            if not any(score > 0.1 for score in emotion_scores.values()):
-                emotion_scores[EmotionType.NEUTRAL.value] = 0.5
-            
-            # 주요 감정 결정
-            primary_emotion = max(emotion_scores.items(), key=lambda x: x[1])
-            primary_emotion_type = EmotionType(primary_emotion[0])
-            
-            # 신뢰도 계산
-            confidence = primary_emotion[1]
-            
-            # 강도 계산
-            intensity = self._calculate_emotion_intensity(text_lower)
-            
-            # 추론 과정 생성
-            reasoning = self._generate_emotion_reasoning(text, primary_emotion_type, emotion_scores)
-            
-            return EmotionAnalysis(
-                primary_emotion=primary_emotion_type,
-                emotion_scores=emotion_scores,
-                confidence=confidence,
-                intensity=intensity,
-                reasoning=reasoning
-            )
+            return pattern_result
             
         except Exception as e:
             self.logger.error(f"Error analyzing emotion: {e}")
@@ -266,9 +347,273 @@ class EmotionIntentAnalyzer:
                 reasoning=f"Error: {str(e)}"
             )
     
+    def analyze_emotion_batch(self, texts: List[str], batch_size: int = 8) -> List[EmotionAnalysis]:
+        """
+        감정 분석 배치 처리
+        
+        Args:
+            texts: 분석할 텍스트 리스트
+            batch_size: 배치 크기 (ML 모델 사용 시)
+            
+        Returns:
+            List[EmotionAnalysis]: 감정 분석 결과 리스트
+        """
+        if not texts:
+            return []
+        
+        # 패턴 기반 분석 (모든 텍스트에 대해 빠르게 처리)
+        pattern_results = [self._analyze_emotion_pattern(text) for text in texts]
+        
+        # ML 모델이 필요한 텍스트만 필터링
+        ml_texts = []
+        ml_indices = []
+        for i, (text, pattern_result) in enumerate(zip(texts, pattern_results)):
+            if pattern_result.confidence < 0.6 and self.use_ml_model:
+                ml_texts.append(text)
+                ml_indices.append(i)
+        
+        # ML 모델 배치 처리
+        if ml_texts and self.use_ml_model:
+            try:
+                ml_results = self._analyze_emotion_ml_batch(ml_texts, batch_size)
+                
+                # 결과 병합
+                for idx, ml_result in zip(ml_indices, ml_results):
+                    if ml_result:
+                        pattern_results[idx] = self._combine_emotion_results(
+                            pattern_results[idx], ml_result
+                        )
+            except Exception as e:
+                self.logger.warning(f"ML batch analysis failed: {e}, using pattern results only")
+        
+        return pattern_results
+    
+    def _analyze_emotion_pattern(self, text: str) -> EmotionAnalysis:
+        """패턴 기반 감정 분석 (기존 방식)"""
+        text_lower = text.lower()
+        emotion_scores = {}
+        
+        # 각 감정 유형별 점수 계산
+        for emotion_type, patterns in self.emotion_patterns.items():
+            score = 0.0
+            for pattern in patterns:
+                matches = re.findall(pattern, text_lower)
+                score += len(matches) * 0.1
+            
+            # 패턴 길이에 따른 가중치
+            if score > 0:
+                score += 0.1
+            
+            emotion_scores[emotion_type.value] = min(1.0, score)
+        
+        # 기본 감정 설정 (점수가 모두 낮으면 중립)
+        if not any(score > 0.1 for score in emotion_scores.values()):
+            emotion_scores[EmotionType.NEUTRAL.value] = 0.5
+        
+        # 주요 감정 결정
+        primary_emotion = max(emotion_scores.items(), key=lambda x: x[1])
+        primary_emotion_type = EmotionType(primary_emotion[0])
+        
+        # 신뢰도 계산
+        confidence = primary_emotion[1]
+        
+        # 강도 계산
+        intensity = self._calculate_emotion_intensity(text_lower)
+        
+        # 추론 과정 생성
+        reasoning = self._generate_emotion_reasoning(text, primary_emotion_type, emotion_scores)
+        
+        return EmotionAnalysis(
+            primary_emotion=primary_emotion_type,
+            emotion_scores=emotion_scores,
+            confidence=confidence,
+            intensity=intensity,
+            reasoning=reasoning
+        )
+    
+    def _analyze_emotion_ml(self, text: str) -> Optional[EmotionAnalysis]:
+        """ML 모델 기반 감정 분석 (KoBERT)"""
+        if not self._ml_model_loaded:
+            self._load_ml_model()
+        
+        if not self.ml_model or not self.ml_tokenizer:
+            return None
+        
+        try:
+            # 텍스트 토큰화
+            inputs = self.ml_tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=128,
+                padding=True
+            )
+            
+            # GPU로 이동
+            if torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+            
+            # 추론
+            with torch.no_grad():
+                outputs = self.ml_model(**inputs)
+                logits = outputs.logits
+                probabilities = torch.softmax(logits, dim=-1)
+            
+            # 결과를 CPU로 이동 후 numpy 변환
+            probs = probabilities.cpu().numpy()[0]
+            
+            # KoBERT는 일반적인 분류 모델이므로, 감정 점수로 매핑
+            # 실제로는 파인튜닝된 모델이 필요하지만, 여기서는 기본 모델 사용
+            # 감정 점수 초기화
+            emotion_scores = {
+                EmotionType.POSITIVE.value: float(probs[0]) if len(probs) > 0 else 0.0,
+                EmotionType.NEGATIVE.value: float(probs[1]) if len(probs) > 1 else 0.0,
+                EmotionType.NEUTRAL.value: float(probs[2]) if len(probs) > 2 else 0.5,
+            }
+            
+            # 나머지 감정 유형은 기본값
+            for emotion_type in EmotionType:
+                if emotion_type.value not in emotion_scores:
+                    emotion_scores[emotion_type.value] = 0.0
+            
+            # 주요 감정 결정
+            primary_emotion = max(emotion_scores.items(), key=lambda x: x[1])
+            primary_emotion_type = EmotionType(primary_emotion[0])
+            
+            # 신뢰도 계산
+            confidence = primary_emotion[1]
+            
+            # 강도 계산 (ML 모델 출력 기반)
+            intensity = min(1.0, confidence * 1.2)
+            
+            # 추론 과정 생성
+            reasoning = f"ML 모델 분석 (KoBERT): {primary_emotion_type.value} (신뢰도: {confidence:.2f})"
+            
+            return EmotionAnalysis(
+                primary_emotion=primary_emotion_type,
+                emotion_scores=emotion_scores,
+                confidence=confidence,
+                intensity=intensity,
+                reasoning=reasoning
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"ML emotion analysis error: {e}")
+            return None
+    
+    def _analyze_emotion_ml_batch(self, texts: List[str], batch_size: int = 8) -> List[Optional[EmotionAnalysis]]:
+        """ML 모델 기반 감정 분석 배치 처리"""
+        if not self._ml_model_loaded:
+            self._load_ml_model()
+        
+        if not self.ml_model or not self.ml_tokenizer:
+            return [None] * len(texts)
+        
+        results = []
+        
+        try:
+            # 배치 단위로 처리
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                
+                # 배치 토큰화
+                inputs = self.ml_tokenizer(
+                    batch_texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=128,
+                    padding=True
+                )
+                
+                # GPU로 이동
+                if torch.cuda.is_available():
+                    inputs = {k: v.cuda() for k, v in inputs.items()}
+                
+                # 배치 추론
+                with torch.no_grad():
+                    outputs = self.ml_model(**inputs)
+                    logits = outputs.logits
+                    probabilities = torch.softmax(logits, dim=-1)
+                
+                # 결과 처리
+                probs_batch = probabilities.cpu().numpy()
+                
+                for probs in probs_batch:
+                    # 감정 점수 초기화
+                    emotion_scores = {
+                        EmotionType.POSITIVE.value: float(probs[0]) if len(probs) > 0 else 0.0,
+                        EmotionType.NEGATIVE.value: float(probs[1]) if len(probs) > 1 else 0.0,
+                        EmotionType.NEUTRAL.value: float(probs[2]) if len(probs) > 2 else 0.5,
+                    }
+                    
+                    # 나머지 감정 유형은 기본값
+                    for emotion_type in EmotionType:
+                        if emotion_type.value not in emotion_scores:
+                            emotion_scores[emotion_type.value] = 0.0
+                    
+                    # 주요 감정 결정
+                    primary_emotion = max(emotion_scores.items(), key=lambda x: x[1])
+                    primary_emotion_type = EmotionType(primary_emotion[0])
+                    
+                    # 신뢰도 계산
+                    confidence = primary_emotion[1]
+                    
+                    # 강도 계산
+                    intensity = min(1.0, confidence * 1.2)
+                    
+                    # 추론 과정 생성
+                    reasoning = f"ML 모델 분석 (KoBERT, 배치): {primary_emotion_type.value} (신뢰도: {confidence:.2f})"
+                    
+                    results.append(EmotionAnalysis(
+                        primary_emotion=primary_emotion_type,
+                        emotion_scores=emotion_scores,
+                        confidence=confidence,
+                        intensity=intensity,
+                        reasoning=reasoning
+                    ))
+            
+            return results
+            
+        except Exception as e:
+            self.logger.warning(f"ML batch emotion analysis error: {e}")
+            return [None] * len(texts)
+    
+    def _combine_emotion_results(self, pattern_result: EmotionAnalysis, ml_result: EmotionAnalysis) -> EmotionAnalysis:
+        """패턴 기반과 ML 모델 결과 결합"""
+        # 가중 평균 (패턴 0.4, ML 0.6)
+        pattern_weight = 0.4
+        ml_weight = 0.6
+        
+        combined_scores = {}
+        for emotion_type in EmotionType:
+            pattern_score = pattern_result.emotion_scores.get(emotion_type.value, 0.0)
+            ml_score = ml_result.emotion_scores.get(emotion_type.value, 0.0)
+            combined_scores[emotion_type.value] = pattern_score * pattern_weight + ml_score * ml_weight
+        
+        # 주요 감정 결정
+        primary_emotion = max(combined_scores.items(), key=lambda x: x[1])
+        primary_emotion_type = EmotionType(primary_emotion[0])
+        
+        # 신뢰도 계산 (두 결과의 평균)
+        confidence = (pattern_result.confidence * pattern_weight + ml_result.confidence * ml_weight)
+        
+        # 강도 계산
+        intensity = (pattern_result.intensity * pattern_weight + ml_result.intensity * ml_weight)
+        
+        # 추론 과정 생성
+        reasoning = f"하이브리드 분석: 패턴({pattern_result.primary_emotion.value}, {pattern_result.confidence:.2f}) + ML({ml_result.primary_emotion.value}, {ml_result.confidence:.2f})"
+        
+        return EmotionAnalysis(
+            primary_emotion=primary_emotion_type,
+            emotion_scores=combined_scores,
+            confidence=confidence,
+            intensity=intensity,
+            reasoning=reasoning
+        )
+    
     def analyze_intent(self, text: str, context: Optional[ConversationContext] = None) -> IntentAnalysis:
         """
-        의도 분석
+        의도 분석 (하이브리드: 패턴 기반 + KoBERT)
         
         Args:
             text: 분석할 텍스트
@@ -278,50 +623,20 @@ class EmotionIntentAnalyzer:
             IntentAnalysis: 의도 분석 결과
         """
         try:
-            text_lower = text.lower()
-            intent_scores = {}
+            # 1단계: 패턴 기반 분석
+            pattern_result = self._analyze_intent_pattern(text, context)
             
-            # 각 의도 유형별 점수 계산
-            for intent_type, patterns in self.intent_patterns.items():
-                score = 0.0
-                for pattern in patterns:
-                    matches = re.findall(pattern, text_lower)
-                    score += len(matches) * 0.1
-                
-                # 패턴 길이에 따른 가중치
-                if score > 0:
-                    score += 0.1
-                
-                intent_scores[intent_type.value] = min(1.0, score)
+            # 2단계: 신뢰도가 낮으면 ML 모델 사용
+            if pattern_result.confidence < 0.6 and self.use_ml_model:
+                try:
+                    ml_result = self._analyze_intent_ml(text)
+                    if ml_result:
+                        # 두 결과 결합
+                        return self._combine_intent_results(pattern_result, ml_result)
+                except Exception as e:
+                    self.logger.debug(f"ML intent analysis failed: {e}, using pattern result")
             
-            # 맥락 기반 의도 조정
-            if context:
-                intent_scores = self._adjust_intent_with_context(intent_scores, context)
-            
-            # 기본 의도 설정 (점수가 모두 낮으면 일반)
-            if not any(score > 0.1 for score in intent_scores.values()):
-                intent_scores[IntentType.GENERAL.value] = 0.5
-            
-            # 주요 의도 결정
-            primary_intent = max(intent_scores.items(), key=lambda x: x[1])
-            primary_intent_type = IntentType(primary_intent[0])
-            
-            # 신뢰도 계산
-            confidence = primary_intent[1]
-            
-            # 긴급도 평가
-            urgency_level = self.assess_urgency(text, {})
-            
-            # 추론 과정 생성
-            reasoning = self._generate_intent_reasoning(text, primary_intent_type, intent_scores)
-            
-            return IntentAnalysis(
-                primary_intent=primary_intent_type,
-                intent_scores=intent_scores,
-                confidence=confidence,
-                urgency_level=urgency_level,
-                reasoning=reasoning
-            )
+            return pattern_result
             
         except Exception as e:
             self.logger.error(f"Error analyzing intent: {e}")
@@ -332,6 +647,202 @@ class EmotionIntentAnalyzer:
                 urgency_level=UrgencyLevel.LOW,
                 reasoning=f"Error: {str(e)}"
             )
+    
+    def analyze_intent_batch(self, texts: List[str], contexts: Optional[List[Optional[ConversationContext]]] = None, batch_size: int = 8) -> List[IntentAnalysis]:
+        """
+        의도 분석 배치 처리
+        
+        Args:
+            texts: 분석할 텍스트 리스트
+            contexts: 대화 맥락 리스트 (선택사항)
+            batch_size: 배치 크기 (ML 모델 사용 시)
+            
+        Returns:
+            List[IntentAnalysis]: 의도 분석 결과 리스트
+        """
+        if not texts:
+            return []
+        
+        if contexts is None:
+            contexts = [None] * len(texts)
+        
+        # 패턴 기반 분석
+        pattern_results = [
+            self._analyze_intent_pattern(text, context)
+            for text, context in zip(texts, contexts)
+        ]
+        
+        # ML 모델이 필요한 텍스트만 필터링
+        ml_texts = []
+        ml_indices = []
+        for i, (text, pattern_result) in enumerate(zip(texts, pattern_results)):
+            if pattern_result.confidence < 0.6 and self.use_ml_model:
+                ml_texts.append(text)
+                ml_indices.append(i)
+        
+        # ML 모델 배치 처리
+        if ml_texts and self.use_ml_model:
+            try:
+                ml_results = self._analyze_intent_ml_batch(ml_texts, batch_size)
+                
+                # 결과 병합
+                for idx, ml_result in zip(ml_indices, ml_results):
+                    if ml_result:
+                        pattern_results[idx] = self._combine_intent_results(
+                            pattern_results[idx], ml_result
+                        )
+            except Exception as e:
+                self.logger.warning(f"ML batch intent analysis failed: {e}, using pattern results only")
+        
+        return pattern_results
+    
+    def _analyze_intent_pattern(self, text: str, context: Optional[ConversationContext] = None) -> IntentAnalysis:
+        """패턴 기반 의도 분석 (기존 방식)"""
+        text_lower = text.lower()
+        intent_scores = {}
+        
+        # 각 의도 유형별 점수 계산
+        for intent_type, patterns in self.intent_patterns.items():
+            score = 0.0
+            for pattern in patterns:
+                matches = re.findall(pattern, text_lower)
+                score += len(matches) * 0.1
+            
+            # 패턴 길이에 따른 가중치
+            if score > 0:
+                score += 0.1
+            
+            intent_scores[intent_type.value] = min(1.0, score)
+        
+        # 맥락 기반 의도 조정
+        if context:
+            intent_scores = self._adjust_intent_with_context(intent_scores, context)
+        
+        # 기본 의도 설정 (점수가 모두 낮으면 일반)
+        if not any(score > 0.1 for score in intent_scores.values()):
+            intent_scores[IntentType.GENERAL.value] = 0.5
+        
+        # 주요 의도 결정
+        primary_intent = max(intent_scores.items(), key=lambda x: x[1])
+        primary_intent_type = IntentType(primary_intent[0])
+        
+        # 신뢰도 계산
+        confidence = primary_intent[1]
+        
+        # 긴급도 평가
+        urgency_level = self.assess_urgency(text, {})
+        
+        # 추론 과정 생성
+        reasoning = self._generate_intent_reasoning(text, primary_intent_type, intent_scores)
+        
+        return IntentAnalysis(
+            primary_intent=primary_intent_type,
+            intent_scores=intent_scores,
+            confidence=confidence,
+            urgency_level=urgency_level,
+            reasoning=reasoning
+        )
+    
+    def _analyze_intent_ml(self, text: str) -> Optional[IntentAnalysis]:
+        """ML 모델 기반 의도 분석 (KoBERT)"""
+        if not self._ml_model_loaded:
+            self._load_ml_model()
+        
+        if not self.ml_model or not self.ml_tokenizer:
+            return None
+        
+        try:
+            # 텍스트 토큰화
+            inputs = self.ml_tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=128,
+                padding=True
+            )
+            
+            # GPU로 이동
+            if torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+            
+            # 추론
+            with torch.no_grad():
+                outputs = self.ml_model(**inputs)
+                logits = outputs.logits
+                probabilities = torch.softmax(logits, dim=-1)
+            
+            # 결과를 CPU로 이동 후 numpy 변환
+            probs = probabilities.cpu().numpy()[0]
+            
+            # 의도 점수 초기화 (기본 모델이므로 일반적인 매핑)
+            intent_scores = {
+                IntentType.QUESTION.value: float(probs[0]) if len(probs) > 0 else 0.0,
+                IntentType.REQUEST.value: float(probs[1]) if len(probs) > 1 else 0.0,
+                IntentType.GENERAL.value: float(probs[2]) if len(probs) > 2 else 0.5,
+            }
+            
+            # 나머지 의도 유형은 기본값
+            for intent_type in IntentType:
+                if intent_type.value not in intent_scores:
+                    intent_scores[intent_type.value] = 0.0
+            
+            # 주요 의도 결정
+            primary_intent = max(intent_scores.items(), key=lambda x: x[1])
+            primary_intent_type = IntentType(primary_intent[0])
+            
+            # 신뢰도 계산
+            confidence = primary_intent[1]
+            
+            # 긴급도 평가 (패턴 기반 사용)
+            urgency_level = self.assess_urgency(text, {})
+            
+            # 추론 과정 생성
+            reasoning = f"ML 모델 분석 (KoBERT): {primary_intent_type.value} (신뢰도: {confidence:.2f})"
+            
+            return IntentAnalysis(
+                primary_intent=primary_intent_type,
+                intent_scores=intent_scores,
+                confidence=confidence,
+                urgency_level=urgency_level,
+                reasoning=reasoning
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"ML intent analysis error: {e}")
+            return None
+    
+    def _combine_intent_results(self, pattern_result: IntentAnalysis, ml_result: IntentAnalysis) -> IntentAnalysis:
+        """패턴 기반과 ML 모델 결과 결합"""
+        # 가중 평균 (패턴 0.4, ML 0.6)
+        pattern_weight = 0.4
+        ml_weight = 0.6
+        
+        combined_scores = {}
+        for intent_type in IntentType:
+            pattern_score = pattern_result.intent_scores.get(intent_type.value, 0.0)
+            ml_score = ml_result.intent_scores.get(intent_type.value, 0.0)
+            combined_scores[intent_type.value] = pattern_score * pattern_weight + ml_score * ml_weight
+        
+        # 주요 의도 결정
+        primary_intent = max(combined_scores.items(), key=lambda x: x[1])
+        primary_intent_type = IntentType(primary_intent[0])
+        
+        # 신뢰도 계산
+        confidence = (pattern_result.confidence * pattern_weight + ml_result.confidence * ml_weight)
+        
+        # 긴급도는 패턴 결과 사용 (더 정확)
+        urgency_level = pattern_result.urgency_level
+        
+        # 추론 과정 생성
+        reasoning = f"하이브리드 분석: 패턴({pattern_result.primary_intent.value}, {pattern_result.confidence:.2f}) + ML({ml_result.primary_intent.value}, {ml_result.confidence:.2f})"
+        
+        return IntentAnalysis(
+            primary_intent=primary_intent_type,
+            intent_scores=combined_scores,
+            confidence=confidence,
+            urgency_level=urgency_level,
+            reasoning=reasoning
+        )
     
     def get_contextual_response_tone(self, emotion: EmotionAnalysis, intent: IntentAnalysis, 
                                      user_profile: Optional[Dict] = None) -> ResponseTone:

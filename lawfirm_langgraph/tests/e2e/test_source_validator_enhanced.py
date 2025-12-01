@@ -12,8 +12,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from lawfirm_langgraph.core.services.source_validator import SourceValidator
-from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter
+from lawfirm_langgraph.core.generation.validators.source_validator import SourceValidator
+from lawfirm_langgraph.core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
 
 
 class TestStatistics:

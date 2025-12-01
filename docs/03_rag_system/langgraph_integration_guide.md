@@ -162,6 +162,8 @@ prepare_documents_and_terms (문서 및 용어 준비)
 
 ## 상태 (State) 정의
 
+> **참고**: 개발 규칙 및 구현 패턴은 [LangChain/LangGraph 개발 규칙](./langchain_langgraph_development_rules.md)을 참조하세요.
+
 ### LegalWorkflowState
 
 ```python
@@ -688,10 +690,14 @@ print(f"LLM 제공자: {status.get('llm_provider', 'unknown')}")
 
 ## 관련 파일
 
-- `source/agents/legal_workflow_enhanced.py` - 워크플로우 구현
-- `source/agents/state_definitions.py` - State 정의
-- `source/agents/workflow_service.py` - 워크플로우 서비스
-- `source/agents/state_utils.py` - State 최적화 유틸리티
-- `infrastructure/utils/langgraph_config.py` - 설정 관리
+- `lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py` - 워크플로우 구현
+- `lawfirm_langgraph/core/workflow/processors/workflow_document_processor.py` - 문서 처리
+- `lawfirm_langgraph/core/workflow/mixins/` - 워크플로우 Mixin 클래스들
+
+## 참고 자료
+
+- [LangChain/LangGraph 개발 규칙](./langchain_langgraph_development_rules.md): 개발 규칙 및 구현 패턴
+- [LangGraph 공식 문서](https://langchain-ai.github.io/langgraph/)
+- [RAG 시스템 아키텍처](./rag_architecture.md)
 
 이 가이드를 통해 LawFirmAI의 LangGraph 워크플로우를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으시면 프로젝트 이슈를 통해 문의해주세요.

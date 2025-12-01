@@ -14,6 +14,17 @@ from .state_utils import (
 )
 from .state_reducer import custom_state_reducer, StateReducer
 from .workflow_types import QueryComplexity, RetryCounterManager
+from .answer_models import (
+    DocumentUsageInfo,
+    CoverageMetrics,
+    StructuredAnswer,
+)
+from .answer_helpers import (
+    create_structured_answer_from_state,
+    create_structured_answer_from_llm_response,
+    parse_answer_with_metadata,
+    update_answer_state_with_structured,
+)
 
 __all__ = [
     "LegalWorkflowState",
@@ -26,5 +37,12 @@ __all__ = [
     "StateReducer",
     "QueryComplexity",
     "RetryCounterManager",
+    "DocumentUsageInfo",
+    "CoverageMetrics",
+    "StructuredAnswer",
+    "create_structured_answer_from_state",
+    "create_structured_answer_from_llm_response",
+    "parse_answer_with_metadata",
+    "update_answer_state_with_structured",
 ]
 

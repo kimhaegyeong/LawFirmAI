@@ -5,9 +5,13 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SearchResultBalancer:
@@ -21,7 +25,7 @@ class SearchResultBalancer:
             min_per_type: 각 타입당 최소 선택 개수
             max_per_type: 각 타입당 최대 선택 개수
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.min_per_type = min_per_type
         self.max_per_type = max_per_type
         # 샘플링된 문서는 항상 포함 (타입 다양성 보장)

@@ -5,11 +5,18 @@ Workflow Statistics
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
-from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class WorkflowStatistics:
@@ -31,7 +38,14 @@ class WorkflowStatistics:
             'complexity_cache_hits': 0,
             'complexity_cache_misses': 0,
             'complexity_fallback_count': 0,
-            'avg_complexity_classification_time': 0.0
+            'avg_complexity_classification_time': 0.0,
+            # 통합 분류 메트릭 (최적화)
+            'unified_classification_calls': 0,
+            'unified_classification_llm_calls': 0,
+            'avg_unified_classification_time': 0.0,
+            'total_unified_classification_time': 0.0,
+            # 폴백 원인 분류
+            'fallback_reasons': {}
         }
 
     def update_statistics(self, state: LegalWorkflowState, config=None):

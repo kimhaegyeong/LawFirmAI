@@ -1198,6 +1198,21 @@ export function ReferencesModalContent({
         };
       }
 
+      // 기타 참고자료 정보
+      if (detail.type === 'regulation_paragraph') {
+        const relevanceScore = (detail.metadata?.relevance_score as number) || 
+                               (detail.metadata?.similarity as number) || 
+                               undefined;
+        return {
+          ...baseRef,
+          type: 'regulation',
+          content: detail.content || detail.name,
+          relevance_score: relevanceScore,
+          similarity: relevanceScore,
+          sourceDetail: detail,
+        };
+      }
+
       return baseRef;
     });
   }, [effectiveSourcesDetail]);
@@ -1205,7 +1220,11 @@ export function ReferencesModalContent({
   // 참고자료 파싱 및 분류 (sourcesDetail 우선)
   const parsedReferences = useMemo(() => {
     const detailRefs = sourcesDetailReferences;
-    const stringRefs = parseReferences(references, allLegalRefs, sources);  // allLegalRefs 사용
+    
+    // sources_by_type이 있으면 sources와 references 배열은 무시 (중복 방지)
+    // sources_by_type이 없을 때만 sources와 references를 파싱
+    const shouldUseStringRefs = !propSourcesByType || effectiveSourcesDetail.length === 0;
+    const stringRefs = shouldUseStringRefs ? parseReferences(references, allLegalRefs, sources) : [];
     
     // sourcesDetail을 우선하고, 중복 제거
     // 고유 키 생성: doc_id, case_number, article_number 등을 조합
@@ -1216,17 +1235,39 @@ export function ReferencesModalContent({
     detailRefs.forEach(ref => {
       // 고유 키 생성: doc_id > case_number > article_number > interpretation_number > decision_number > law_name > content 순서
       const sourceDetail = (ref as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
-      const docId = sourceDetail?.metadata?.doc_id || sourceDetail?.case_number;
-      const key = docId || 
-                  ref.case_number || 
-                  (ref.article_number && ref.law_name ? `${ref.law_name}-${ref.article_number}` : undefined) ||
-                  ref.article_number || 
-                  ref.interpretation_number ||
-                  ref.decision_number ||
-                  ref.law_name || 
-                  ref.content || 
-                  ref.id || 
-                  `detail-${result.length}`;
+      
+      // 판례: case_number 우선 사용 (같은 사건번호는 하나로 통합)
+      // 법령: law_name + article_number 조합
+      // 결정례: decision_number 우선
+      // 해석례: interpretation_number 우선
+      let key: string;
+      
+      if (ref.type === 'precedent' && ref.case_number) {
+        // 판례는 case_number로 중복 제거 (같은 사건번호는 하나로 통합)
+        key = `precedent-${ref.case_number}`;
+      } else if (ref.type === 'law' && ref.law_name && ref.article_number) {
+        // 법령은 law_name + article_number 조합
+        key = `law-${ref.law_name}-${ref.article_number}`;
+      } else if (ref.type === 'decision' && ref.decision_number) {
+        // 결정례는 decision_number로 중복 제거
+        key = `decision-${ref.decision_number}`;
+      } else if (ref.type === 'interpretation' && ref.interpretation_number) {
+        // 해석례는 interpretation_number로 중복 제거
+        key = `interpretation-${ref.interpretation_number}`;
+      } else {
+        // 기타: doc_id > case_number > article_number > interpretation_number > decision_number > law_name > content 순서
+        const docId = sourceDetail?.metadata?.doc_id || sourceDetail?.case_number || ref.case_number;
+        key = docId || 
+              ref.case_number || 
+              (ref.article_number && ref.law_name ? `${ref.law_name}-${ref.article_number}` : undefined) ||
+              ref.article_number || 
+              ref.interpretation_number ||
+              ref.decision_number ||
+              ref.law_name || 
+              ref.content || 
+              ref.id || 
+              `detail-${result.length}`;
+      }
       
       if (!seen.has(key)) {
         seen.add(key);
@@ -1234,41 +1275,42 @@ export function ReferencesModalContent({
       }
     });
     
-    // 문자열 참조 추가 (중복 제외)
-    // sources 배열의 항목과 sources_detail을 매칭 시도
-    stringRefs.forEach(ref => {
-      // sources 배열의 이름과 sources_detail의 name을 매칭 (effectiveSourcesDetail 사용)
-      const matchedDetail = effectiveSourcesDetail.find(detail => {
-        const detailName = detail.name || '';
-        const refContent = ref.content || '';
-        return detailName.includes(refContent) || refContent.includes(detailName);
-      });
-      
-      // 이미 매칭된 sources_detail이 있으면 건너뛰기
-      if (matchedDetail) {
-        const matchedRef = detailRefs.find(dr => {
-          const drSourceDetail = (dr as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
-          return drSourceDetail === matchedDetail;
+    // sources_by_type이 없을 때만 문자열 참조 추가 (중복 제외)
+    if (shouldUseStringRefs) {
+      stringRefs.forEach(ref => {
+        // sources 배열의 이름과 sources_detail의 name을 매칭 (effectiveSourcesDetail 사용)
+        const matchedDetail = effectiveSourcesDetail.find(detail => {
+          const detailName = detail.name || '';
+          const refContent = ref.content || '';
+          return detailName.includes(refContent) || refContent.includes(detailName);
         });
-        if (matchedRef) {
-          return; // 이미 추가된 항목이므로 건너뛰기
+        
+        // 이미 매칭된 sources_detail이 있으면 건너뛰기
+        if (matchedDetail) {
+          const matchedRef = detailRefs.find(dr => {
+            const drSourceDetail = (dr as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
+            return drSourceDetail === matchedDetail;
+          });
+          if (matchedRef) {
+            return; // 이미 추가된 항목이므로 건너뛰기
+          }
         }
-      }
-      
-      // 고유 키 생성
-      const key = ref.case_number || 
-                  (ref.article_number && ref.law_name ? `${ref.law_name}-${ref.article_number}` : undefined) ||
-                  ref.article_number || 
-                  ref.law_name || 
-                  ref.content || 
-                  ref.id || 
-                  `string-${result.length}`;
-      
-      if (!seen.has(key)) {
-        seen.add(key);
-        result.push(ref);
-      }
-    });
+        
+        // 고유 키 생성
+        const key = ref.case_number || 
+                    (ref.article_number && ref.law_name ? `${ref.law_name}-${ref.article_number}` : undefined) ||
+                    ref.article_number || 
+                    ref.law_name || 
+                    ref.content || 
+                    ref.id || 
+                    `string-${result.length}`;
+        
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push(ref);
+        }
+      });
+    }
     
     // 타입별 정렬: 법령, 판례, 결정례, 해석례, 기타 순서
     const typeOrder: Record<string, number> = {
@@ -1290,7 +1332,7 @@ export function ReferencesModalContent({
       const scoreB = b.relevance_score ?? b.similarity ?? 0;
       return scoreB - scoreA;
     });
-  }, [sourcesDetailReferences, references, allLegalRefs, sources, effectiveSourcesDetail]);
+  }, [sourcesDetailReferences, references, allLegalRefs, sources, effectiveSourcesDetail, propSourcesByType]);
 
   // 타입별 필터링 (모든 문서 표시)
   const filteredReferences = useMemo(() => {
@@ -1325,6 +1367,25 @@ export function ReferencesModalContent({
     const interpretationCount = parsedReferences.filter((r) => r.type === 'interpretation').length;
     const regulationCount = parsedReferences.filter((r) => r.type === 'regulation').length;
     
+    // 디버깅: 타입별 개수와 sources_by_type 확인
+    if (import.meta.env.DEV && propSourcesByType) {
+      console.debug('[ReferencesModalContent] Type counts:', {
+        law: lawCount,
+        precedent: precedentCount,
+        decision: decisionCount,
+        interpretation: interpretationCount,
+        regulation: regulationCount,
+        total: allCount,
+        sourcesByType: {
+          statutes_articles: propSourcesByType.statutes_articles?.length || 0,
+          precedent_contents: propSourcesByType.precedent_contents?.length || 0,
+          precedent_chunks: propSourcesByType.precedent_chunks?.length || 0,
+        },
+        effectiveSourcesDetail: effectiveSourcesDetail.length,
+        parsedReferences: parsedReferences.length,
+      });
+    }
+    
     return {
       all: allCount,
       law: lawCount,
@@ -1333,7 +1394,7 @@ export function ReferencesModalContent({
       interpretation: interpretationCount,
       regulation: regulationCount,
     };
-  }, [parsedReferences]);
+  }, [parsedReferences, propSourcesByType, effectiveSourcesDetail]);
 
   if (parsedReferences.length === 0) {
     return (

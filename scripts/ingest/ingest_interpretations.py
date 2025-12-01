@@ -4,7 +4,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Ensure project root is on sys.path so `scripts.*` imports work from any CWD
 _CURRENT_FILE = Path(__file__).resolve()
@@ -14,6 +14,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from scripts.utils.embeddings import SentenceEmbedder
 from scripts.utils.text_chunker import chunk_paragraphs
+from scripts.utils.chunking.factory import ChunkingFactory
+from scripts.utils.embedding_version_manager import EmbeddingVersionManager
 from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
@@ -83,38 +85,85 @@ def insert_chunks_and_embeddings(
     paragraphs: List[str],
     embedder: SentenceEmbedder,
     batch: int = 64,
+    chunking_strategy: str = "standard",
+    query_type: Optional[str] = None,
+    replace_existing: bool = True,
 ):
-    chunks = chunk_paragraphs(paragraphs)
-    rows_to_embed: List[Dict] = []
-    for ch in chunks:
-        cur = conn.execute(
-            """
-            INSERT INTO text_chunks(source_type, source_id, level, chunk_index, start_char, end_char, overlap_chars, text, token_count, meta)
-            VALUES(?,?,?,?,?,?,?,?,?,NULL)
-            """,
-            (
-                "interpretation_paragraph",
-                interp_id,
-                "paragraph",
-                ch.get("chunk_index", 0),
-                None,
-                None,
-                None,
-                ch.get("text"),
-                None,
-            ),
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # ?????? ?? ????
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    version_manager = EmbeddingVersionManager(db_path)
+    
+    # ?? ?? ?? ?? ??
+    active_version = version_manager.get_active_version(chunking_strategy)
+    if not active_version:
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+        version_name = f"v1.0.0-{chunking_strategy}"
+        version_id = version_manager.register_version(
+            version_name=version_name,
+            chunking_strategy=chunking_strategy,
+            model_name=model_name,
+            description=f"{chunking_strategy} ?? ??",
+            set_active=True
         )
-        rows_to_embed.append({"id": cur.lastrowid, "text": ch.get("text", "")})
-
-    texts = [r["text"] for r in rows_to_embed]
-    if not texts:
-        return
-    vecs = embedder.encode(texts, batch_size=batch)
-    for r, v in zip(rows_to_embed, vecs):
-        conn.execute(
-            "INSERT INTO embeddings(chunk_id, model, dim, vector) VALUES(?,?,?,?)",
-            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes()),
+    else:
+        version_id = active_version['id']
+    
+    # ?? ?? ?? (?? ?? ??)
+    if replace_existing:
+        deleted_chunks, deleted_embeddings = version_manager.delete_chunks_by_version(
+            source_type="interpretation_paragraph",
+            source_id=interp_id
         )
+        if deleted_chunks > 0:
+            logger.info(f"Deleted {deleted_chunks} existing chunks for interp_id={interp_id}")
+    
+    # ?? ?? ??
+    strategy = ChunkingFactory.create_strategy(
+        strategy_name=chunking_strategy,
+        query_type=query_type
+    )
+    
+    # ?? ??
+    chunk_results = strategy.chunk(
+        content=paragraphs,
+        source_type="interpretation_paragraph",
+        source_id=interp_id
+    )
+    
+    # interpretation ????? ?? (?? ??? ???? ??)
+    interpretation_metadata = None
+    try:
+        import json
+        cursor_meta = conn.execute("""
+            SELECT org, doc_id, title
+            FROM interpretations
+            WHERE id = ?
+        """, (interp_id,))
+        row = cursor_meta.fetchone()
+        if row:
+            interpretation_metadata = {
+                'org': row['org'],
+                'doc_id': row['doc_id'],
+                'title': row['title']
+            }
+    except Exception as e:
+        logger.debug(f"Failed to get interpretation metadata for interp_id={interp_id}: {e}")
+    
+    # ????? JSON ??
+    meta_json = None
+    if interpretation_metadata:
+        try:
+            meta_json = json.dumps(interpretation_metadata, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Failed to serialize interpretation metadata for interp_id={interp_id}: {e}")
+    
+    # ??: text_chunks ???? PostgreSQL ???? ???? ???? ???
+    # ? ??? ? ?? text_chunks? ???? ???? ????.
+    logger.warning("text_chunks ???? ???? ingest_interpretations? insert_chunks_and_embeddings ??? ?????????.")
+    return
 
 
 def main():

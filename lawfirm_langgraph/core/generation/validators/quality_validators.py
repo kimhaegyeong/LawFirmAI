@@ -5,11 +5,126 @@
 """
 
 import re
-import logging
+import os
+import threading
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+# DatabaseAdapter import (법령명 검증용)
+try:
+    from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+    DATABASE_ADAPTER_AVAILABLE = True
+except ImportError:
+    try:
+        from core.data.db_adapter import DatabaseAdapter
+        DATABASE_ADAPTER_AVAILABLE = True
+    except ImportError:
+        DATABASE_ADAPTER_AVAILABLE = False
+        DatabaseAdapter = None
+
+logger = get_logger(__name__)
+
+# 로그 태그 상수 (오타 방지)
+LOG_TAG_CITATION_DEBUG = "[CITATION DEBUG]"
+LOG_TAG_VALIDATION = "[VALIDATION]"
+LOG_TAG_PERFORMANCE = "[PERFORMANCE]"
+LOG_TAG_TABLE_VALIDATION = "[TABLE VALIDATION]"
+LOG_TAG_LAW_NAME_VALIDATION = "[LAW NAME VALIDATION]"
+
+# 모듈 레벨 KoreanStopwordProcessor 인스턴스 (지연 로딩)
+_stopword_processor = None
+_stopword_processor_initialized = False
+
+# 모듈 레벨 임베딩 모델 인스턴스 (Ko-Legal-SBERT, 지연 로딩)
+_embedding_model = None
+_embedding_model_initialized = False
+_keyword_embedding_cache = {}  # 키워드 임베딩 캐시
+
+
+def _get_stopword_processor():
+    """KoreanStopwordProcessor 지연 로딩 (최초 사용 시에만 초기화)"""
+    global _stopword_processor, _stopword_processor_initialized
+    
+    if _stopword_processor_initialized:
+        return _stopword_processor
+    
+    if KoreanStopwordProcessor:
+        try:
+            _stopword_processor = KoreanStopwordProcessor.get_instance()
+        except Exception as e:
+            logger.debug(f"Error initializing KoreanStopwordProcessor: {e}")
+    
+    _stopword_processor_initialized = True
+    return _stopword_processor
+
+
+def _get_embedding_model():
+    """Ko-Legal-SBERT 임베딩 모델 지연 로딩 (최초 사용 시에만 초기화)"""
+    global _embedding_model, _embedding_model_initialized
+    
+    if _embedding_model_initialized:
+        return _embedding_model
+    
+    try:
+        SENTENCE_TRANSFORMERS_AVAILABLE = False
+        try:
+            from sentence_transformers import SentenceTransformer
+            SENTENCE_TRANSFORMERS_AVAILABLE = True
+        except ImportError:
+            pass
+        
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            # ModelCacheManager 사용
+            try:
+                from lawfirm_langgraph.core.utils.model_cache_manager import get_model_cache_manager
+                get_model_cache_manager_func = get_model_cache_manager
+            except ImportError:
+                try:
+                    from core.utils.model_cache_manager import get_model_cache_manager
+                    get_model_cache_manager_func = get_model_cache_manager
+                except ImportError:
+                    get_model_cache_manager_func = None
+            
+            embedding_model_name = os.getenv("EMBEDDING_MODEL", "woong0322/ko-legal-sbert-finetuned")
+            embedding_model_name = embedding_model_name.strip().strip('"').strip("'")
+            
+            if get_model_cache_manager_func:
+                try:
+                    model_cache = get_model_cache_manager_func()
+                    _embedding_model = model_cache.get_model(
+                        embedding_model_name,
+                        fallback_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                    )
+                    if _embedding_model:
+                        logger.debug(f"✅ [KEYWORD COVERAGE] Loaded embedding model (cached): {embedding_model_name}")
+                except Exception as e:
+                    logger.debug(f"⚠️ [KEYWORD COVERAGE] Failed to load via cache manager: {e}")
+                    _embedding_model = None
+            else:
+                # 직접 로드 (최후의 수단)
+                try:
+                    _embedding_model = SentenceTransformer(embedding_model_name)
+                    logger.debug(f"✅ [KEYWORD COVERAGE] Loaded embedding model (direct): {embedding_model_name}")
+                except Exception as e:
+                    logger.debug(f"⚠️ [KEYWORD COVERAGE] Failed to load {embedding_model_name}: {e}")
+                    _embedding_model = None
+    except Exception as e:
+        logger.debug(f"⚠️ [KEYWORD COVERAGE] Embedding model initialization failed: {e}")
+        _embedding_model = None
+    
+    _embedding_model_initialized = True
+    return _embedding_model
 
 
 class ContextValidator:
@@ -272,6 +387,398 @@ class ContextValidator:
 
 class AnswerValidator:
     """답변 품질 검증"""
+    
+    # LRU 캐시 (최대 1000개만 캐싱, 메모리 효율적)
+    _law_names_cache: Dict[str, bool] = {}  # {법령명: 존재 여부}
+    _law_names_cache_max_size = 1000
+    _law_names_cache_access_order: List[str] = []  # LRU 순서
+    
+    # 법령명 정규화 로그 캐시 (동일 법령명은 첫 1회만 로그)
+    _normalization_log_cache: set = set()  # {law_name->cleaned} 형식의 키
+    _normalization_log_cache_max_size = 500  # 메모리 효율을 위한 크기 제한
+    _normalization_log_cache_lock = threading.Lock()  # 스레드 안전성
+    
+    @classmethod
+    def _get_database_url(cls) -> str:
+        """
+        데이터베이스 URL 가져오기
+        
+        Returns:
+            데이터베이스 URL 문자열
+        """
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            # 환경 변수에서 조합
+            postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+            postgres_port = os.getenv("POSTGRES_PORT", "5432")
+            postgres_db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+            postgres_user = os.getenv("POSTGRES_USER", "lawfirmai")
+            postgres_password = os.getenv("POSTGRES_PASSWORD", "local_password")
+            
+            from urllib.parse import quote_plus
+            encoded_password = quote_plus(postgres_password)
+            database_url = f"postgresql://{postgres_user}:{encoded_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+        
+        return database_url
+    
+    @classmethod
+    def _query_law_name_from_db(cls, law_name: str) -> bool:
+        """
+        데이터베이스에서 특정 법령명 존재 여부 조회
+        
+        Args:
+            law_name: 확인할 법령명
+        
+        Returns:
+            존재 여부
+        """
+        if not DATABASE_ADAPTER_AVAILABLE:
+            return False
+        
+        try:
+            database_url = cls._get_database_url()
+            db_adapter = DatabaseAdapter(database_url)
+            
+            with db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # 컬럼명 확인 (law_name_kr 또는 name)
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'statutes' 
+                    AND column_name IN ('law_name_kr', 'name', 'law_name')
+                    LIMIT 1
+                """)
+                col_result = cursor.fetchone()
+                
+                name_col = 'law_name_kr'  # 기본값
+                if col_result:
+                    if isinstance(col_result, dict):
+                        name_col = col_result.get('column_name', 'law_name_kr')
+                    else:
+                        name_col = col_result[0] if len(col_result) > 0 else 'law_name_kr'
+                
+                # 법령명 존재 여부 확인
+                cursor.execute(f"""
+                    SELECT 1
+                    FROM statutes
+                    WHERE {name_col} = %s
+                    LIMIT 1
+                """, (law_name,))
+                
+                return cursor.fetchone() is not None
+        
+        except Exception as e:
+            logger.debug(f"{LOG_TAG_LAW_NAME_VALIDATION} Failed to query law name from DB: {e}")
+            return False
+    
+    @classmethod
+    def _check_law_name_in_db(cls, law_name: str) -> bool:
+        """
+        특정 법령명이 데이터베이스에 존재하는지 확인 (LRU 캐싱)
+        
+        Args:
+            law_name: 확인할 법령명
+        
+        Returns:
+            존재 여부
+        """
+        # 1. 캐시 확인
+        if law_name in cls._law_names_cache:
+            # LRU 업데이트 (가장 최근에 사용된 항목을 맨 뒤로 이동)
+            if law_name in cls._law_names_cache_access_order:
+                cls._law_names_cache_access_order.remove(law_name)
+            cls._law_names_cache_access_order.append(law_name)
+            return cls._law_names_cache[law_name]
+        
+        # 2. 데이터베이스 조회
+        exists = cls._query_law_name_from_db(law_name)
+        
+        # 3. 캐시에 추가 (LRU 방식)
+        if len(cls._law_names_cache) >= cls._law_names_cache_max_size:
+            # 가장 오래된 항목 제거
+            oldest = cls._law_names_cache_access_order.pop(0)
+            del cls._law_names_cache[oldest]
+        
+        cls._law_names_cache[law_name] = exists
+        cls._law_names_cache_access_order.append(law_name)
+        
+        return exists
+    
+    @staticmethod
+    def _remove_law_name_prefix(law_name: str) -> str:
+        """
+        법령명에서 불필요한 접두어 제거 (KoNLPy 우선 사용)
+        
+        KoNLPy 형태소 분석을 사용하여 조사, 부사, 동사 등을 제거하고
+        "~법"으로 끝나는 명사구만 추출합니다.
+        
+        Args:
+            law_name: 원본 법령명 (예: "특히국세기본법", "와민사집행법", "규정은민사집행법")
+        
+        Returns:
+            정제된 법령명 (예: "국세기본법", "민사집행법")
+        """
+        if not law_name:
+            return law_name
+        
+        # 1. KoNLPy를 사용한 형태소 분석 시도
+        try:
+            from lawfirm_langgraph.core.utils.konlpy_singleton import get_okt_instance
+            okt = get_okt_instance()
+            
+            if okt:
+                pos_tags = okt.pos(law_name)
+                
+                # "~법"으로 끝나는 명사구 추출
+                law_name_parts = []
+                found_law_suffix = False
+                
+                # 뒤에서부터 역순으로 검색하여 "~법" 부분 찾기
+                for i in range(len(pos_tags) - 1, -1, -1):
+                    word, pos = pos_tags[i]
+                    
+                    # "법"으로 끝나는 명사 찾기
+                    if word.endswith("법") and pos in ["Noun", "ProperNoun"]:
+                        found_law_suffix = True
+                        law_name_parts.insert(0, word)
+                        
+                        # "법" 앞의 연속된 명사들도 포함
+                        for j in range(i - 1, -1, -1):
+                            prev_word, prev_pos = pos_tags[j]
+                            # 명사만 포함, 조사/부사/동사/형용사는 제외
+                            if prev_pos in ["Noun", "ProperNoun"]:
+                                law_name_parts.insert(0, prev_word)
+                            elif prev_pos in ["Josa", "Adverb", "Verb", "Adjective"]:
+                                break
+                        break
+                
+                if found_law_suffix and law_name_parts:
+                    cleaned = "".join(law_name_parts)
+                    # "~법"으로 끝나는지 확인
+                    if cleaned.endswith("법") and re.search(r'^[가-힣]+법$', cleaned):
+                        # 로그 캐싱: 동일 법령명은 첫 1회만 로그
+                        log_key = f"{law_name}->{cleaned}"
+                        with AnswerValidator._normalization_log_cache_lock:
+                            should_log = log_key not in AnswerValidator._normalization_log_cache
+                            if should_log:
+                                AnswerValidator._normalization_log_cache.add(log_key)
+                                # 메모리 관리: 크기 제한 초과 시 오래된 항목 제거
+                                if len(AnswerValidator._normalization_log_cache) > AnswerValidator._normalization_log_cache_max_size:
+                                    # 절반만 유지 (FIFO 방식)
+                                    items_to_remove = list(AnswerValidator._normalization_log_cache)[:AnswerValidator._normalization_log_cache_max_size // 2]
+                                    for item in items_to_remove:
+                                        AnswerValidator._normalization_log_cache.discard(item)
+                        
+                        # TRACE 레벨로 로그 출력 (첫 1회만)
+                        if should_log:
+                            logger.trace(f"KoNLPy로 법령명 정규화: '{law_name}' -> '{cleaned}'")
+                        
+                        return cleaned
+        except Exception as e:
+            logger.trace(f"KoNLPy processing error in law name normalization: {e}, using fallback")
+        
+        # 2. 폴백: 정규식 기반으로 "~법"으로 끝나는 부분만 추출
+        # 조사, 부사, 동사 등을 제거하고 "~법"으로 끝나는 명사구만 추출
+        # 예: "와민사집행법" -> "민사집행법", "규정은민사집행법" -> "민사집행법"
+        
+        # "~법"으로 끝나는 부분 찾기
+        match = re.search(r'([가-힣]+법)', law_name)
+        if match:
+            cleaned = match.group(1)
+            
+            # 앞의 불필요한 부분 제거 시도
+            # 점진적으로 접두어 길이를 늘려가며 유효한 법령명 찾기
+            if len(cleaned) > 3:  # 최소 "XX법" 이상
+                # 1글자부터 최대 6글자까지 접두어 제거 시도 (나아가, 규정한 등 긴 접두어 처리)
+                # 최소 2글자 이상 남아야 하므로 len(cleaned) - 2까지 시도 (포함)
+                for prefix_len in range(1, min(7, len(cleaned) - 1)):  # 최소 2글자 이상 남아야 함
+                    candidate = cleaned[prefix_len:]
+                    if candidate.endswith("법") and len(candidate) >= 2:  # 최소 2글자 (예: "민법")
+                        # 법령명으로 보이는 패턴인지 확인
+                        # 1글자 이상의 한글 + "법" (예: "민법", "국세기본법")
+                        if re.search(r'^[가-힣]+법$', candidate):
+                            # 추가 검증: 법령명은 보통 2-12글자 정도
+                            if 2 <= len(candidate) <= 12:
+                                # 법령명은 보통 명사로 시작 (조사/부사로 시작하지 않음)
+                                # "히", "한", "정", "편", "아", "하", "드", "여", "시", "가" 등으로 시작하지 않음
+                                invalid_starters = ["히", "한", "정", "편", "아", "하", "드", "은", "는", "이", "가", "와", "과", "여", "시"]
+                                if not any(candidate.startswith(starter) for starter in invalid_starters):
+                                    # DB 검증 시도 (가장 유효한 법령명인지 확인)
+                                    if AnswerValidator._check_law_name_in_db(candidate):
+                                        # 로그 캐싱: 동일 법령명은 첫 1회만 로그
+                                        log_key = f"{law_name}->{candidate}"
+                                        with AnswerValidator._normalization_log_cache_lock:
+                                            should_log = log_key not in AnswerValidator._normalization_log_cache
+                                            if should_log:
+                                                AnswerValidator._normalization_log_cache.add(log_key)
+                                                if len(AnswerValidator._normalization_log_cache) > AnswerValidator._normalization_log_cache_max_size:
+                                                    items_to_remove = list(AnswerValidator._normalization_log_cache)[:AnswerValidator._normalization_log_cache_max_size // 2]
+                                                    for item in items_to_remove:
+                                                        AnswerValidator._normalization_log_cache.discard(item)
+                                        
+                                        if should_log:
+                                            logger.trace(f"폴백 방식으로 법령명 정규화 (DB 검증 통과): '{law_name}' -> '{candidate}'")
+                                        return candidate
+                                    # DB 검증 실패해도 유효한 패턴이면 반환 (DB에 없는 법령명일 수 있음)
+                                    # 로그 캐싱: 동일 법령명은 첫 1회만 로그
+                                    log_key = f"{law_name}->{candidate}"
+                                    with AnswerValidator._normalization_log_cache_lock:
+                                        should_log = log_key not in AnswerValidator._normalization_log_cache
+                                        if should_log:
+                                            AnswerValidator._normalization_log_cache.add(log_key)
+                                            if len(AnswerValidator._normalization_log_cache) > AnswerValidator._normalization_log_cache_max_size:
+                                                items_to_remove = list(AnswerValidator._normalization_log_cache)[:AnswerValidator._normalization_log_cache_max_size // 2]
+                                                for item in items_to_remove:
+                                                    AnswerValidator._normalization_log_cache.discard(item)
+                                    
+                                    if should_log:
+                                        logger.trace(f"폴백 방식으로 법령명 정규화: '{law_name}' -> '{candidate}'")
+                                    return candidate
+            
+            # 제거 실패 시 원본 "~법" 부분 반환 (단, 너무 길면 제외)
+            if cleaned.endswith("법") and re.search(r'^[가-힣]+법$', cleaned):
+                if len(cleaned) <= 12:  # 합리적인 법령명 길이
+                    # 원본도 유효하지 않은 시작 문자로 시작하는지 확인
+                    invalid_starters = ["히", "한", "정", "편", "아", "하", "드", "은", "는", "이", "가", "와", "과", "여", "시"]
+                    if not any(cleaned.startswith(starter) for starter in invalid_starters):
+                        # 로그 캐싱: 동일 법령명은 첫 1회만 로그
+                        log_key = f"{law_name}->{cleaned}"
+                        with AnswerValidator._normalization_log_cache_lock:
+                            should_log = log_key not in AnswerValidator._normalization_log_cache
+                            if should_log:
+                                AnswerValidator._normalization_log_cache.add(log_key)
+                                if len(AnswerValidator._normalization_log_cache) > AnswerValidator._normalization_log_cache_max_size:
+                                    items_to_remove = list(AnswerValidator._normalization_log_cache)[:AnswerValidator._normalization_log_cache_max_size // 2]
+                                    for item in items_to_remove:
+                                        AnswerValidator._normalization_log_cache.discard(item)
+                        
+                        if should_log:
+                            logger.trace(f"폴백 방식으로 법령명 정규화: '{law_name}' -> '{cleaned}'")
+                        return cleaned
+        
+        # 3. 최종 폴백: 원본 반환
+        return law_name
+    
+    @classmethod
+    def _validate_and_clean_law_name(cls, raw_law_name: str) -> Optional[str]:
+        """
+        법령명 검증 및 정제 (메모리 효율적 - LRU 캐싱 사용)
+        
+        전략:
+        1. 접두어 제거 (DB 조회 없이, 빠른 처리)
+        2. 정제된 법령명이 DB에 있는지 확인 (LRU 캐싱)
+        3. 원본도 확인 (폴백)
+        4. DB 조회 실패 시 접두어 제거된 값 반환 (폴백)
+        
+        Args:
+            raw_law_name: "특히국세기본법" 같은 원본 법령명
+        
+        Returns:
+            "국세기본법" 같은 유효한 법령명 또는 None
+        """
+        if not raw_law_name:
+            return None
+        
+        # 1. 접두어 제거 (빠른 처리, DB 조회 없이)
+        cleaned = cls._remove_law_name_prefix(raw_law_name)
+        
+        # 2. 정제된 법령명이 DB에 있는지 확인 (LRU 캐싱)
+        if cleaned != raw_law_name:
+            if cls._check_law_name_in_db(cleaned):
+                return cleaned
+        
+        # 3. 원본도 확인 (폴백)
+        if cls._check_law_name_in_db(raw_law_name):
+            return raw_law_name
+        
+        # 4. DB 조회 실패 시 접두어 제거된 값 반환 (폴백)
+        # 접두어가 제거되었으면 정제된 값 사용
+        if cleaned != raw_law_name:
+            return cleaned
+        
+        # 5. 접두어가 없고 DB에도 없으면 None 반환
+        return None
+
+    @staticmethod
+    def _calculate_string_similarity(str1: str, str2: str) -> float:
+        """
+        문자열 유사도 계산 (간단한 편집 거리 기반)
+        
+        Args:
+            str1: 첫 번째 문자열
+            str2: 두 번째 문자열
+        
+        Returns:
+            유사도 점수 (0.0-1.0)
+        """
+        if not str1 or not str2:
+            return 0.0
+        
+        if str1 == str2:
+            return 1.0
+        
+        # 간단한 유사도: 공통 부분 문자열 길이 / 최대 길이
+        max_len = max(len(str1), len(str2))
+        if max_len == 0:
+            return 0.0
+        
+        # 공통 부분 문자열 찾기 (앞에서부터)
+        common_prefix = 0
+        min_len = min(len(str1), len(str2))
+        for i in range(min_len):
+            if str1[i] == str2[i]:
+                common_prefix += 1
+            else:
+                break
+        
+        # 공통 부분 문자열 찾기 (뒤에서부터)
+        common_suffix = 0
+        for i in range(1, min_len + 1):
+            if str1[-i] == str2[-i]:
+                common_suffix += 1
+            else:
+                break
+        
+        # 중복 제거 (prefix와 suffix가 겹치지 않도록)
+        total_common = min(common_prefix + common_suffix, max_len)
+        
+        # 유사도 계산
+        similarity = total_common / max_len
+        
+        # 부분 문자열 포함 여부 보너스
+        if str1 in str2 or str2 in str1:
+            similarity = max(similarity, 0.8)
+        
+        return min(1.0, similarity)
+
+    @staticmethod
+    def _extract_base_article_number(article_number: str) -> str:
+        """
+        조문번호에서 항/호를 제거한 기본 조문번호만 추출
+        
+        예시:
+        - "217" -> "217"
+        - "217-1" -> "217"
+        - "217-1-2" -> "217"
+        - "217조 제1항" -> "217"
+        
+        Args:
+            article_number: 조문번호 문자열
+            
+        Returns:
+            항/호를 제거한 기본 조문번호
+        """
+        if not article_number:
+            return ""
+        
+        # 숫자만 추출 (첫 번째 숫자 시퀀스)
+        match = re.search(r'(\d+)', str(article_number))
+        if match:
+            return match.group(1)
+        
+        return str(article_number).strip()
 
     @staticmethod
     def _normalize_citation(citation: str) -> Dict[str, Any]:
@@ -283,12 +790,14 @@ class AnswerValidator:
         - "민법 750조"
         - "[법령: 민법 제750조]"
         - "민법 제750조에 따르면..."
+        - "민사소송법 제217조 제1항"
+        - "민사소송법 제217조 제1항 제2호"
         
         Returns:
             {
                 "type": "law",  # "law" or "precedent"
                 "law_name": "민법",  # 법령명
-                "article_number": "750",  # 조문번호
+                "article_number": "750",  # 조문번호 (항/호 제거)
                 "normalized": "민법 제750조",  # 표준 형식
                 "original": citation  # 원본
             }
@@ -300,9 +809,10 @@ class AnswerValidator:
                 "original": citation
             }
         
-        # 1. 법령 조문 패턴 (다양한 형식 지원)
+        # 1. 법령 조문 패턴 (다양한 형식 지원 - 항/호 포함 패턴 추가)
         law_patterns = [
             (r'\[법령:\s*([^\]]+)\]', True),  # [법령: 민법 제750조]
+            (r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', False),  # 민법 제217조 제1항 제2호, 민법 제217조 제1항, 민법 제217조
             (r'([가-힣]+법)\s*제?\s*(\d+)\s*조', False),  # 민법 제750조, 민법 750조
             (r'([가-힣]+법)\s*(\d+)\s*조', False),  # 민법 750조 (제 없음)
         ]
@@ -313,31 +823,61 @@ class AnswerValidator:
                 if is_bracketed:
                     # [법령: ...] 형식
                     inner = match.group(1)
-                    law_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', inner)
+                    # 항/호 포함 패턴도 처리
+                    law_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', inner)
                     if law_match:
+                        raw_law_name = law_match.group(1)
+                        article_number = law_match.group(2)  # 항/호 제거한 기본 조문번호만 추출
+                        
+                        # 법령명 검증 및 정제
+                        valid_law_name = AnswerValidator._validate_and_clean_law_name(raw_law_name)
+                        if not valid_law_name:
+                            # 유효한 법령명을 찾지 못한 경우, 접두어만 제거한 값 사용
+                            valid_law_name = AnswerValidator._remove_law_name_prefix(raw_law_name)
+                            if not valid_law_name or valid_law_name == raw_law_name:
+                                # 여전히 유효하지 않으면 원본 사용 (폴백)
+                                valid_law_name = raw_law_name
+                        
                         return {
                             "type": "law",
-                            "law_name": law_match.group(1),
-                            "article_number": law_match.group(2),
-                            "normalized": f"{law_match.group(1)} 제{law_match.group(2)}조",
+                            "law_name": valid_law_name,
+                            "article_number": article_number,  # 항/호 제거한 기본 조문번호만 저장
+                            "normalized": f"{valid_law_name} 제{article_number}조",
                             "original": citation
                         }
                 else:
                     # 직접 매칭
                     if len(match.groups()) >= 2:
+                        raw_law_name = match.group(1)
+                        article_number = match.group(2)  # 정규식에서 이미 항/호 제거된 기본 조문번호만 추출됨
+                        
+                        # 법령명 검증 및 정제
+                        valid_law_name = AnswerValidator._validate_and_clean_law_name(raw_law_name)
+                        if not valid_law_name:
+                            # 유효한 법령명을 찾지 못한 경우, 접두어만 제거한 값 사용
+                            valid_law_name = AnswerValidator._remove_law_name_prefix(raw_law_name)
+                            if not valid_law_name or valid_law_name == raw_law_name:
+                                # 여전히 유효하지 않으면 원본 사용 (폴백)
+                                valid_law_name = raw_law_name
+                        
                         return {
                             "type": "law",
-                            "law_name": match.group(1),
-                            "article_number": match.group(2),
-                            "normalized": f"{match.group(1)} 제{match.group(2)}조",
+                            "law_name": valid_law_name,
+                            "article_number": article_number,  # 항/호 제거한 기본 조문번호만 저장
+                            "normalized": f"{valid_law_name} 제{article_number}조",
                             "original": citation
                         }
         
-        # 2. 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
-        # "대법원 2007. 12. 27. 선고 2006다9408 판결" 형식 지원
+        # 2. 판례 패턴 (개선: 날짜/판결 형식 변형 처리 - 다양한 날짜 형식 지원)
+        # "대법원 2007. 12. 27. 선고 2006다9408 판결", "대법원 2014. 7. 24. 선고 2012다49933" 등 형식 지원
         precedent_patterns = [
-            (r'(대법원|법원)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # 날짜 포함 형식
-            (r'(대법원|법원).*?(\d{4}[다나마]\d+)', False),  # 기본 형식
+            # 날짜 포함 형식 (다양한 날짜 형식 지원)
+            (r'(대법원|법원)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014. 7. 24." 형식
+            (r'(대법원|법원)\s+(\d{4}\.\d{1,2}\.\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014.7.24." 형식
+            (r'(대법원|법원)\s+(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014년 7월 24일" 형식
+            (r'(대법원|법원)\s+(\d{4}-\d{1,2}-\d{1,2})\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014-7-24" 형식
+            # 기본 형식 (날짜 없음)
+            (r'(대법원|법원).*?(\d{4}[다나마]\d+)', False),  # "대법원 2012다49933" 형식
         ]
         
         for pattern, has_date in precedent_patterns:
@@ -345,16 +885,17 @@ class AnswerValidator:
             if precedent_match:
                 if has_date:
                     court = precedent_match.group(1)
-                    case_number = precedent_match.group(3)
+                    case_number = precedent_match.group(3)  # 날짜가 있으면 사건번호는 3번째 그룹
                 else:
                     court = precedent_match.group(1)
-                    case_number = precedent_match.group(2)
+                    case_number = precedent_match.group(2)  # 날짜가 없으면 사건번호는 2번째 그룹
                 
+                # 사건번호만 추출하여 정규화 (날짜 정보 제거)
                 return {
                     "type": "precedent",
                     "court": court,
-                    "case_number": case_number,
-                    "normalized": f"{court} {case_number}",
+                    "case_number": case_number,  # 사건번호만 저장
+                    "normalized": f"{court} {case_number}",  # 날짜 없이 사건번호만 포함
                     "original": citation
                 }
         
@@ -367,37 +908,62 @@ class AnswerValidator:
 
     @staticmethod
     def _match_citations(normalized_expected: Dict[str, Any], 
-                         normalized_answer: Dict[str, Any]) -> bool:
+                         normalized_answer: Dict[str, Any],
+                         use_fuzzy: bool = True) -> bool:
         """
-        정규화된 Citation 간 매칭
+        정규화된 Citation 간 매칭 (유사도 기반 매칭 추가)
         
         매칭 규칙:
         1. 타입이 다르면 False
         2. 법령인 경우: 법령명과 조문번호가 모두 일치해야 함
         3. 판례인 경우: 법원명과 사건번호가 모두 일치해야 함
         4. 부분 매칭 허용 (예: "민법 제750조"와 "민법 750조")
+        5. 유사도 기반 매칭 (use_fuzzy=True일 때)
+        
+        Args:
+            normalized_expected: 예상 Citation
+            normalized_answer: 답변 Citation
+            use_fuzzy: 유사도 기반 매칭 사용 여부
         """
         # 타입이 다르면 매칭 실패
         if normalized_expected.get("type") != normalized_answer.get("type"):
             return False
         
-        # 법령 매칭 (개선: 부분 매칭 지원)
+        # 법령 매칭 (개선: 부분 매칭 지원, 항/호 제거한 기본 조문번호로도 매칭, 유사도 기반 매칭 추가)
         if normalized_expected.get("type") == "law":
             expected_law = normalized_expected.get("law_name", "")
             expected_article = normalized_expected.get("article_number", "")
             answer_law = normalized_answer.get("law_name", "")
             answer_article = normalized_answer.get("article_number", "")
             
-            # 법령명이 일치하는지 확인 (부분 매칭 지원)
+            # 개선 1: 정확 매칭
+            if expected_law == answer_law and expected_article == answer_article:
+                return True
+            
+            # 개선 2: 부분 매칭 (포함 관계)
             law_match = expected_law == answer_law or expected_law in answer_law or answer_law in expected_law
             
+            # 개선 3: 유사도 기반 매칭 (fuzzy matching)
+            if use_fuzzy and not law_match:
+                # 문자열 유사도 계산
+                similarity = AnswerValidator._calculate_string_similarity(expected_law, answer_law)
+                if similarity >= 0.7:  # 70% 이상 유사하면 매칭
+                    law_match = True
+                    logger.debug(
+                        f"{LOG_TAG_CITATION_DEBUG} Fuzzy match: '{expected_law}' <-> '{answer_law}' "
+                        f"(similarity: {similarity:.2f})"
+                    )
+            
             # 조문번호가 일치하는지 확인 (숫자 비교)
-            article_match = expected_article == answer_article
+            # 항/호를 제거한 기본 조문번호로 비교
+            expected_article_base = AnswerValidator._extract_base_article_number(expected_article)
+            answer_article_base = AnswerValidator._extract_base_article_number(answer_article)
+            article_match = expected_article_base == answer_article_base
             
             # 법령명과 조문번호가 모두 일치해야 함
             return law_match and article_match
         
-        # 판례 매칭 (개선: 부분 매칭 지원)
+        # 판례 매칭 (개선: 부분 매칭 지원, 사건번호만 비교, 유사도 기반 매칭 추가)
         elif normalized_expected.get("type") == "precedent":
             expected_court = normalized_expected.get("court", "")
             expected_case = normalized_expected.get("case_number", "")
@@ -407,7 +973,18 @@ class AnswerValidator:
             # 법원명이 일치하는지 확인 (부분 매칭 지원)
             court_match = expected_court == answer_court or expected_court in answer_court or answer_court in expected_court
             
-            # 사건번호가 일치하는지 확인 (부분 매칭 지원)
+            # 유사도 기반 매칭 (fuzzy matching)
+            if use_fuzzy and not court_match:
+                similarity = AnswerValidator._calculate_string_similarity(expected_court, answer_court)
+                if similarity >= 0.7:
+                    court_match = True
+                    logger.debug(
+                        f"{LOG_TAG_CITATION_DEBUG} Fuzzy match court: '{expected_court}' <-> '{answer_court}' "
+                        f"(similarity: {similarity:.2f})"
+                    )
+            
+            # 사건번호가 일치하는지 확인 (사건번호만 비교, 날짜 정보 무시)
+            # 정규화 단계에서 이미 사건번호만 추출했으므로 직접 비교
             case_match = expected_case == answer_case or expected_case in answer_case or answer_case in expected_case
             
             # 법원명과 사건번호가 모두 일치해야 함
@@ -416,9 +993,83 @@ class AnswerValidator:
         return False
 
     @staticmethod
+    def _detect_prefix_with_konlpy(text: str, max_prefix_len: int = 5) -> Optional[str]:
+        """
+        KoNLPy 형태소 분석을 사용하여 접두어(조사/부사/동사 등) 감지
+        
+        Args:
+            text: 분석할 텍스트 (예: "특히국세기본법 제18조", "와민사집행법 제26조")
+            max_prefix_len: 최대 접두어 길이
+        
+        Returns:
+            감지된 접두어 또는 None
+        """
+        try:
+            from lawfirm_langgraph.core.utils.konlpy_singleton import get_okt_instance
+            okt = get_okt_instance()
+            
+            if not okt:
+                return None
+            
+            # "법"으로 끝나는 부분 찾기
+            law_match = re.search(r'([가-힣]+법)', text)
+            if not law_match:
+                return None
+            
+            law_text = law_match.group(1)  # "특히국세기본법" 또는 "국세기본법"
+            
+            # 형태소 분석
+            pos_tags = okt.pos(law_text)
+            
+            if not pos_tags:
+                return None
+            
+            # "법"으로 끝나는 명사 찾기
+            law_index = -1
+            for i, (word, pos) in enumerate(pos_tags):
+                if word.endswith("법") and pos in ["Noun", "ProperNoun"]:
+                    law_index = i
+                    break
+            
+            if law_index < 0:
+                return None
+            
+            # "법" 앞의 조사/부사/동사 등을 접두어로 간주
+            prefix_parts = []
+            for i in range(law_index - 1, -1, -1):
+                word, pos = pos_tags[i]
+                
+                # 조사, 부사, 동사, 형용사, 어미 등을 접두어로 간주
+                if pos in ["Josa", "Adverb", "Verb", "Adjective", "Eomi", "Determiner"]:
+                    prefix_parts.insert(0, word)
+                elif pos in ["Noun", "ProperNoun"]:
+                    # 명사가 나오면 접두어가 아님 (법령명의 일부)
+                    break
+                else:
+                    # 기타 품사도 접두어로 간주할 수 있음
+                    prefix_parts.insert(0, word)
+                
+                # 최대 접두어 길이 제한
+                if len("".join(prefix_parts)) >= max_prefix_len:
+                    break
+            
+            if prefix_parts:
+                prefix = "".join(prefix_parts)
+                # 접두어가 너무 길면 제한
+                if len(prefix) <= max_prefix_len:
+                    logger.debug(f"KoNLPy로 접두어 감지: '{law_text}' -> 접두어 '{prefix}'")
+                    return prefix
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"KoNLPy prefix detection error: {e}")
+            return None
+    
+    @staticmethod
     def _extract_and_normalize_citations_from_answer(answer: str) -> List[Dict[str, Any]]:
         """
-        답변에서 Citation 추출 및 정규화
+        답변에서 Citation 추출 및 정규화 (KoNLPy 기반 접두어 감지)
         
         Returns:
             정규화된 Citation 리스트
@@ -428,52 +1079,116 @@ class AnswerValidator:
         
         normalized_citations = []
         
-        # 법령 조문 패턴 (다양한 형식 지원 - 개선: 더 포괄적인 패턴 및 중복 제거)
+        # 법령 조문 패턴 (다양한 형식 지원 - 개선: KoNLPy 기반 접두어 감지)
+        # 접두어를 하드코딩하지 않고, 형태소 분석으로 동적 감지
+        # 일반적인 조사/부사 패턴 (KoNLPy 실패 시 폴백용)
+        fallback_josa_pattern = r'(?:에|에서|에게|한테|께|으로|로|의|을|를|이|가|는|은|와|과|도|만|부터|까지|만큼|처럼|같이|따라|대신|더불어|대하여|관하여)'
+        fallback_adverb_pattern = r'(?:특히|또한|한편|나아가|반드시|위하여는)'
+        fallback_verb_pattern = r'(?:규정한|규정은|판결이|상태여서|외국판결이|외국판결은|보전처분은)'
+        
+        # 폴백 패턴 (KoNLPy 사용 불가 시)
+        fallback_prefix_pattern = f'(?:{fallback_josa_pattern}|{fallback_adverb_pattern}|{fallback_verb_pattern})'
+        
         law_patterns = [
             (r'\[법령:\s*([^\]]+)\]', True),  # [법령: 민법 제750조] - 괄호 내부 추출
+            
+            # 개선: 접두어가 붙은 법령명 패턴 (공백 있는 경우)
+            # KoNLPy로 접두어를 감지하거나, 폴백 패턴 사용
+            (rf'{fallback_prefix_pattern}\s+([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', False),
+            
+            # 개선: 접두어가 붙은 법령명 패턴 (공백 없는 경우)
+            # "법"으로 끝나는 부분을 먼저 찾고, 그 앞의 부분을 접두어로 간주
+            # 접두어는 최대 5글자, 법령명은 최소 2글자 이상
+            # non-greedy 매칭으로 최소한의 접두어만 추출
+            (r'([가-힣]{1,5}?)([가-힣]{2,}법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', False),
+            
+            # 기존 패턴들 (항/호 포함)
+            (r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', False),  # 민법 제217조 제1항 제2호, 민법 제217조 제1항, 민법 제217조
             (r'([가-힣]+법)\s*제?\s*(\d+)\s*조', False),  # 민법 제750조, 민법 750조
             (r'([가-힣]+법)\s*(\d+)\s*조', False),  # 민법 750조 (제 없음)
         ]
         law_matches = []
         seen_laws = set()
         
-        for pattern, extract_inner in law_patterns:
+        for pattern_idx, (pattern, extract_inner) in enumerate(law_patterns):
             matches = re.finditer(pattern, answer)
             for match in matches:
                 if extract_inner:
                     # [법령: ...] 형식에서 내부 추출
                     inner_text = match.group(1)
-                    # 내부에서 법령명과 조문번호 추출
-                    inner_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', inner_text)
+                    # 내부에서 법령명과 조문번호 추출 (항/호 포함 패턴도 처리)
+                    inner_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', inner_text)
                     if inner_match:
-                        law_key = f"{inner_match.group(1)} 제{inner_match.group(2)}조"
+                        raw_law_name = inner_match.group(1)
+                        article_no = inner_match.group(2)  # 항/호 제거한 기본 조문번호만 추출
+                        
+                        # 법령명 검증 및 정제 (접두어 제거 포함)
+                        valid_law_name = AnswerValidator._validate_and_clean_law_name(raw_law_name)
+                        if not valid_law_name:
+                            # 유효한 법령명을 찾지 못한 경우, 접두어만 제거한 값 사용
+                            valid_law_name = AnswerValidator._remove_law_name_prefix(raw_law_name)
+                            if not valid_law_name or valid_law_name == raw_law_name:
+                                valid_law_name = raw_law_name
+                        
+                        law_key = f"{valid_law_name} 제{article_no}조"
                         if law_key not in seen_laws:
                             seen_laws.add(law_key)
                             law_matches.append(law_key)
                 else:
                     # 직접 매칭
+                    # 모든 패턴에서 동일하게 처리: 법령명 추출 후 접두어 제거
                     if len(match.groups()) >= 2:
-                        law_key = f"{match.group(1)} 제{match.group(2)}조"
-                        if law_key not in seen_laws:
-                            seen_laws.add(law_key)
-                            law_matches.append(law_key)
+                        raw_law_name = match.group(1)
+                        article_no = match.group(2)
+                    else:
+                        continue
+                    
+                    # 개선: 모든 법령명에 대해 KoNLPy 기반 접두어 제거 적용
+                    # 접두어가 포함된 법령명도 처리 가능 (예: "특히국세기본법", "와민사집행법")
+                    valid_law_name = AnswerValidator._remove_law_name_prefix(raw_law_name)
+                    
+                    # 접두어 제거 후에도 법령명이 너무 짧거나 유효하지 않으면 DB 검증 시도
+                    if not valid_law_name or len(valid_law_name) < 2 or not valid_law_name.endswith("법"):
+                        # DB 검증 시도
+                        valid_law_name = AnswerValidator._validate_and_clean_law_name(raw_law_name)
+                        if not valid_law_name:
+                            # DB 검증 실패 시, 접두어 제거된 값 사용 (최소한의 정제)
+                            valid_law_name = AnswerValidator._remove_law_name_prefix(raw_law_name)
+                            if not valid_law_name or len(valid_law_name) < 2:
+                                valid_law_name = raw_law_name
+                    
+                    law_key = f"{valid_law_name} 제{article_no}조"
+                    if law_key not in seen_laws:
+                        seen_laws.add(law_key)
+                        law_matches.append(law_key)
         
         for match in law_matches:
             normalized = AnswerValidator._normalize_citation(match)
             if normalized.get("type") != "unknown":
                 normalized_citations.append(normalized)
         
-        # 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
+        # 판례 패턴 (개선: 날짜/판결 형식 변형 처리 - 다양한 날짜 형식 지원)
         precedent_patterns = [
-            r'(?:대법원|법원)\s+\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # 날짜 포함 형식
-            r'(?:대법원|법원).*?\d{4}[다나마]\d+',  # 기본 형식
+            r'(?:대법원|법원)\s+\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # "2014. 7. 24." 형식
+            r'(?:대법원|법원)\s+\d{4}\.\d{1,2}\.\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # "2014.7.24." 형식
+            r'(?:대법원|법원)\s+\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*선고\s+\d{4}[다나마]\d+',  # "2014년 7월 24일" 형식
+            r'(?:대법원|법원)\s+\d{4}-\d{1,2}-\d{1,2}\s*선고\s+\d{4}[다나마]\d+',  # "2014-7-24" 형식
+            r'(?:대법원|법원).*?\d{4}[다나마]\d+',  # 기본 형식 (날짜 없음)
         ]
         
         precedent_matches = []
+        seen_precedents = set()
         for pattern in precedent_patterns:
             matches = re.finditer(pattern, answer)
             for match in matches:
-                precedent_matches.append(match.group(0))
+                matched_text = match.group(0)
+                # 중복 제거를 위해 정규화된 형식으로 키 생성
+                normalized_temp = AnswerValidator._normalize_citation(matched_text)
+                if normalized_temp.get("type") == "precedent":
+                    precedent_key = f"{normalized_temp.get('court', '')} {normalized_temp.get('case_number', '')}"
+                    if precedent_key not in seen_precedents:
+                        seen_precedents.add(precedent_key)
+                        precedent_matches.append(matched_text)
         
         for match in precedent_matches:
             normalized = AnswerValidator._normalize_citation(match)
@@ -541,18 +1256,25 @@ class AnswerValidator:
             context_sentences = re.split(r'[.!?。！？\n]+', context_text)
             answer_sentences = re.split(r'[.!?。！？\n]+', answer_lower)
             
-            # 중요한 키워드 추출 (2자 이상, 불용어 제외)
-            stop_words = {'의', '가', '이', '은', '는', '을', '를', '에', '에서', '와', '과', '도', '로', '으로', '에서', '에게', '께', '한테', '더', '또', '그', '이', '저', '그것', '이것', '저것', '그런', '이런', '저런', '그렇게', '이렇게', '저렇게'}
+            # 중요한 키워드 추출 (2자 이상, 불용어 제외 - KoreanStopwordProcessor 사용)
             context_words = set()
+            stopword_processor = _get_stopword_processor()
             for sentence in context_sentences:
                 words = re.findall(r'\b\w+\b', sentence.lower())
-                context_words.update(w for w in words if len(w) >= 2 and w not in stop_words)
+                for w in words:
+                    if len(w) >= 2:
+                        if not stopword_processor or not stopword_processor.is_stopword(w):
+                            context_words.add(w)
             
             answer_words = set()
             for sentence in answer_sentences:
                 words = re.findall(r'\b\w+\b', sentence.lower())
-                answer_words.update(w for w in words if len(w) >= 2 and w not in stop_words)
+                for w in words:
+                    if len(w) >= 2:
+                        if not stopword_processor or not stopword_processor.is_stopword(w):
+                            answer_words.add(w)
 
+            # 1-1. 직접 매칭 (빠른 필터링)
             keyword_coverage = 0.0
             if context_words and answer_words:
                 overlap = len(context_words.intersection(answer_words))
@@ -564,6 +1286,22 @@ class AnswerValidator:
                     keyword_coverage = overlap_important / max(1, min(len(important_context_words), 200))
                 else:
                     keyword_coverage = overlap / max(1, min(len(context_words), 200))
+            
+            # 1-2. 의미적 매칭 (Ko-Legal-SBERT) - 직접 매칭이 부족한 경우만 수행
+            semantic_keyword_matches = 0
+            if keyword_coverage < 0.6:  # 60% 미만일 때만 의미적 매칭
+                semantic_matches = _semantic_keyword_matching_for_answer(
+                    list(important_context_words) if important_context_words else list(context_words),
+                    answer,  # 실제 answer 텍스트 전달
+                    threshold=0.7
+                )
+                if semantic_matches:
+                    # 의미적으로 매칭된 키워드 수 계산
+                    semantic_keyword_matches = len(semantic_matches)
+                    # 의미적 매칭을 포함한 최종 커버리지 계산 (가중치 0.9 적용)
+                    total_important_words = len(important_context_words) if important_context_words else len(context_words)
+                    semantic_coverage_boost = (semantic_keyword_matches * 0.9) / max(1, min(total_important_words, 200))
+                    keyword_coverage = min(1.0, keyword_coverage + semantic_coverage_boost)
 
             # 2. 법률 조항/판례 인용 포함 여부 확인 (강화: 법령 조문 인용 우선)
             # 법령 조문 인용 패턴 (강화: 다양한 형식 지원)
@@ -598,12 +1336,150 @@ class AnswerValidator:
                             has_law_in_docs = True
                             break
 
-            # 문서 인용 패턴 확인
-            document_citation_pattern = r'\[문서:\s*[^\]]+\]'
-            document_citations = len(re.findall(document_citation_pattern, answer))
+            # 🔥 개선: 문서 인용 패턴 확인 개선 ([문서 N] 형식 강화 및 더 많은 패턴 지원)
+            document_citation_patterns = [
+                r'\[문서:\s*[^\]]+\]',  # [문서: ...] 형식
+                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식 (강화)
+                r'\[문서\s*(\d+)\]',  # [문서 1], [문서 2] 형식 (그룹 캡처)
+                r'문서\s*\[\s*\d+\s*\]',  # 문서[1], 문서[2] 형식
+                r'문서\s*\d+',  # 문서1, 문서2 형식 (표 내에서 사용)
+                r'\(문서\s*\d+\)',  # (문서 1), (문서 2) 형식
+                r'문서\s*번호\s*\d+',  # 문서 번호 1 형식
+                r'참고문서\s*\d+',  # 참고문서1 형식
+                r'출처\s*\d+',  # 출처1 형식
+            ]
+            document_citations = 0
+            unique_doc_citations = set()
+            document_reference_numbers = []  # TASK 4: 문서 번호 추출
+            
+            # 🔥 개선: 모든 패턴을 한 번에 검색하여 중복 제거
+            for pattern in document_citation_patterns:
+                matches = re.findall(pattern, answer, re.IGNORECASE)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        # 그룹 캡처된 경우 번호 추출
+                        if match:
+                            doc_num = match[0] if match[0] else match
+                            try:
+                                doc_num_int = int(doc_num)
+                                if doc_num_int not in document_reference_numbers:
+                                    document_reference_numbers.append(doc_num_int)
+                                unique_doc_citations.add(f"[문서 {doc_num}]")
+                            except (ValueError, TypeError):
+                                pass
+                    else:
+                        # 문자열 매칭의 경우 번호 추출 시도
+                        num_match = re.search(r'\d+', match)
+                        if num_match:
+                            try:
+                                doc_num_int = int(num_match.group())
+                                if doc_num_int not in document_reference_numbers:
+                                    document_reference_numbers.append(doc_num_int)
+                                # 정규화된 형식으로 저장
+                                unique_doc_citations.add(f"[문서 {doc_num_int}]")
+                            except (ValueError, TypeError):
+                                # 번호를 추출할 수 없어도 패턴 자체를 저장
+                                unique_doc_citations.add(match)
+                        else:
+                            # 번호가 없어도 패턴 자체를 저장
+                            unique_doc_citations.add(match)
+            
+            # 🔥 개선: 문서 번호가 추출된 경우, 해당 번호로 정규화된 형식 추가
+            for doc_num in document_reference_numbers:
+                normalized_format = f"[문서 {doc_num}]"
+                if normalized_format not in unique_doc_citations:
+                    unique_doc_citations.add(normalized_format)
+            
+            document_citations = len(unique_doc_citations)
+            
+            # 디버깅 로그 추가
+            if document_citations > 0:
+                logger.debug(
+                    f"{LOG_TAG_CITATION_DEBUG} Document citations found: {document_citations}, "
+                    f"unique_numbers: {sorted(document_reference_numbers) if document_reference_numbers else 'none'}"
+                )
 
+            # 🔥 개선: 문서 활용도 검증 강화
+            # 문서 참조가 있는지 확인 (document_citations 또는 document_reference_numbers 사용)
+            has_document_references = document_citations > 0 or len(document_reference_numbers) > 0
+            
+            # 문서 수에 따라 최소 인용 수 동적 설정
+            if retrieved_docs:
+                doc_count = len(retrieved_docs)
+                if doc_count >= 5:
+                    min_required_citations = 3  # 5개 이상이면 최소 3개 인용
+                elif doc_count >= 3:
+                    min_required_citations = 2  # 3-4개면 최소 2개 인용
+                else:
+                    min_required_citations = 1  # 1-2개면 최소 1개 인용
+            else:
+                min_required_citations = 0
+            
+            # 문서 활용도 계산
+            unique_doc_numbers = set(document_reference_numbers) if document_reference_numbers else set()
+            used_doc_count = len(unique_doc_numbers) if unique_doc_numbers else document_citations
+            
+            # 🔥 개선: 문서 인용이 없어도 문서 내용 기반 매칭으로 활용도 계산
+            if used_doc_count == 0 and retrieved_docs:
+                # 문서 내용과 답변 내용의 유사도 계산
+                content_based_used_docs = 0
+                
+                for doc_idx, doc in enumerate(retrieved_docs[:5], 1):  # 최대 5개 문서만 확인
+                    if not isinstance(doc, dict):
+                        continue
+                    
+                    doc_content = (
+                        doc.get("content") or
+                        doc.get("text") or
+                        doc.get("content_text") or
+                        ""
+                    )
+                    
+                    if doc_content and len(doc_content.strip()) > 50:
+                        doc_content_lower = doc_content.lower()
+                        
+                        # 답변과 문서 내용의 키워드 매칭
+                        doc_keywords = set(re.findall(r'\b\w+\b', doc_content_lower[:500]))
+                        answer_keywords = set(re.findall(r'\b\w+\b', answer_lower[:500]))
+                        
+                        # 불용어 제거
+                        if stopword_processor:
+                            doc_keywords = {w for w in doc_keywords if len(w) >= 2 and not stopword_processor.is_stopword(w)}
+                            answer_keywords = {w for w in answer_keywords if len(w) >= 2 and not stopword_processor.is_stopword(w)}
+                        else:
+                            doc_keywords = {w for w in doc_keywords if len(w) >= 2}
+                            answer_keywords = {w for w in answer_keywords if len(w) >= 2}
+                        
+                        # 키워드 겹침 비율 계산
+                        if doc_keywords:
+                            overlap_ratio = len(doc_keywords.intersection(answer_keywords)) / len(doc_keywords)
+                            if overlap_ratio > 0.3:  # 30% 이상 겹치면 사용된 것으로 간주
+                                content_based_used_docs += 1
+                                # 문서 번호도 추가 (내용 기반 매칭)
+                                if doc_idx not in unique_doc_numbers:
+                                    unique_doc_numbers.add(doc_idx)
+                
+                if content_based_used_docs > 0:
+                    used_doc_count = content_based_used_docs
+                    logger.info(
+                        f"✅ [DOCUMENT USAGE] 문서 인용은 없지만 내용 기반 매칭으로 "
+                        f"{used_doc_count}개 문서 사용 인정"
+                    )
+            
+            # 문서 활용도 (사용된 문서 수 / 검색된 문서 수)
+            document_usage_rate = used_doc_count / max(1, len(retrieved_docs)) if retrieved_docs else 0.0
+            
+            # 최소 인용 수 충족 여부
+            has_sufficient_doc_refs = used_doc_count >= min_required_citations if min_required_citations > 0 else True
+            
+            # 문서 활용도가 낮으면 경고
+            if retrieved_docs and document_usage_rate < 0.4:  # 40% 미만이면 낮음
+                logger.warning(
+                    f"⚠️ [DOCUMENT USAGE] 낮은 문서 활용도: {used_doc_count}/{len(retrieved_docs)} "
+                    f"({document_usage_rate:.1%}), 최소 요구: {min_required_citations}개"
+                )
+            
             # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
-            has_document_references = False
             if document_sources:
                 # re 모듈은 이미 파일 상단에서 import됨
                 for source in document_sources:
@@ -757,6 +1633,30 @@ class AnswerValidator:
                             if precedent and precedent not in expected_citations_raw:
                                 expected_citations_raw.append(precedent)
 
+            # 개선 8번: Citation 정규화 일관성 개선 - 재정규화 함수 정의
+            def _re_normalize_citation(citation: Dict[str, Any]) -> Dict[str, Any]:
+                """Citation을 표준 형식으로 재정규화 (일관성 보장)"""
+                original = citation.get("original", citation.get("normalized", ""))
+                if not original:
+                    return citation
+                
+                # 동일한 정규화 함수 사용
+                renormalized = AnswerValidator._normalize_citation(original)
+                
+                # 기존 정보와 병합 (기존 정보가 더 상세하면 보존)
+                if renormalized.get("type") != "unknown":
+                    # 법령명 재정규화 (접두어 제거 보장)
+                    if renormalized.get("type") == "law":
+                        law_name = renormalized.get("law_name", "")
+                        # 접두어 제거 보장
+                        cleaned_law_name = AnswerValidator._remove_law_name_prefix(law_name)
+                        renormalized["law_name"] = cleaned_law_name
+                        renormalized["normalized"] = f"{cleaned_law_name} 제{renormalized.get('article_number', '')}조"
+                    
+                    return renormalized
+                
+                return citation
+
             # 1. expected_citations 정규화
             normalized_expected_citations = []
             for expected in expected_citations_raw:
@@ -766,105 +1666,217 @@ class AnswerValidator:
                 if normalized.get("type") != "unknown":
                     normalized_expected_citations.append(normalized)
 
+            # 개선 8번: expected citations 재정규화 (일관성 보장)
+            normalized_expected_citations = [
+                _re_normalize_citation(cit) for cit in normalized_expected_citations
+            ]
+
             # 디버깅 로그 추가
             logger.debug(
-                f"[CITATION DEBUG] Expected citations (raw): {expected_citations_raw[:5]}, "
+                f"{LOG_TAG_CITATION_DEBUG} Expected citations (raw): {expected_citations_raw[:5]}, "
                 f"Normalized expected: {[c.get('normalized', '') for c in normalized_expected_citations[:5]]}"
             )
 
             # 2. 답변에서 Citation 추출 및 정규화
             normalized_answer_citations = AnswerValidator._extract_and_normalize_citations_from_answer(answer)
             
+            # 개선 8번: answer citations 재정규화 (일관성 보장)
+            normalized_answer_citations = [
+                _re_normalize_citation(cit) for cit in normalized_answer_citations
+            ]
+            
             # 디버깅 로그 추가
-            logger.debug(
-                f"[CITATION DEBUG] Normalized answer citations: "
+            logger.info(
+                f"{LOG_TAG_CITATION_DEBUG} Normalized answer citations: "
                 f"{[c.get('normalized', '') for c in normalized_answer_citations[:5]]}"
             )
             
             # total_citations_in_answer 계산 (정규화된 Citation 사용)
             total_citations_in_answer = len(normalized_answer_citations) + document_citations if normalized_answer_citations else document_citations
 
-            # 3. 매칭 수행
+            # 3. 매칭 수행 (개선 6번: 유사도 기반 매칭 사용)
             found_citations = 0
             missing_citations = []
             matched_answer_citations = set()
+            unmatched_samples = []  # 요약 로그용 샘플 저장
 
             for expected_cit in normalized_expected_citations:
                 matched = False
                 for i, answer_cit in enumerate(normalized_answer_citations):
                     if i in matched_answer_citations:
                         continue
-                    if AnswerValidator._match_citations(expected_cit, answer_cit):
+                    # 개선 6번: 유사도 기반 매칭 사용
+                    if AnswerValidator._match_citations(expected_cit, answer_cit, use_fuzzy=True):
                         found_citations += 1
                         matched = True
                         matched_answer_citations.add(i)
                         logger.debug(
-                            f"[CITATION DEBUG] Matched: {expected_cit.get('normalized', '')} "
+                            f"{LOG_TAG_CITATION_DEBUG} Matched: {expected_cit.get('normalized', '')} "
                             f"<-> {answer_cit.get('normalized', '')}"
                         )
                         break
                 
                 if not matched:
                     missing_citations.append(expected_cit.get("original", ""))
-                    logger.debug(
-                        f"[CITATION DEBUG] Not matched: {expected_cit.get('normalized', '')} "
-                        f"(original: {expected_cit.get('original', '')})"
-                    )
+                    # 샘플 저장 (최대 5개)
+                    if len(unmatched_samples) < 5:
+                        unmatched_samples.append({
+                            'normalized': expected_cit.get('normalized', ''),
+                            'original': expected_cit.get('original', '')
+                        })
+            
+            # 요약 로그 출력 (개별 로그 대신)
+            if missing_citations:
+                unmatched_count = len(missing_citations)
+                sample_text = ", ".join([f"{s['normalized']}" for s in unmatched_samples[:3]])
+                logger.debug(
+                    f"{LOG_TAG_CITATION_DEBUG} Not matched: {unmatched_count} citations "
+                    f"(samples: {sample_text}{'...' if unmatched_count > 3 else ''})"
+                )
 
-            # 4. Citation coverage 계산 개선
+            # 🔥 개선: Citation coverage 계산 개선 - 문서 인용 포함 및 매칭 실패 원인 분석 및 보정
+            # 문서 인용도 Citation Coverage에 포함
+            total_citation_sources = 0
+            citation_coverage_from_docs = 0.0
+            
+            # 문서 인용 Coverage 계산 (retrieved_docs 기준)
+            if retrieved_docs and document_citations > 0:
+                doc_count = len(retrieved_docs)
+                # 문서 인용 Coverage: 사용된 문서 수 / 검색된 문서 수
+                citation_coverage_from_docs = min(1.0, document_citations / max(1, doc_count))
+                total_citation_sources += document_citations
+                logger.debug(
+                    f"{LOG_TAG_CITATION_DEBUG} Document citations: {document_citations}/{doc_count}, "
+                    f"coverage: {citation_coverage_from_docs:.2f}"
+                )
+            
             if normalized_expected_citations:
                 # expected_citations가 있을 때
-                citation_coverage = found_citations / len(normalized_expected_citations)
+                citation_coverage_from_expected = found_citations / len(normalized_expected_citations)
                 
-                # 답변에 Citation이 있지만 expected_citations와 매칭되지 않은 경우
-                # 부분 점수 부여 (최대 0.4까지 증가)
+                # 개선 7번-1: 매칭 실패 원인 분석 (유사도 기반 부분 매칭 시도)
+                if found_citations == 0 and normalized_answer_citations:
+                    # 답변에 Citation이 있지만 매칭 실패한 경우
+                    # 유사도 기반 부분 매칭 시도
+                    fuzzy_matches = 0
+                    for expected_cit in normalized_expected_citations:
+                        for answer_cit in normalized_answer_citations:
+                            # 유사도 기반 매칭 시도 (이미 위에서 시도했지만, 여기서는 더 관대한 기준 사용)
+                            if AnswerValidator._match_citations(expected_cit, answer_cit, use_fuzzy=True):
+                                fuzzy_matches += 1
+                                break
+                    
+                    if fuzzy_matches > 0:
+                        # 유사도 매칭에 대한 부분 점수 부여 (최대 0.5)
+                        fuzzy_coverage = (fuzzy_matches / len(normalized_expected_citations)) * 0.5
+                        citation_coverage_from_expected = max(citation_coverage_from_expected, fuzzy_coverage)
+                        logger.debug(
+                            f"{LOG_TAG_CITATION_DEBUG} Fuzzy matches: {fuzzy_matches}, "
+                            f"fuzzy_coverage: {fuzzy_coverage:.2f}, final: {citation_coverage_from_expected:.2f}"
+                        )
+                
+                # 개선 7번-2: 답변에 Citation이 있지만 expected와 매칭되지 않은 경우 보너스
                 unmatched_answer_citations = len(normalized_answer_citations) - found_citations
                 if unmatched_answer_citations > 0:
-                    # 답변에 법령 인용이 있으면 더 높은 보너스 부여
-                    bonus = min(0.4, unmatched_answer_citations * 0.15)
-                    citation_coverage = min(1.0, citation_coverage + bonus)
+                    # 법령 인용이 있으면 더 높은 보너스
+                    law_citations = [c for c in normalized_answer_citations if c.get("type") == "law"]
+                    if law_citations:
+                        bonus = min(0.5, unmatched_answer_citations * 0.2)  # 0.4 -> 0.5로 증가
+                    else:
+                        bonus = min(0.3, unmatched_answer_citations * 0.15)
+                    citation_coverage_from_expected = min(1.0, citation_coverage_from_expected + bonus)
                 
-                # 매칭 실패 시 부분 점수 로직 개선
+                # 개선 7번-3: 매칭 실패 시 부분 점수 로직 강화
                 if found_citations == 0:
-                    # 답변에 Citation이 있으면 최소 0.3 점수 부여 (0.2 -> 0.3으로 증가)
+                    # 답변에 Citation이 있으면 최소 점수 부여
                     if normalized_answer_citations:
-                        # 법령 인용이 있으면 더 높은 점수 부여
+                        # 법령 인용이 있으면 더 높은 점수 (0.6 -> 0.7로 증가)
                         law_citations = [c for c in normalized_answer_citations if c.get("type") == "law"]
                         if law_citations:
-                            citation_coverage = min(0.6, 0.3 + len(law_citations) * 0.1)
+                            citation_coverage_from_expected = min(0.7, 0.4 + len(law_citations) * 0.15)  # 0.3 -> 0.4, 0.1 -> 0.15
                         else:
-                            citation_coverage = min(0.5, len(normalized_answer_citations) * 0.15)
+                            citation_coverage_from_expected = min(0.6, len(normalized_answer_citations) * 0.2)  # 0.5 -> 0.6, 0.15 -> 0.2
                         logger.debug(
-                            f"[CITATION DEBUG] No matches but answer has citations: "
-                            f"{len(normalized_answer_citations)}, law_citations: {len(law_citations)}, coverage: {citation_coverage}"
+                            f"{LOG_TAG_CITATION_DEBUG} No matches but answer has citations: "
+                            f"{len(normalized_answer_citations)}, law_citations: {len(law_citations)}, coverage: {citation_coverage_from_expected:.2f}"
                         )
                     else:
-                        citation_coverage = 0.0
+                        citation_coverage_from_expected = 0.0
+                
+                # 🔥 개선: 문서 인용과 법령/판례 인용을 통합하여 최종 Coverage 계산
+                # 가중 평균 사용: 문서 인용 40%, 법령/판례 인용 60%
+                if citation_coverage_from_docs > 0 or citation_coverage_from_expected > 0:
+                    citation_coverage = (
+                        citation_coverage_from_docs * 0.4 +
+                        citation_coverage_from_expected * 0.6
+                    )
+                else:
+                    citation_coverage = citation_coverage_from_expected
+                
+                logger.debug(
+                    f"{LOG_TAG_CITATION_DEBUG} Combined citation coverage: "
+                    f"docs={citation_coverage_from_docs:.2f} (40%), "
+                    f"expected={citation_coverage_from_expected:.2f} (60%), "
+                    f"final={citation_coverage:.2f}"
+                )
             elif normalized_answer_citations:
                 # expected_citations가 비어있을 때 답변에서 직접 추출한 Citation으로 coverage 계산
                 total_citations_in_answer = len(normalized_answer_citations)
+                citation_coverage_from_citations = 0.0
+                
                 if total_citations_in_answer > 0:
                     # retrieved_docs 개수를 기준으로 coverage 계산 (개선)
                     expected_count = max(2, len(retrieved_docs) if retrieved_docs else 2)
-                    citation_coverage = min(1.0, total_citations_in_answer / expected_count)
+                    citation_coverage_from_citations = min(1.0, total_citations_in_answer / expected_count)
                     logger.debug(
-                        f"[CITATION DEBUG] No expected citations, using answer citations: "
-                        f"{total_citations_in_answer}, expected: {expected_count}, coverage: {citation_coverage}"
+                        f"{LOG_TAG_CITATION_DEBUG} No expected citations, using answer citations: "
+                        f"{total_citations_in_answer}, expected: {expected_count}, coverage: {citation_coverage_from_citations:.2f}"
+                    )
+                
+                # 🔥 개선: 문서 인용과 법령/판례 인용을 통합하여 최종 Coverage 계산
+                if citation_coverage_from_docs > 0 or citation_coverage_from_citations > 0:
+                    citation_coverage = (
+                        citation_coverage_from_docs * 0.4 +
+                        citation_coverage_from_citations * 0.6
                     )
                 else:
-                    citation_coverage = 0.0
+                    citation_coverage = citation_coverage_from_citations
+                
+                logger.debug(
+                    f"{LOG_TAG_CITATION_DEBUG} Combined citation coverage (no expected): "
+                    f"docs={citation_coverage_from_docs:.2f} (40%), "
+                    f"citations={citation_coverage_from_citations:.2f} (60%), "
+                    f"final={citation_coverage:.2f}"
+                )
             elif citations_in_answer > 0 or precedents_in_answer > 0:
                 # 정규화되지 않은 Citation이 있으면 부분 점수 부여
                 total_raw_citations = citations_in_answer + precedents_in_answer
                 expected_count = max(2, len(retrieved_docs) if retrieved_docs else 2)
-                citation_coverage = min(0.5, total_raw_citations / expected_count)
+                citation_coverage_from_raw = min(0.5, total_raw_citations / expected_count)
+                
+                # 🔥 개선: 문서 인용과 정규화되지 않은 Citation을 통합
+                if citation_coverage_from_docs > 0 or citation_coverage_from_raw > 0:
+                    citation_coverage = (
+                        citation_coverage_from_docs * 0.4 +
+                        citation_coverage_from_raw * 0.6
+                    )
+                else:
+                    citation_coverage = citation_coverage_from_raw
+                
                 logger.debug(
-                    f"[CITATION DEBUG] Using raw citations: {total_raw_citations}, "
-                    f"expected: {expected_count}, coverage: {citation_coverage}"
+                    f"{LOG_TAG_CITATION_DEBUG} Using raw citations: {total_raw_citations}, "
+                    f"expected: {expected_count}, docs_coverage: {citation_coverage_from_docs:.2f}, "
+                    f"raw_coverage: {citation_coverage_from_raw:.2f}, final: {citation_coverage:.2f}"
                 )
             else:
-                # expected_citations도 없고 답변에도 Citation이 없으면 0.0
-                citation_coverage = 0.0
+                # expected_citations도 없고 답변에도 Citation이 없으면 문서 인용만 사용
+                citation_coverage = citation_coverage_from_docs if citation_coverage_from_docs > 0 else 0.0
+                
+                if citation_coverage > 0:
+                    logger.debug(
+                        f"{LOG_TAG_CITATION_DEBUG} No citations found, using document citations only: "
+                        f"{citation_coverage:.2f}"
+                    )
 
             # 4. 핵심 개념 포함 여부
             context_key_concepts = []
@@ -897,6 +1909,57 @@ class AnswerValidator:
             # 재생성 필요 여부 초기화 (개선: 변수 초기화 문제 해결)
             needs_regeneration = False
 
+            # 개선: 표 형식 생성 검증 (우선순위 1)
+            has_table_format = False
+            table_patterns = [
+                r'\|.*\|.*\|',  # 마크다운 테이블 형식 (| col1 | col2 |)
+                r'문서별\s*근거\s*비교',  # "문서별 근거 비교" 제목
+                r'문서\s*번호.*출처.*핵심\s*근거',  # 테이블 헤더
+            ]
+            for pattern in table_patterns:
+                if re.search(pattern, answer, re.IGNORECASE):
+                    has_table_format = True
+                    break
+            
+            # 표 형식이 없으면 경고 (프롬프트에서 요구했지만 생성하지 않은 경우)
+            if not has_table_format and retrieved_docs and len(retrieved_docs) >= 3:
+                logger.warning(
+                    f"⚠️ {LOG_TAG_TABLE_VALIDATION} Table format not found in answer. "
+                    f"Expected table format for {len(retrieved_docs)} documents."
+                )
+                # 표 형식이 없으면 coverage_score 약간 감소 (5%)
+                coverage_score = max(0.0, coverage_score - 0.05)
+            
+            # 🔥 개선: 표에서 문서 번호 누락 검증 (사소한 문제 개선)
+            if has_table_format:
+                # 표의 각 행에서 문서 번호가 비어있는지 확인
+                table_rows = re.findall(r'\|[^|]*\|[^|]*\|[^|]*\|', answer)
+                empty_doc_number_count = 0
+                for row in table_rows:
+                    # 첫 번째 열이 비어있거나 [문서 N] 형식이 없는지 확인
+                    # |  | ... | ... | 형식 (첫 번째 열이 비어있음)
+                    # 또는 |[문서 N]| 형식이 없는 경우
+                    first_col = row.split('|')[1].strip() if len(row.split('|')) > 1 else ""
+                    if not first_col or not re.search(r'\[문서\s*\d+\]', first_col):
+                        # 헤더 행이 아닌 경우에만 체크 (문서 번호, 출처 등이 아닌 경우)
+                        if not re.search(r'문서\s*번호|출처|핵심\s*근거', first_col, re.IGNORECASE):
+                            empty_doc_number_count += 1
+                
+                if empty_doc_number_count > 0:
+                    logger.warning(
+                        f"⚠️ {LOG_TAG_TABLE_VALIDATION} Found {empty_doc_number_count} table rows with empty document numbers. "
+                        f"Each row must start with [문서 N] format."
+                    )
+                    # 문서 번호가 비어있으면 coverage_score 감소 (5%) 및 재생성 요구
+                    coverage_score = max(0.0, coverage_score - 0.05)
+                    # 문서 번호가 비어있으면 재생성 필요 (표 형식이 있지만 형식이 잘못됨)
+                    if empty_doc_number_count >= 2:  # 2개 이상 비어있으면 재생성 요구
+                        needs_regeneration = True
+                        logger.warning(
+                            f"⚠️ {LOG_TAG_TABLE_VALIDATION} Too many empty document numbers ({empty_doc_number_count}), "
+                            f"requiring answer regeneration."
+                        )
+
             # 법령 조문 인용 필수 체크 결과 (검색 결과에 법령 조문이 있는데 답변에 없으면 경고)
             law_citation_required = has_law_in_docs and not has_law_citation
             if law_citation_required:
@@ -904,9 +1967,23 @@ class AnswerValidator:
                 coverage_score = max(0.0, coverage_score - 0.2)  # 20% 감소
                 needs_regeneration = True  # 재생성 필요
             
+            # 🔥 개선: 문서 활용도가 낮으면 재생성 필요
+            if retrieved_docs and not has_sufficient_doc_refs:
+                logger.warning(
+                    f"⚠️ [DOCUMENT USAGE] 문서 활용도 부족: {used_doc_count}/{len(retrieved_docs)} "
+                    f"({document_usage_rate:.1%}), 최소 요구: {min_required_citations}개"
+                )
+                # 🔥 CRITICAL: 문서 활용도가 0%이거나 40% 미만이면 무조건 재생성
+                if document_usage_rate == 0.0 or document_usage_rate < 0.4:
+                    needs_regeneration = True
+                    logger.warning(
+                        f"🔄 [REGENERATION TRIGGERED] 문서 활용도 {document_usage_rate:.1%}로 재생성 필요"
+                    )
+            
             uses_context = coverage_score >= 0.3
             needs_regeneration = needs_regeneration or (coverage_score < 0.3) or (normalized_expected_citations and found_citations == 0)
 
+            # TASK 4: 문서 참조 검증 결과 추가
             validation_result = {
                 "uses_context": uses_context,
                 "coverage_score": coverage_score,
@@ -919,14 +1996,23 @@ class AnswerValidator:
                 "citations_in_answer": citations_in_answer,
                 "precedents_in_answer": precedents_in_answer,
                 "document_citations": document_citations,
+                "document_reference_numbers": document_reference_numbers,  # TASK 4: 문서 번호 목록
                 "total_citations_in_answer": total_citations_in_answer,
                 "has_document_references": has_document_references,
+                "has_sufficient_doc_refs": has_sufficient_doc_refs,  # TASK 4: 충분한 문서 참조 여부
                 "document_sources_count": len(document_sources),
                 "needs_regeneration": needs_regeneration,
                 "missing_key_info": missing_citations[:5],
                 "has_law_citation": has_law_citation,
                 "has_law_in_docs": has_law_in_docs,
-                "law_citation_required": law_citation_required
+                "law_citation_required": law_citation_required,
+                "has_table_format": has_table_format,  # 개선: 표 형식 검증 결과 추가
+                # 🔥 개선: 문서 활용도 정보 추가
+                "document_usage_rate": document_usage_rate,
+                "used_doc_count": used_doc_count,
+                "total_doc_count": len(retrieved_docs) if retrieved_docs else 0,
+                "min_required_citations": min_required_citations,
+                "document_usage_sufficient": has_sufficient_doc_refs
             }
 
             return validation_result
@@ -985,7 +2071,7 @@ class AnswerValidator:
         from difflib import SequenceMatcher
         
         # 검증 시작 로그 (강제 출력)
-        logger.info(f"✅ [GROUNDING START] validate_answer_source_verification called")
+        logger.info("✅ [GROUNDING START] validate_answer_source_verification called")
         logger.info(f"   - Answer length: {len(answer)} characters")
         logger.info(f"   - Retrieved docs count: {len(retrieved_docs) if retrieved_docs else 0}")
         logger.info(f"   - Query: {query[:50]}..." if query else "   - Query: None")
@@ -1064,7 +2150,7 @@ class AnswerValidator:
 
         # 2. 답변을 문장 단위로 분리 (구문 단위로도 분할)
         # 개선: 문장 최소 길이 기준 완화 (20자 → 15자) 및 구문 분할 기준 완화 (100자 → 80자)
-        logger.info(f"✅ [GROUNDING STEP 1] Splitting answer into sentences...")
+        logger.info("✅ [GROUNDING STEP 1] Splitting answer into sentences...")
         answer_sentences = re.split(r'[.!?。！？]\s+', answer)
         answer_sentences = [s.strip() for s in answer_sentences if len(s.strip()) > 15]  # 20 → 15로 완화
         
@@ -1098,9 +2184,13 @@ class AnswerValidator:
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
 
-            # 문장의 핵심 키워드 추출 (불용어 제거)
-            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
-            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+            # 문장의 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
+            sentence_words = []
+            for w in re.findall(r'[가-힣]+', sentence_lower):
+                if len(w) > 1:
+                    stopword_processor = _get_stopword_processor()
+                    if not stopword_processor or not stopword_processor.is_stopword(w):
+                        sentence_words.append(w)
 
             if not sentence_words:
                 continue
@@ -1122,9 +2212,14 @@ class AnswerValidator:
                 sentence_key_phrases = [w for w in sentence_words if len(w) > 2][:5]  # 핵심 구문 추출
                 phrase_match_score = sum(1 for phrase in sentence_key_phrases if phrase in source_text) / max(len(sentence_key_phrases), 1) if sentence_key_phrases else 0.0
                 
-                # 의미적 유사도 (공통 단어 비율)
+                # 의미적 유사도 (공통 단어 비율 - KoreanStopwordProcessor 사용)
                 source_words = re.findall(r'[가-힣]+', source_text.lower())
-                source_words_set = set([w for w in source_words if len(w) > 1 and w not in stopwords])
+                source_words_set = set()
+                for w in source_words:
+                    if len(w) > 1:
+                        stopword_processor = _get_stopword_processor()
+                    if not stopword_processor or not stopword_processor.is_stopword(w):
+                            source_words_set.add(w)
                 sentence_words_set = set(sentence_words)
                 semantic_similarity = len(sentence_words_set & source_words_set) / max(len(sentence_words_set), 1) if sentence_words_set else 0.0
 
@@ -1447,3 +2542,102 @@ class SearchValidator:
                 "issues": [f"검증 중 오류 발생: {e}"],
                 "recommendations": []
             }
+
+
+def _semantic_keyword_matching_for_answer(
+    context_words: List[str],
+    answer_text: str,
+    threshold: float = 0.7
+) -> Dict[str, float]:
+    """Ko-Legal-SBERT 기반 의미적 키워드 매칭 (답변 검증용)"""
+    global _keyword_embedding_cache
+    
+    embedding_model = _get_embedding_model()
+    if not embedding_model or not context_words or not answer_text:
+        return {}
+    
+    try:
+        import numpy as np
+        from sklearn.metrics.pairwise import cosine_similarity
+        import re
+        
+        # 답변 텍스트를 소문자로 변환하여 직접 매칭 확인
+        answer_lower = answer_text.lower()
+        
+        # 매칭되지 않은 컨텍스트 키워드만 처리
+        unmatched_context_words = [
+            word for word in context_words 
+            if word.lower() not in answer_lower
+        ]
+        
+        if not unmatched_context_words:
+            return {}
+        
+        # 키워드 임베딩 생성 (캐시 활용)
+        keyword_embeddings = []
+        keyword_list = []
+        for keyword in unmatched_context_words[:50]:  # 최대 50개만 처리 (성능 최적화)
+            keyword_lower = keyword.lower()
+            if keyword_lower in _keyword_embedding_cache:
+                keyword_embeddings.append(_keyword_embedding_cache[keyword_lower])
+                keyword_list.append(keyword_lower)
+            else:
+                try:
+                    emb = embedding_model.encode([keyword], show_progress_bar=False)[0]
+                    _keyword_embedding_cache[keyword_lower] = emb
+                    keyword_embeddings.append(emb)
+                    keyword_list.append(keyword_lower)
+                except Exception as e:
+                    logger.debug(f"⚠️ [SEMANTIC MATCH] Failed to encode keyword '{keyword}': {e}")
+                    continue
+        
+        if not keyword_embeddings:
+            return {}
+        
+        keyword_embeddings = np.array(keyword_embeddings)
+        
+        # 답변 텍스트를 문장 단위로 분리하여 더 정확한 매칭
+        semantic_matches = {}
+        answer_sentences = re.split(r'[.!?。！？\n]+', answer_text)
+        
+        # 각 문장에 대해 임베딩 생성 및 유사도 계산
+        for sentence in answer_sentences[:10]:  # 최대 10개 문장만 처리 (성능 최적화)
+            if len(sentence.strip()) < 10:  # 너무 짧은 문장은 제외
+                continue
+            
+            try:
+                # 문장 임베딩 생성
+                sentence_embedding = embedding_model.encode([sentence[:512]], show_progress_bar=False)[0]
+                
+                # 코사인 유사도 계산
+                similarities = cosine_similarity(
+                    [sentence_embedding],
+                    keyword_embeddings
+                )[0]
+                
+                for idx, similarity in enumerate(similarities):
+                    if similarity >= threshold:
+                        keyword_lower = keyword_list[idx] if idx < len(keyword_list) else unmatched_context_words[idx].lower()
+                        # 최고 유사도만 저장
+                        if keyword_lower not in semantic_matches:
+                            semantic_matches[keyword_lower] = similarity
+                        else:
+                            semantic_matches[keyword_lower] = max(semantic_matches[keyword_lower], similarity)
+            except Exception as e:
+                logger.debug(f"⚠️ [SEMANTIC MATCH] Sentence embedding failed: {e}")
+                continue
+        
+        if semantic_matches:
+            logger.debug(
+                f"✅ [SEMANTIC MATCH] Found {len(semantic_matches)} semantic matches "
+                f"for answer validation (threshold={threshold})"
+            )
+        
+        return semantic_matches
+        
+    except ImportError:
+        logger.debug("⚠️ [SEMANTIC MATCH] sklearn not available, skipping semantic matching")
+        return {}
+    except Exception as e:
+        logger.debug(f"⚠️ [SEMANTIC MATCH] Semantic matching failed: {e}")
+        return {}

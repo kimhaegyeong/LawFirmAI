@@ -21,21 +21,18 @@ describe('getSourcesByType', () => {
     
     const result = getSourcesByType(sourcesDetail);
     
-    expect(result.statute_article).toHaveLength(1);
-    expect(result.case_paragraph).toHaveLength(1);
-    expect(result.decision_paragraph).toHaveLength(1);
-    expect(result.interpretation_paragraph).toHaveLength(1);
-    expect(result.statute_article[0]?.statute_name).toBe('민법');
+    expect(result.statutes_articles).toHaveLength(1);
+    expect(result.precedent_contents).toHaveLength(1);
+    expect(result.statutes_articles[0]?.statute_name).toBe('민법');
   });
   
   it('should return empty arrays for missing types', () => {
     const sourcesDetail: SourceInfo[] = [];
     const result = getSourcesByType(sourcesDetail);
     
-    expect(result.statute_article).toHaveLength(0);
-    expect(result.case_paragraph).toHaveLength(0);
-    expect(result.decision_paragraph).toHaveLength(0);
-    expect(result.interpretation_paragraph).toHaveLength(0);
+    expect(result.statutes_articles).toHaveLength(0);
+    expect(result.precedent_contents).toHaveLength(0);
+    expect(result.precedent_chunks).toHaveLength(0);
   });
   
   it('should handle multiple sources of same type', () => {
@@ -48,10 +45,8 @@ describe('getSourcesByType', () => {
     
     const result = getSourcesByType(sourcesDetail);
     
-    expect(result.statute_article).toHaveLength(2);
-    expect(result.case_paragraph).toHaveLength(2);
-    expect(result.decision_paragraph).toHaveLength(0);
-    expect(result.interpretation_paragraph).toHaveLength(0);
+    expect(result.statutes_articles).toHaveLength(2);
+    expect(result.precedent_contents).toHaveLength(2);
   });
   
   it('should filter out unknown types', () => {
@@ -68,8 +63,8 @@ describe('getSourcesByType', () => {
     
     const result = getSourcesByType(sourcesDetail);
     
-    expect(result.statute_article).toHaveLength(1);
-    expect(result.case_paragraph).toHaveLength(0);
+    expect(result.statutes_articles).toHaveLength(1);
+    expect(result.precedent_contents).toHaveLength(0);
   });
 });
 
@@ -169,18 +164,17 @@ describe('parseSourcesMetadata', () => {
         { name: '2021다123', type: 'case_paragraph', case_number: '2021다123' },
       ],
       sources_by_type: {
-        statute_article: [{ name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' }],
-        case_paragraph: [{ name: '2021다123', type: 'case_paragraph', case_number: '2021다123' }],
-        decision_paragraph: [],
-        interpretation_paragraph: [],
+        statutes_articles: [{ name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' }],
+        precedent_contents: [{ name: '2021다123', type: 'case_paragraph', case_number: '2021다123' }],
+        precedent_chunks: [],
       },
     };
     
     const result = parseSourcesMetadata(metadata);
     
     expect(result.sourcesByType).toBeDefined();
-    expect(result.sourcesByType.statute_article).toHaveLength(1);
-    expect(result.sourcesByType.case_paragraph).toHaveLength(1);
+    expect(result.sourcesByType.statutes_articles).toHaveLength(1);
+    expect(result.sourcesByType.precedent_contents).toHaveLength(1);
     expect(result.legalReferences).toContain('민법 123');  // 하위 호환성
   });
   
@@ -195,8 +189,8 @@ describe('parseSourcesMetadata', () => {
     const result = parseSourcesMetadata(metadata);
     
     expect(result.sourcesByType).toBeDefined();
-    expect(result.sourcesByType.statute_article).toHaveLength(1);
-    expect(result.sourcesByType.case_paragraph).toHaveLength(1);
+    expect(result.sourcesByType.statutes_articles).toHaveLength(1);
+    expect(result.sourcesByType.precedent_contents).toHaveLength(1);
   });
   
   it('should extract legal_references from sources_detail', () => {
@@ -235,8 +229,8 @@ describe('parseSourcesMetadata', () => {
     expect(result.sources).toHaveLength(0);
     expect(result.legalReferences).toHaveLength(0);
     expect(result.sourcesDetail).toHaveLength(0);
-    expect(result.sourcesByType.statute_article).toHaveLength(0);
-    expect(result.sourcesByType.case_paragraph).toHaveLength(0);
+    expect(result.sourcesByType.statutes_articles).toHaveLength(0);
+    expect(result.sourcesByType.precedent_contents).toHaveLength(0);
     expect(result.relatedQuestions).toHaveLength(0);
   });
   
@@ -257,7 +251,7 @@ describe('parseSourcesMetadata', () => {
     expect(result.sourcesByType).toBeDefined();
     // 현재 구현: sources_by_type이 있으면 그것을 사용하므로 statute_article이 없을 수 있음
     // 실제로는 sources_detail에서 생성해야 하지만, 현재는 sources_by_type을 우선 사용
-    expect(result.sourcesByType.statute_article).toBeDefined();
+    expect(result.sourcesByType.statutes_articles).toBeDefined();
     // sources_detail은 정상적으로 파싱되어야 함
     expect(result.sourcesDetail).toHaveLength(1);
     expect(result.sourcesDetail[0]?.statute_name).toBe('민법');

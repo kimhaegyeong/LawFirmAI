@@ -9,9 +9,22 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_constants import WorkflowConstants
-from core.agents.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.tasks.search_execution_tasks import SearchExecutionTasks
+except ImportError:
+    from core.agents.tasks.search_execution_tasks import SearchExecutionTasks
 
 
 class SearchHandler:
@@ -510,12 +523,24 @@ class SearchHandler:
             # Step 4: 다양성 필터 적용
             filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)
 
-            # Step 5: MergedResult를 Dict 형태로 변환
+            # Step 5: MergedResult를 Dict 형태로 변환 및 관련도 필터링
+            min_relevance_score = 0.80
             documents = []
             for result in filtered:
+                relevance_score = result.score if hasattr(result, 'score') else 0.0
+                
+                # 관련도 0.80 이상인 문서만 포함
+                if relevance_score < min_relevance_score:
+                    self.logger.debug(
+                        f"[SEARCH HANDLER] Document filtered out due to low relevance: "
+                        f"score={relevance_score:.3f} < {min_relevance_score}, "
+                        f"source={result.source if hasattr(result, 'source') else 'unknown'}"
+                    )
+                    continue
+                
                 doc = {
                     "content": result.text,
-                    "relevance_score": result.score,
+                    "relevance_score": relevance_score,
                     "source": result.source,
                     "id": f"{result.source}_{hash(result.text)}",
                     "type": "merged"
@@ -526,6 +551,18 @@ class SearchHandler:
 
                 documents.append(doc)
 
+            if len(documents) < len(filtered):
+                self.logger.info(
+                    f"🔍 [SEARCH HANDLER] Relevance filtering (>= {min_relevance_score}): "
+                    f"{len(filtered)} → {len(documents)} documents"
+                )
+            
+            if not documents and filtered:
+                self.logger.warning(
+                    f"⚠️ [SEARCH HANDLER] All {len(filtered)} documents were filtered out "
+                    f"(relevance < {min_relevance_score}). Consider lowering the threshold."
+                )
+
             self.logger.info(
                 f"Rerank applied: {len(semantic_results)} semantic + {len(keyword_results)} keyword → {len(documents)} final"
             )
@@ -533,11 +570,17 @@ class SearchHandler:
 
         except Exception as e:
             self.logger.warning(f"Rerank failed, using simple merge: {e}")
-            # 폴백: 간단한 병합 및 정렬
+            # 폴백: 간단한 병합 및 정렬 (관련도 필터링 포함)
+            min_relevance_score = 0.80
             seen_ids = set()
             documents = []
 
             for doc in semantic_results:
+                # 관련도 필터링
+                relevance_score = doc.get('relevance_score', doc.get('similarity', 0.0))
+                if relevance_score < min_relevance_score:
+                    continue
+                
                 doc_id = doc.get('id')
                 if doc_id is not None:
                     try:
@@ -551,6 +594,11 @@ class SearchHandler:
                             seen_ids.add(doc_id_str)
 
             for doc in keyword_results:
+                # 관련도 필터링
+                relevance_score = doc.get('relevance_score', doc.get('similarity', 0.0))
+                if relevance_score < min_relevance_score:
+                    continue
+                
                 doc_id = doc.get('id')
                 if doc_id is not None:
                     try:
@@ -626,6 +674,221 @@ class SearchHandler:
             "하이브리드 검색 완료",
             f"하이브리드 검색 완료: 의미적 {semantic_count}개, 키워드 {keyword_count}개, 최종 {retrieved_docs_count}개"
         )
+
+    def execute_searches_parallel(
+        self,
+        state: LegalWorkflowState,
+        execute_semantic_search_func: Optional[callable] = None,
+        execute_keyword_search_func: Optional[callable] = None,
+        get_query_type_str_func: Optional[callable] = None,
+        get_state_value_func: Optional[callable] = None,
+        set_state_value_func: Optional[callable] = None,
+        update_processing_time_func: Optional[callable] = None,
+        save_metadata_safely_func: Optional[callable] = None,
+        handle_error_func: Optional[callable] = None,
+        fallback_sequential_search_func: Optional[callable] = None,
+        enhanced_cache: Optional[Any] = None
+    ) -> LegalWorkflowState:
+        """
+        의미적 검색과 키워드 검색을 병렬로 실행
+        
+        Args:
+            state: 워크플로우 상태
+            execute_semantic_search_func: 의미 검색 실행 함수
+            execute_keyword_search_func: 키워드 검색 실행 함수
+            get_query_type_str_func: 질의 유형 문자열 변환 함수
+            get_state_value_func: State 값 가져오기 함수
+            set_state_value_func: State 값 설정 함수
+            update_processing_time_func: 처리 시간 업데이트 함수
+            save_metadata_safely_func: 메타데이터 안전 저장 함수
+            handle_error_func: 에러 처리 함수
+            fallback_sequential_search_func: 폴백 순차 검색 함수
+        
+        Returns:
+            업데이트된 워크플로우 상태
+        """
+        try:
+            start_time = time.time()
+
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["optimized_queries", "search_params", "query_type", "legal_field", "query", "extracted_keywords"],
+                defaults={
+                    "optimized_queries": {},
+                    "search_params": {},
+                    "query_type": "",
+                    "legal_field": "",
+                    "query": "",
+                    "extracted_keywords": []
+                }
+            )
+            
+            optimized_queries = state_values["optimized_queries"]
+            search_params = state_values["search_params"]
+            query_type_str = (get_query_type_str_func(state_values["query_type"]) 
+                            if get_query_type_str_func else str(state_values["query_type"]))
+            legal_field = state_values["legal_field"]
+            original_query = state_values["query"]
+            extracted_keywords = state_values.get("extracted_keywords", [])
+
+            # extracted_keywords가 optimized_queries에서 추출되지 않은 경우 state에서 직접 가져오기
+            if not extracted_keywords and optimized_queries:
+                extracted_keywords = optimized_queries.get("expanded_keywords", [])
+
+            # Phase 6: 향상된 캐싱 전략 - 검색 결과 캐시 확인
+            if enhanced_cache and original_query:
+                cached_results = enhanced_cache.get_search_results(
+                    query=original_query,
+                    query_type=query_type_str,
+                    search_params=search_params
+                )
+                if cached_results:
+                    self.logger.info(f"Using cached search results for: {original_query[:50]}...")
+                    if set_state_value_func:
+                        set_state_value_func(state, "semantic_results", cached_results.get("semantic_results", []))
+                        set_state_value_func(state, "keyword_results", cached_results.get("keyword_results", []))
+                        set_state_value_func(state, "semantic_count", cached_results.get("semantic_count", 0))
+                        set_state_value_func(state, "keyword_count", cached_results.get("keyword_count", 0))
+                    else:
+                        WorkflowUtils.set_state_value(state, "semantic_results", cached_results.get("semantic_results", []))
+                        WorkflowUtils.set_state_value(state, "keyword_results", cached_results.get("keyword_results", []))
+                        WorkflowUtils.set_state_value(state, "semantic_count", cached_results.get("semantic_count", 0))
+                        WorkflowUtils.set_state_value(state, "keyword_count", cached_results.get("keyword_count", 0))
+                    
+                    if "search" not in state:
+                        state["search"] = {}
+                    state["search"]["semantic_results"] = cached_results.get("semantic_results", [])
+                    state["search"]["keyword_results"] = cached_results.get("keyword_results", [])
+                    state["search"]["semantic_count"] = cached_results.get("semantic_count", 0)
+                    state["search"]["keyword_count"] = cached_results.get("keyword_count", 0)
+                    
+                    if update_processing_time_func:
+                        update_processing_time_func(state, start_time)
+                    else:
+                        WorkflowUtils.update_processing_time(state, start_time)
+                    
+                    return state
+
+            # 검증: optimized_queries와 search_params 확인
+            semantic_query_value = optimized_queries.get("semantic_query", "") if optimized_queries else ""
+            if not semantic_query_value or not str(semantic_query_value).strip():
+                if original_query:
+                    self.logger.warning(f"semantic_query is empty, using base query: '{original_query[:50]}...'")
+                    if not optimized_queries:
+                        optimized_queries = {}
+                    optimized_queries["semantic_query"] = original_query
+                    semantic_query_value = original_query
+
+            keyword_queries_value = optimized_queries.get("keyword_queries", []) if optimized_queries else []
+            if not keyword_queries_value or len(keyword_queries_value) == 0:
+                if original_query:
+                    self.logger.warning(f"keyword_queries is empty, using base query")
+                    if not optimized_queries:
+                        optimized_queries = {}
+                    optimized_queries["keyword_queries"] = [original_query]
+                    keyword_queries_value = [original_query]
+
+            has_semantic_query = optimized_queries and semantic_query_value and len(str(semantic_query_value).strip()) > 0
+            has_keyword_queries = optimized_queries and keyword_queries_value and len(keyword_queries_value) > 0
+
+            if not has_semantic_query:
+                self.logger.warning("Optimized queries not found or invalid")
+                if set_state_value_func:
+                    set_state_value_func(state, "semantic_results", [])
+                    set_state_value_func(state, "keyword_results", [])
+                    set_state_value_func(state, "semantic_count", 0)
+                    set_state_value_func(state, "keyword_count", 0)
+                else:
+                    WorkflowUtils.set_state_value(state, "semantic_results", [])
+                    WorkflowUtils.set_state_value(state, "keyword_results", [])
+                    WorkflowUtils.set_state_value(state, "semantic_count", 0)
+                    WorkflowUtils.set_state_value(state, "keyword_count", 0)
+                return state
+
+            # 병렬 검색 실행 (동기 버전 사용 - ThreadPoolExecutor)
+            semantic_results, semantic_count, keyword_results, keyword_count = (
+                SearchExecutionTasks.execute_searches_sync(
+                    optimized_queries=optimized_queries,
+                    search_params=search_params,
+                    query_type_str=query_type_str,
+                    legal_field=legal_field,
+                    extracted_keywords=extracted_keywords,
+                    original_query=original_query,
+                    execute_semantic_search_func=execute_semantic_search_func,
+                    execute_keyword_search_func=execute_keyword_search_func,
+                    timeout=30.0
+                )
+            )
+
+            # 결과 저장
+            if set_state_value_func:
+                set_state_value_func(state, "semantic_results", semantic_results)
+                set_state_value_func(state, "keyword_results", keyword_results)
+                set_state_value_func(state, "semantic_count", semantic_count)
+                set_state_value_func(state, "keyword_count", keyword_count)
+            else:
+                WorkflowUtils.set_state_value(state, "semantic_results", semantic_results)
+                WorkflowUtils.set_state_value(state, "keyword_results", keyword_results)
+                WorkflowUtils.set_state_value(state, "semantic_count", semantic_count)
+                WorkflowUtils.set_state_value(state, "keyword_count", keyword_count)
+
+            # search 그룹에도 저장
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["semantic_results"] = semantic_results
+            state["search"]["keyword_results"] = keyword_results
+            state["search"]["semantic_count"] = semantic_count
+            state["search"]["keyword_count"] = keyword_count
+
+            # Phase 6: 향상된 캐싱 전략 - 검색 결과 캐싱
+            if enhanced_cache and original_query:
+                search_results = {
+                    "semantic_results": semantic_results,
+                    "keyword_results": keyword_results,
+                    "semantic_count": semantic_count,
+                    "keyword_count": keyword_count
+                }
+                enhanced_cache.put_search_results(
+                    query=original_query,
+                    query_type=query_type_str,
+                    search_params=search_params,
+                    results=search_results
+                )
+
+            if save_metadata_safely_func:
+                save_metadata_safely_func(state, "_last_executed_node", "execute_searches_parallel")
+            else:
+                WorkflowUtils.save_metadata_safely(state, "_last_executed_node", "execute_searches_parallel")
+
+            if update_processing_time_func:
+                update_processing_time_func(state, start_time)
+            else:
+                WorkflowUtils.update_processing_time(state, start_time)
+
+            elapsed_time = time.time() - start_time
+            self.logger.info(
+                f"✅ [PARALLEL SEARCH] Completed in {elapsed_time:.3f}s - "
+                f"Semantic: {semantic_count} results, Keyword: {keyword_count} results"
+            )
+
+        except Exception as e:
+            if handle_error_func:
+                handle_error_func(state, str(e), "병렬 검색 중 오류 발생")
+            else:
+                WorkflowUtils.handle_error(state, str(e), "병렬 검색 중 오류 발생", self.logger)
+            
+            # 폴백: 순차 실행
+            if fallback_sequential_search_func:
+                return fallback_sequential_search_func(state)
+            else:
+                # 기본 폴백: 빈 결과 반환
+                WorkflowUtils.set_state_value(state, "semantic_results", [])
+                WorkflowUtils.set_state_value(state, "keyword_results", [])
+                WorkflowUtils.set_state_value(state, "semantic_count", 0)
+                WorkflowUtils.set_state_value(state, "keyword_count", 0)
+
+        return state
 
     def fallback_search(self, state: LegalWorkflowState) -> None:
         """폴백 검색"""

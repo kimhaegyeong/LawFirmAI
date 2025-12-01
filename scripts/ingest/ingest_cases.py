@@ -17,11 +17,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from scripts.utils.embeddings import SentenceEmbedder
 from scripts.utils.text_chunker import chunk_paragraphs
+from scripts.utils.chunking.factory import ChunkingFactory
+from scripts.utils.embedding_version_manager import EmbeddingVersionManager
 from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
 def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
-    """?�메???�인 �??�성"""
+    """?ë©???ì¸ ë°??ì±"""
     cur = conn.execute("SELECT id FROM domains WHERE name=?", (name,))
     row = cur.fetchone()
     if row:
@@ -32,13 +34,13 @@ def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
 
 def calculate_file_hash(file_path: str) -> str:
     """
-    ?�일 ?�시 계산 (SHA256)
+    ?ì¼ ?´ì ê³ì° (SHA256)
 
     Args:
-        file_path: ?�일 경로
+        file_path: ?ì¼ ê²½ë¡
 
     Returns:
-        str: ?�일??SHA256 ?�시�?(hex)
+        str: ?ì¼??SHA256 ?´ìê°?(hex)
     """
     sha256_hash = hashlib.sha256()
     try:
@@ -52,15 +54,15 @@ def calculate_file_hash(file_path: str) -> str:
 
 def check_file_processed(conn: sqlite3.Connection, file_path: str, file_hash: str) -> bool:
     """
-    sources ?�이블엝???�일???��? 처리?�었?��? ?�인
+    sources ?ì´ë¸ì???ì¼???´ë? ì²ë¦¬?ì?ì? ?ì¸
 
     Args:
-        conn: ?�이?�베?�스 ?�결
-        file_path: ?�일 경로
-        file_hash: ?�일 ?�시
+        conn: ?°ì´?°ë² ?´ì¤ ?°ê²°
+        file_path: ?ì¼ ê²½ë¡
+        file_hash: ?ì¼ ?´ì
 
     Returns:
-        bool: ?��? 처리??경우 True
+        bool: ?´ë? ì²ë¦¬??ê²½ì° True
     """
     cur = conn.execute(
         "SELECT id FROM sources WHERE source_type='case' AND path=? AND hash=?",
@@ -114,22 +116,22 @@ def is_case_complete(
     expected_para_count: int
 ) -> bool:
     """
-    Case가 ?�전???�재?�었?��? ?�인
+    Caseê° ?ì ???ì¬?ì?ì? ?ì¸
 
-    ?�전??검�???��:
-    1. paragraphs 개수가 ?�생 개수?� ?�치
-    2. chunks가 존재
-    3. embeddings가 chunks만흼 존재
+    ?ì ??ê²ì¦???ª©:
+    1. paragraphs ê°ìê° ?ì ê°ì? ?¼ì¹
+    2. chunksê° ì¡´ì¬
+    3. embeddingsê° chunksë§í¼ ì¡´ì¬
 
     Args:
-        conn: ?�이?�베?�스 ?�결
+        conn: ?°ì´?°ë² ?´ì¤ ?°ê²°
         case_id: Case ID
-        expected_para_count: ?�생 paragraph 개수
+        expected_para_count: ?ì paragraph ê°ì
 
     Returns:
-        bool: ?�전???�재??경우 True
+        bool: ?ì ???ì¬??ê²½ì° True
     """
-    # 1. Paragraphs 개수 ?�인
+    # 1. Paragraphs ê°ì ?ì¸
     para_count = conn.execute(
         "SELECT COUNT(*) FROM case_paragraphs WHERE case_id=?",
         (case_id,)
@@ -138,7 +140,7 @@ def is_case_complete(
     if para_count != expected_para_count:
         return False
 
-    # 2. Chunks ?�인 (최소 1�??�생 ?�어????
+    # 2. Chunks ?ì¸ (ìµì 1ê°??´ì ?ì´????
     chunk_count = conn.execute(
         "SELECT COUNT(*) FROM text_chunks WHERE source_type='case_paragraph' AND source_id=?",
         (case_id,)
@@ -147,7 +149,7 @@ def is_case_complete(
     if chunk_count == 0:
         return False
 
-    # 3. Embeddings ?�인 (모든 chunk??embedding???�어????
+    # 3. Embeddings ?ì¸ (ëª¨ë  chunk??embedding???ì´????
     embedding_count = conn.execute(
         """SELECT COUNT(*) FROM embeddings e
            JOIN text_chunks tc ON e.chunk_id = tc.id
@@ -160,15 +162,15 @@ def is_case_complete(
 
 def cleanup_incomplete_case(conn: sqlite3.Connection, case_id: int):
     """
-    부�??�재??case ?�이???�리
+    ë¶ë¶??ì¬??case ?°ì´???ë¦¬
 
-    CASCADE�??�띙 ??��?��?�? 명시?�으�??�리?�여 부�???�� ?�태�?방�?
+    CASCADEë¡??ë ?? ?ì?ë§? ëªì?ì¼ë¡??ë¦¬?ì¬ ë¶ë¶???  ?íë¥?ë°©ì?
 
     Args:
-        conn: ?�이?�베?�스 ?�결
-        case_id: ??��??Case ID
+        conn: ?°ì´?°ë² ?´ì¤ ?°ê²°
+        case_id: ?? ??Case ID
     """
-    # 1. Embeddings ??�� (chunks??FK 참조)
+    # 1. Embeddings ??  (chunks??FK ì°¸ì¡°)
     conn.execute(
         """DELETE FROM embeddings
            WHERE chunk_id IN (
@@ -178,32 +180,32 @@ def cleanup_incomplete_case(conn: sqlite3.Connection, case_id: int):
         (case_id,)
     )
 
-    # 2. Text chunks ??��
+    # 2. Text chunks ?? 
     conn.execute(
         "DELETE FROM text_chunks WHERE source_type='case_paragraph' AND source_id=?",
         (case_id,)
     )
 
-    # 3. Case paragraphs ??�� (CASCADE�??�띙 ??��?��?�?명시??
+    # 3. Case paragraphs ??  (CASCADEë¡??ë ?? ?ì?ë§?ëªì??
     conn.execute("DELETE FROM case_paragraphs WHERE case_id=?", (case_id,))
 
-    # 4. Case ??��
+    # 4. Case ?? 
     conn.execute("DELETE FROM cases WHERE id=?", (case_id,))
 
 
 def insert_paragraphs(conn: sqlite3.Connection, case_id: int, paragraphs: List[str]) -> List[int]:
-    """Paragraphs 배치 ?�입 (?�능 최젝??"""
+    """Paragraphs ë°°ì¹ ?½ì (?±ë¥ ìµì ??"""
     if not paragraphs:
         return []
 
-    # 배치 INSERT�?최젝??
+    # ë°°ì¹ INSERTë¡?ìµì ??
     data = [(case_id, i, p) for i, p in enumerate(paragraphs)]
     conn.executemany(
         "INSERT OR REPLACE INTO case_paragraphs(case_id, para_index, text) VALUES(?,?,?)",
         data
     )
 
-    # ?�입??ID 조회 (배치 조회�?최젝??
+    # ?½ì??ID ì¡°í (ë°°ì¹ ì¡°íë¡?ìµì ??
     placeholders = ",".join(["?"] * len(paragraphs))
     indices = list(range(len(paragraphs)))
     rows = conn.execute(
@@ -211,7 +213,7 @@ def insert_paragraphs(conn: sqlite3.Connection, case_id: int, paragraphs: List[s
         (case_id, *indices)
     ).fetchall()
 
-    # para_index ?�서?��??�렬?�여 반환
+    # para_index ?ì?ë¡??ë ¬?ì¬ ë°í
     id_map = {para_index: id_val for id_val, para_index in rows}
     return [id_map[i] for i in range(len(paragraphs))]
 
@@ -222,79 +224,87 @@ def insert_chunks_and_embeddings(
     paragraphs: List[str],
     embedder: SentenceEmbedder,
     batch: int = 128,
+    chunking_strategy: str = "standard",
+    query_type: Optional[str] = None,
+    replace_existing: bool = True,
 ):
     """
-    Chunks �?Embeddings 배치 ?�입 (?�능 최젝??
+    Chunks ë°?Embeddings ë°°ì¹ ?½ì (?±ë¥ ìµì ??
 
     Args:
-        conn: ?�이?�베?�스 ?�결
+        conn: ?°ì´?°ë² ?´ì¤ ?°ê²°
         case_id: Case ID
-        paragraphs: Paragraph 리스??
+        paragraphs: Paragraph ë¦¬ì¤??
         embedder: Sentence embedder
-        batch: Embedding 배치 ?�기 (기본�? 128)
+        batch: Embedding ë°°ì¹ ?¬ê¸° (ê¸°ë³¸ê°? 128)
     """
-    chunks = chunk_paragraphs(paragraphs)
-    if not chunks:
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # ?????? ?? ????
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    version_manager = EmbeddingVersionManager(db_path)
+    
+    # ?? ?? ?? ?? ??
+    active_version = version_manager.get_active_version(chunking_strategy)
+    if not active_version:
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+        version_name = f"v1.0.0-{chunking_strategy}"
+        version_id = version_manager.register_version(
+            version_name=version_name,
+            chunking_strategy=chunking_strategy,
+            model_name=model_name,
+            description=f"{chunking_strategy} ?? ??",
+            set_active=True
+        )
+    else:
+        version_id = active_version['id']
+    
+    # ?? ?? ?? (?? ?? ??)
+    if replace_existing:
+        deleted_chunks, deleted_embeddings = version_manager.delete_chunks_by_version(
+            source_type="case_paragraph",
+            source_id=case_id
+        )
+        if deleted_chunks > 0:
+            logger.info(f"Deleted {deleted_chunks} existing chunks for case_id={case_id}")
+    
+    # ?? ?? ??
+    strategy = ChunkingFactory.create_strategy(
+        strategy_name=chunking_strategy,
+        query_type=query_type
+    )
+    
+    chunk_results = strategy.chunk(
+        content=paragraphs,
+        source_type="case_paragraph",
+        source_id=case_id
+    )
+    
+    if not chunk_results:
         return
+    
+    # 참고: text_chunks 테이블은 PostgreSQL 환경에서 사용되지 않으므로 제거됨
+    # 이 함수는 더 이상 text_chunks에 데이터를 삽입하지 않습니다.
+    logger.warning("text_chunks 테이블이 제거되어 ingest_cases의 insert_chunks_and_embeddings 함수가 비활성화되었습니다.")
+    return
 
-    # 기존 chunks가 ?�는 경우 chunk_index 충띌 방�?
-    max_idx = conn.execute(
-        "SELECT COALESCE(MAX(chunk_index), -1) FROM text_chunks WHERE source_type='case_paragraph' AND source_id=?",
-        (case_id,)
-    ).fetchone()[0]
-    next_chunk_index = int(max_idx) + 1
+    # Embeddings 생성 (배치 처리)
+    if texts_to_embed:
+        vecs = embedder.encode(texts_to_embed, batch_size=batch)
+        dim = vecs.shape[1] if len(vecs.shape) > 1 else vecs.shape[0]
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
 
-    # Chunks 배치 ?�입
-    chunk_data = []
-    for i, ch in enumerate(chunks):
-        chunk_idx = next_chunk_index + i
-        chunk_data.append((
-            "case_paragraph",
-            case_id,
-            "paragraph",
-            chunk_idx,
-            None,
-            None,
-            None,
-            ch.get("text"),
-            None,
-        ))
+        # Embeddings 배치 입력
+        embedding_data = [
+            (chunk_id, model_name, dim, vec.tobytes(), version_id)
+            for chunk_id, vec in zip(chunk_ids, vecs)
+        ]
 
-    # 배치 INSERT
-    conn.executemany(
-        """INSERT INTO text_chunks(source_type, source_id, level, chunk_index, start_char, end_char, overlap_chars, text, token_count, meta)
-           VALUES(?,?,?,?,?,?,?,?,?,NULL)""",
-        chunk_data
-    )
-
-    # ?�입??chunk IDs 조회 (배치 조회)
-    chunk_indices = list(range(next_chunk_index, next_chunk_index + len(chunks)))
-    placeholders = ",".join(["?"] * len(chunk_indices))
-    chunk_rows = conn.execute(
-        f"SELECT id, chunk_index FROM text_chunks WHERE source_type='case_paragraph' AND source_id=? AND chunk_index IN ({placeholders})",
-        (case_id, *chunk_indices)
-    ).fetchall()
-
-    # chunk_index ?�서?��??�렬
-    chunk_id_map = {idx: id_val for id_val, idx in chunk_rows}
-    chunk_ids = [chunk_id_map[idx] for idx in chunk_indices]
-    texts = [ch.get("text", "") for ch in chunks]
-
-    # Embeddings ?�성 (배치 처리)
-    vecs = embedder.encode(texts, batch_size=batch)
-    dim = vecs.shape[1] if len(vecs.shape) > 1 else vecs.shape[0]
-    model_name = embedder.model.name_or_path
-
-    # Embeddings 배치 ?�입
-    embedding_data = [
-        (chunk_id, model_name, dim, vec.tobytes())
-        for chunk_id, vec in zip(chunk_ids, vecs)
-    ]
-
-    conn.executemany(
-        "INSERT INTO embeddings(chunk_id, model, dim, vector) VALUES(?,?,?,?)",
-        embedding_data
-    )
+        conn.executemany(
+            "INSERT INTO embeddings(chunk_id, model, dim, vector, version_id) VALUES(?,?,?,?,?)",
+            embedding_data
+        )
 
 
 def ingest_case_with_duplicate_protection(
@@ -308,20 +318,20 @@ def ingest_case_with_duplicate_protection(
     skip_hash: bool = False,
 ) -> Tuple[bool, str]:
     """
-    중복 방�? 로짝???�함??case ?�재 (?�능 최젝??
+    ì¤ë³µ ë°©ì? ë¡ì§???¬í¨??case ?ì¬ (?±ë¥ ìµì ??
 
     Args:
-        conn: ?�이?�베?�스 ?�결
-        file_path: JSON ?�일 경로
-        domain_name: ?�메???�름
-        meta: Case 메�??�이??
+        conn: ?°ì´?°ë² ?´ì¤ ?°ê²°
+        file_path: JSON ?ì¼ ê²½ë¡
+        domain_name: ?ë©???´ë¦
+        meta: Case ë©í??°ì´??
         embedder: Sentence embedder
-        force: 강제 ?�젝???��?
-        batch_size: Embedding 배치 ?�기
-        skip_hash: ?�시 계산 ?�킵 (doc_id 체희�??�행)
+        force: ê°ì  ?¬ì ???¬ë?
+        batch_size: Embedding ë°°ì¹ ?¬ê¸°
+        skip_hash: ?´ì ê³ì° ?¤íµ (doc_id ì²´í¬ë§??í)
 
     Returns:
-        Tuple[bool, str]: (?�공 ?��?, 메시지)
+        Tuple[bool, str]: (?±ê³µ ?¬ë?, ë©ìì§)
     """
     doc_id = meta.get("doc_id")
     if not doc_id:
@@ -330,9 +340,9 @@ def ingest_case_with_duplicate_protection(
     expected_para_count = len(meta.get("sentences", []))
     file_hash = None
 
-    # 강제 ?�젝??모드가 ?�닌 경우 중복 ?�인
+    # ê°ì  ?¬ì ??ëª¨ëê° ?ë ê²½ì° ì¤ë³µ ?ì¸
     if not force:
-        # Layer 1: doc_id 기반 중복 ?�인 (??빠름 - ?�띱???�용)
+        # Layer 1: doc_id ê¸°ë° ì¤ë³µ ?ì¸ (??ë¹ ë¦ - ?¸ë±???¬ì©)
         existing_case = conn.execute(
             "SELECT id FROM cases WHERE doc_id=?", (doc_id,)
         ).fetchone()
@@ -340,7 +350,7 @@ def ingest_case_with_duplicate_protection(
         if existing_case:
             case_id = existing_case[0]
             if is_case_complete(conn, case_id, expected_para_count):
-                # ?�전???�재??경우 - ?�시 계산???�요??경우?�만 ?�행
+                # ?ì ???ì¬??ê²½ì° - ?´ì ê³ì°???ì??ê²½ì°?ë§ ?í
                 if not skip_hash:
                     try:
                         file_hash = calculate_file_hash(file_path)
@@ -349,56 +359,56 @@ def ingest_case_with_duplicate_protection(
                             ("case", file_path, file_hash)
                         )
                     except Exception:
-                        pass  # ?�시 계산 ?�패?�띄 ?�킵?� 계솝
+                        pass  # ?´ì ê³ì° ?¤í¨?´ë ?¤íµ? ê³ì
                 return False, f"Case already fully ingested: {doc_id}"
             else:
-                # 부�??�재??경우 - ?�리 ???�젝??
+                # ë¶ë¶??ì¬??ê²½ì° - ?ë¦¬ ???¬ì ??
                 cleanup_incomplete_case(conn, case_id)
         else:
-            # doc_id가 ?�으�??�일 ?�시 기반 ?�인 (???�리지�??�확)
+            # doc_idê° ?ì¼ë©??ì¼ ?´ì ê¸°ë° ?ì¸ (???ë¦¬ì§ë§??í)
             if not skip_hash:
                 try:
                     file_hash = calculate_file_hash(file_path)
                     if check_file_processed(conn, file_path, file_hash):
                         return False, f"File already processed: {file_path}"
                 except Exception as e:
-                    # ?�시 계산 ?�패 ??계솝 진행
+                    # ?´ì ê³ì° ?¤í¨ ??ê³ì ì§í
                     pass
     else:
-        # 강제 ?�젝??모드 - 기존 ?�이???�리
+        # ê°ì  ?¬ì ??ëª¨ë - ê¸°ì¡´ ?°ì´???ë¦¬
         existing_case = conn.execute(
             "SELECT id FROM cases WHERE doc_id=?", (doc_id,)
         ).fetchone()
         if existing_case:
             cleanup_incomplete_case(conn, existing_case[0])
-            # sources?�서???�거
+            # sources?ì???ê±°
             conn.execute(
                 "DELETE FROM sources WHERE source_type='case' AND path=?",
                 (file_path,)
             )
 
-    # ?�랜??�� ?�작 (?�잝??보장)
+    # ?¸ë?? ?ì (?ì??ë³´ì¥)
     try:
-        # Domain ?�인
+        # Domain ?ì¸
         domain_id = ensure_domain(conn, domain_name)
 
-        # Case ?�입
+        # Case ?½ì
         case_id = insert_case(conn, domain_id, meta)
 
-        # Paragraphs ?�입
+        # Paragraphs ?½ì
         insert_paragraphs(conn, case_id, meta.get("sentences", []))
 
-        # Chunks �?Embeddings ?�입
+        # Chunks ë°?Embeddings ?½ì
         insert_chunks_and_embeddings(
             conn, case_id, meta.get("sentences", []), embedder, batch=batch_size
         )
 
-        # Sources ?�이블엝 기록 (?�공 ?�엝�? ?�시가 ?�는 경우?�만 계산)
+        # Sources ?ì´ë¸ì ê¸°ë¡ (?±ê³µ ?ìë§? ?´ìê° ?ë ê²½ì°?ë§ ê³ì°)
         if file_hash is None:
             try:
                 file_hash = calculate_file_hash(file_path)
             except Exception:
-                file_hash = ""  # ?�시 계산 ?�패?�띄 계솝 진행
+                file_hash = ""  # ?´ì ê³ì° ?¤í¨?´ë ê³ì ì§í
 
         if file_hash:
             conn.execute(
@@ -406,7 +416,7 @@ def ingest_case_with_duplicate_protection(
                 ("case", file_path, file_hash)
             )
 
-        # 커밋?� ?�출?��? 배치�?처리?????�띄�?주석 처리
+        # ì»¤ë°? ?¸ì¶?ê? ë°°ì¹ë¡?ì²ë¦¬?????ëë¡?ì£¼ì ì²ë¦¬
         # conn.commit()
         return True, f"Successfully ingested case: {doc_id}"
 
@@ -417,14 +427,14 @@ def ingest_case_with_duplicate_protection(
 
 def find_json_files(folder_path: str, recursive: bool = True) -> List[str]:
     """
-    ?�띔?�서 JSON ?�일 찾기
+    ?´ë?ì JSON ?ì¼ ì°¾ê¸°
 
     Args:
-        folder_path: ?�띔 경로
-        recursive: ?��??�으�?검?�할지 ?��?
+        folder_path: ?´ë ê²½ë¡
+        recursive: ?¬ê??ì¼ë¡?ê²?í ì§ ?¬ë?
 
     Returns:
-        List[str]: 찾�? JSON ?�일 경로 리스??
+        List[str]: ì°¾ì? JSON ?ì¼ ê²½ë¡ ë¦¬ì¤??
     """
     folder = Path(folder_path)
     if not folder.exists() or not folder.is_dir():
@@ -436,7 +446,7 @@ def find_json_files(folder_path: str, recursive: bool = True) -> List[str]:
     else:
         json_files = list(folder.glob("*.json"))
 
-    # complete ?�띔???�일?� ?�외
+    # complete ?´ë???ì¼? ?ì¸
     json_files = [str(f) for f in json_files if "complete" not in str(f)]
 
     return sorted(json_files)
@@ -454,45 +464,45 @@ def process_single_file(
     auto_commit: bool = True,
 ) -> Tuple[bool, str]:
     """
-    ?�일 ?�일 처리
+    ?¨ì¼ ?ì¼ ì²ë¦¬
 
     Args:
-        conn: ?�이?�베?�스 ?�결
-        file_path: JSON ?�일 경로
-        domain_name: ?�메???�름
+        conn: ?°ì´?°ë² ?´ì¤ ?°ê²°
+        file_path: JSON ?ì¼ ê²½ë¡
+        domain_name: ?ë©???´ë¦
         embedder: Sentence embedder
-        force: 강제 ?�젝???��?
-        batch_size: Embedding 배치 ?�기
-        no_move: ?�일 ?�띙 비활?�화 ?��?
+        force: ê°ì  ?¬ì ???¬ë?
+        batch_size: Embedding ë°°ì¹ ?¬ê¸°
+        no_move: ?ì¼ ?´ë ë¹í?±í ?¬ë?
 
     Returns:
-        Tuple[bool, str]: (?�공 ?��?, 메시지)
+        Tuple[bool, str]: (?±ê³µ ?¬ë?, ë©ìì§)
     """
     abs_file_path = os.path.abspath(file_path)
 
-    # JSON ?�일 로드
+    # JSON ?ì¼ ë¡ë
     try:
         with open(abs_file_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
     except Exception as e:
         return False, f"Error loading JSON file: {e}"
 
-    # ?�재 ?�행
+    # ?ì¬ ?í
     success, message = ingest_case_with_duplicate_protection(
         conn, abs_file_path, domain_name, meta, embedder, force, batch_size, skip_hash
     )
 
-    # 커밋 (auto_commit??True??경우)
+    # ì»¤ë° (auto_commit??True??ê²½ì°)
     if auto_commit and success:
         conn.commit()
 
-    # ?�일 ?�띙 처리
+    # ?ì¼ ?´ë ì²ë¦¬
     if success:
         if not no_move:
             move_to_complete_folder(abs_file_path)
         return True, message
     else:
-        # ?��? ?�료???�일???�띙
+        # ?´ë? ?ë£???ì¼???´ë
         if not no_move and ("already" in message.lower() or "processed" in message.lower()):
             if Path(abs_file_path).exists():
                 move_to_complete_folder(abs_file_path)
@@ -501,13 +511,13 @@ def process_single_file(
 
 def move_to_complete_folder(file_path: str) -> Optional[str]:
     """
-    ?�업 ?�료???�일??complete ?�띔�??�띙
+    ?ì ?ë£???ì¼??complete ?´ëë¡??´ë
 
     Args:
-        file_path: ?�띙???�일 경로
+        file_path: ?´ë???ì¼ ê²½ë¡
 
     Returns:
-        Optional[str]: ?�띙???�일 경로 (?�패 ??None)
+        Optional[str]: ?´ë???ì¼ ê²½ë¡ (?¤í¨ ??None)
     """
     try:
         file_path_obj = Path(file_path)
@@ -515,17 +525,17 @@ def move_to_complete_folder(file_path: str) -> Optional[str]:
             print(f"Warning: File does not exist: {file_path}")
             return None
 
-        # ?�본 ?�일???�렉?�리 기�??�로 complete ?�띔 ?�성
+        # ?ë³¸ ?ì¼???ë ? ë¦¬ ê¸°ì??¼ë¡ complete ?´ë ?ì±
         parent_dir = file_path_obj.parent
         complete_dir = parent_dir / "complete"
         complete_dir.mkdir(exist_ok=True)
 
-        # ?�띙???�일 경로
+        # ?´ë???ì¼ ê²½ë¡
         destination = complete_dir / file_path_obj.name
 
-        # ?�일???�일???��? ?�는 경우 처리
+        # ?ì¼???ì¼???´ë? ?ë ê²½ì° ì²ë¦¬
         if destination.exists():
-            # ?�?�스?�프 추�??�여 중복 방�?
+            # ??ì¤?¬í ì¶ê??ì¬ ì¤ë³µ ë°©ì?
             stem = file_path_obj.stem
             suffix = file_path_obj.suffix
             timestamp = os.path.getmtime(file_path)
@@ -533,7 +543,7 @@ def move_to_complete_folder(file_path: str) -> Optional[str]:
             new_name = f"{stem}_{dt.strftime('%Y%m%d_%H%M%S')}{suffix}"
             destination = complete_dir / new_name
 
-        # ?�일 ?�띙
+        # ?ì¼ ?´ë
         shutil.move(str(file_path_obj), str(destination))
         print(f"??Moved to complete folder: {destination}")
         return str(destination)
@@ -549,35 +559,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # ?�일 ?�일 ?�재
-  python scripts/ingest/ingest_cases.py --file "data/aihub/.../민사�??�결�?1.json" --domain "민사�?
+  # ?¨ì¼ ?ì¼ ?ì¬
+  python scripts/ingest/ingest_cases.py --file "data/aihub/.../ë¯¼ì¬ë²??ê²°ë¬?1.json" --domain "ë¯¼ì¬ë²?
 
-  # ?�띔 배치 처리 (?��? 검??
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/.../TS_01. 민사�?001. ?�결�? --domain "민사�?
+  # ?´ë ë°°ì¹ ì²ë¦¬ (?¬ê? ê²??
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/.../TS_01. ë¯¼ì¬ë²?001. ?ê²°ë¬? --domain "ë¯¼ì¬ë²?
 
-  # ?�띔 배치 처리 (?�재 ?�띔�? ?�위 ?�띔 ?�외)
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "민사�? --no-recursive
+  # ?´ë ë°°ì¹ ì²ë¦¬ (?ì¬ ?´ëë§? ?ì ?´ë ?ì¸)
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì¬ë²? --no-recursive
 
-  # 강제 ?�젝??
-  python scripts/ingest/ingest_cases.py --file "data/aihub/.../민사�??�결�?1.json" --domain "민사�? --force
+  # ê°ì  ?¬ì ??
+  python scripts/ingest/ingest_cases.py --file "data/aihub/.../ë¯¼ì¬ë²??ê²°ë¬?1.json" --domain "ë¯¼ì¬ë²? --force
 
-  # ?�료 ?�일 ?�띙 비활?�화
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "민사�? --no-move
+  # ?ë£ ?ì¼ ?´ë ë¹í?±í
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì¬ë²? --no-move
 
-  # ??배치 ?�기�?빠르�?처리
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "민사�? --batch-size 256
+  # ??ë°°ì¹ ?¬ê¸°ë¡?ë¹ ë¥´ê²?ì²ë¦¬
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì¬ë²? --batch-size 256
 
-  # ?�띄 최젝???�션 (빠른 처리)
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "민사�? --commit-batch 20 --quiet
+  # ?ë ìµì ???µì (ë¹ ë¥¸ ì²ë¦¬)
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì¬ë²? --commit-batch 20 --quiet
 
-  # 최�? ?�띄 (????배치 커밋, quiet 모드)
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "민사�? --commit-batch 50 --quiet --batch-size 256
+  # ìµë? ?ë (????ë°°ì¹ ì»¤ë°, quiet ëª¨ë)
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì¬ë²? --commit-batch 50 --quiet --batch-size 256
         """
     )
     parser.add_argument("--db", default=os.path.join("data", "lawfirm_v2.db"),
                         help="Database path (default: data/lawfirm_v2.db)")
 
-    # ?�력 ?�스 ?�션 (?�일 ?�는 ?�띔)
+    # ?ë ¥ ?ì¤ ?µì (?ì¼ ?ë ?´ë)
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument("--file", "--json",
                              dest="input_path",
@@ -586,8 +596,8 @@ Examples:
                              dest="input_path",
                              help="Path to folder containing JSON files (recursively searches for *.json)")
 
-    parser.add_argument("--domain", default="민사�?,
-                        help="Domain name (default: 민사�?")
+    parser.add_argument("--domain", default="판례",
+                        help="Domain name (default: 판례)")
     parser.add_argument("--model", default="snunlp/KR-SBERT-V40K-klueNLI-augSTS",
                         help="Sentence embedding model (default: snunlp/KR-SBERT-V40K-klueNLI-augSTS)")
     parser.add_argument("--batch-size", type=int, default=128,
@@ -604,30 +614,30 @@ Examples:
                         help="Quiet mode: less output during batch processing")
     args = parser.parse_args()
 
-    # ?�력 경로 ?�인
+    # ?ë ¥ ê²½ë¡ ?ì¸
     if not os.path.exists(args.input_path):
         print(f"Error: Path not found: {args.input_path}")
         sys.exit(1)
 
-    # ?�이?�베?�스 ?�렉?�리 ?�성
+    # ?°ì´?°ë² ?´ì¤ ?ë ? ë¦¬ ?ì±
     os.makedirs(os.path.dirname(args.db), exist_ok=True)
 
     with sqlite3.connect(args.db) as conn:
-        # ?�이?�베?�스 ?�능 최젝???�정
+        # ?°ì´?°ë² ?´ì¤ ?±ë¥ ìµì ???¤ì 
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging 모드
-        conn.execute("PRAGMA synchronous = NORMAL")  # ?�능 ?�생???�한 ?�기???�벨
-        conn.execute("PRAGMA cache_size = -64000")  # 64MB 캝시 ?�기
-        conn.execute("PRAGMA temp_store = MEMORY")  # ?�시 ?�이?��? 메모리엝 ?�??
+        conn.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging ëª¨ë
+        conn.execute("PRAGMA synchronous = NORMAL")  # ?±ë¥ ?¥ì???í ?ê¸°???ë²¨
+        conn.execute("PRAGMA cache_size = -64000")  # 64MB ìºì ?¬ê¸°
+        conn.execute("PRAGMA temp_store = MEMORY")  # ?ì ?°ì´?°ë? ë©ëª¨ë¦¬ì ???
 
-        # Embedder 초기??(??번만 초기?�하???�사??
+        # Embedder ì´ê¸°??(??ë²ë§ ì´ê¸°?í???¬ì¬??
         embedder = SentenceEmbedder(args.model)
 
-        # ?�일 ?�는 ?�띔 처리
+        # ?ì¼ ?ë ?´ë ì²ë¦¬
         input_path_obj = Path(args.input_path)
 
         if input_path_obj.is_file():
-            # ?�일 ?�일 처리
+            # ?¨ì¼ ?ì¼ ì²ë¦¬
             print(f"Processing single file: {args.input_path}")
             success, message = process_single_file(
                 conn, args.input_path, args.domain, embedder,
@@ -642,7 +652,7 @@ Examples:
                     print("  Use --force to re-ingest")
 
         elif input_path_obj.is_dir():
-            # ?�띔 배치 처리
+            # ?´ë ë°°ì¹ ì²ë¦¬
             json_files = find_json_files(args.input_path, recursive=not args.no_recursive)
 
             if not json_files:
@@ -666,16 +676,16 @@ Examples:
 
             start_time = datetime.now()
 
-            # 배치 커밋 ?�정 (?�능 ?�생)
+            # ë°°ì¹ ì»¤ë° ?¤ì  (?±ë¥ ?¥ì)
             commit_batch_size = args.commit_batch
             processed_count = 0
             last_progress_time = datetime.now()
-            progress_interval = 10 if args.quiet else 5  # quiet 모드?�서?????�게 출력
+            progress_interval = 10 if args.quiet else 5  # quiet ëª¨ë?ì?????ê² ì¶ë ¥
 
             for idx, file_path in enumerate(json_files, 1):
                 file_name = Path(file_path).name
 
-                # 간소?�띜 진행 ?�황 ?�시 (?�무 ?�주 출력?��? ?�음)
+                # ê°ì?ë ì§í ?í© ?ì (?ë¬´ ?ì£¼ ì¶ë ¥?ì? ?ì)
                 current_time = datetime.now()
                 time_since_last_progress = (current_time - last_progress_time).total_seconds()
 
@@ -693,33 +703,33 @@ Examples:
                     last_progress_time = current_time
 
                 try:
-                    # 배치 처리 모드: ?�시 ?�킵, 배치 커밋
+                    # ë°°ì¹ ì²ë¦¬ ëª¨ë: ?´ì ?¤íµ, ë°°ì¹ ì»¤ë°
                     success, message = process_single_file(
                         conn, file_path, args.domain, embedder,
                         args.force, args.batch_size, args.no_move,
-                        skip_hash=True,  # ?�시 계산 ?�킵 (?�띄 ?�생)
-                        auto_commit=False  # 배치 커밋 ?�용
+                        skip_hash=True,  # ?´ì ê³ì° ?¤íµ (?ë ?¥ì)
+                        auto_commit=False  # ë°°ì¹ ì»¤ë° ?¬ì©
                     )
 
                     if success:
                         stats["success"] += 1
                         processed_count += 1
 
-                        # 배치 커밋
+                        # ë°°ì¹ ì»¤ë°
                         if processed_count >= commit_batch_size:
                             conn.commit()
                             processed_count = 0
                     else:
                         if "already" in message.lower() or "processed" in message.lower():
                             stats["skipped"] += 1
-                            # ?�킵??경우?�띄 sources ?�띰?�트�??�해 커밋 ?�요?????�음
+                            # ?¤íµ??ê²½ì°?ë sources ?ë°?´í¸ë¥??í´ ì»¤ë° ?ì?????ì
                             if processed_count > 0:
                                 conn.commit()
                                 processed_count = 0
                         else:
                             stats["failed"] += 1
                             stats["errors"].append({"file": file_name, "error": message})
-                            # ?�러 발생 ??롤백?��? ?�고 계솝 진행
+                            # ?ë¬ ë°ì ??ë¡¤ë°±?ì? ?ê³  ê³ì ì§í
                             if processed_count > 0:
                                 conn.commit()
                                 processed_count = 0
@@ -727,16 +737,16 @@ Examples:
                 except Exception as e:
                     stats["failed"] += 1
                     stats["errors"].append({"file": file_name, "error": str(e)})
-                    # ?�러 발생 ??롤백?��? ?�고 계솝 진행
+                    # ?ë¬ ë°ì ??ë¡¤ë°±?ì? ?ê³  ê³ì ì§í
                     if processed_count > 0:
                         conn.commit()
                         processed_count = 0
 
-            # ?��? 변경사??커밋
+            # ?¨ì? ë³ê²½ì¬??ì»¤ë°
             if processed_count > 0:
                 conn.commit()
 
-            # ?�계 출력
+            # ?µê³ ì¶ë ¥
             elapsed = (datetime.now() - start_time).total_seconds()
             print(f"\n{'='*60}")
             print("Batch Processing Summary:")
@@ -751,12 +761,12 @@ Examples:
 
             if stats["errors"]:
                 print("\nErrors:")
-                for err in stats["errors"][:10]:  # 최�? 10개만 출력
+                for err in stats["errors"][:10]:  # ìµë? 10ê°ë§ ì¶ë ¥
                     print(f"  - {err['file']}: {err['error']}")
                 if len(stats["errors"]) > 10:
                     print(f"  ... and {len(stats['errors']) - 10} more errors")
 
-            # ?�패???�일???�으�?exit code 1
+            # ?¤í¨???ì¼???ì¼ë©?exit code 1
             if stats["failed"] > 0:
                 sys.exit(1)
         else:

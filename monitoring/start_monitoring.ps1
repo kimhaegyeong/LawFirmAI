@@ -30,8 +30,8 @@ try {
 
 # Check Grafana status
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:3000/api/health" -TimeoutSec 5 -ErrorAction Stop
-    Write-Host "✅ Grafana is running on http://localhost:3000" -ForegroundColor Green
+    $response = Invoke-WebRequest -Uri "http://localhost:3001/api/health" -TimeoutSec 5 -ErrorAction Stop
+    Write-Host "✅ Grafana is running on http://localhost:3001" -ForegroundColor Green
 } catch {
     Write-Host "❌ Grafana failed to start" -ForegroundColor Red
 }
@@ -48,7 +48,7 @@ Write-Host ""
 Write-Host "🎉 Monitoring stack started successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "📊 Access URLs:" -ForegroundColor Cyan
-Write-Host "   Grafana: http://localhost:3000 (admin/admin123)" -ForegroundColor White
+Write-Host "   Grafana: http://localhost:3001 (admin/admin123)" -ForegroundColor White
 Write-Host "   Prometheus: http://localhost:9090" -ForegroundColor White
 Write-Host "   Node Exporter: http://localhost:9100" -ForegroundColor White
 Write-Host ""

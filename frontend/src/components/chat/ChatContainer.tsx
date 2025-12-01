@@ -5,7 +5,6 @@
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
 import { WelcomeScreen } from '../welcome/WelcomeScreen';
-import { QuotaIndicator } from './QuotaIndicator';
 import type { ChatMessage, FileAttachment } from '../../types/chat';
 import type { StreamError } from '../../types/error';
 
@@ -24,7 +23,7 @@ interface ChatContainerProps {
   onQuestionClick: (question: string) => void;
   onSendMessage: (message: string, attachments?: FileAttachment[]) => void;
   onDocumentClick: (message: ChatMessage, documentIndex: number) => void;
-  onOpenReferencesSidebar: (message: ChatMessage, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void;
+  onOpenReferencesSidebar: (message: ChatMessage, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation', referenceId?: string) => void;
   onRetryMessage: (messageId: string) => void;
   onLoginClick: () => void;
   onRetryQuestion: (question: string, messageId: string) => void;
@@ -78,16 +77,6 @@ export function ChatContainer({
           />
         )}
       </div>
-      
-      {/* 쿼터 정보 표시 (익명 사용자만) */}
-      {!isAuthenticated && quotaInfo && (
-        <QuotaIndicator
-          remaining={quotaInfo.remaining}
-          limit={quotaInfo.limit}
-          isAuthenticated={isAuthenticated}
-          onLoginClick={onLoginClick}
-        />
-      )}
       
       {/* 입력창 - 하단 고정 */}
       <div className="flex-shrink-0">

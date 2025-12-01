@@ -1,5 +1,9 @@
 ﻿import asyncio
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 from enum import Enum
@@ -8,7 +12,7 @@ from .keyword_database_loader import KeywordDatabaseLoader
 from .ai_keyword_generator import AIKeywordGenerator, KeywordExpansionResult
 from .keyword_cache import KeywordCache
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class ExpansionStrategy(Enum):
     """키워드 확장 전략"""
@@ -26,7 +30,7 @@ class HybridKeywordManager:
                  min_keyword_threshold: int = 20,
                  expansion_strategy: ExpansionStrategy = ExpansionStrategy.HYBRID):
         
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.min_keyword_threshold = min_keyword_threshold
         self.expansion_strategy = expansion_strategy
         

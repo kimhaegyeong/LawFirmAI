@@ -7,7 +7,6 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.pool import StaticPool
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -59,52 +58,88 @@ def _ensure_env_loaded():
 
 
 def get_database_url() -> str:
-    """환경 변수에서 데이터베이스 URL 가져오기"""
+    """환경 변수에서 데이터베이스 URL 가져오기
+    
+    우선순위:
+    1. DATABASE_URL이 명시적으로 설정되어 있으면 사용 (SQLite URL이면 에러)
+    2. 없으면 POSTGRES_* 환경변수들을 조합하여 생성
+       - 프로젝트 루트 .env 파일의 설정 우선 사용
+       - api/.env 파일의 설정은 fallback
+    3. 그것도 없으면 기본값 사용
+    
+    SQLite는 더 이상 지원하지 않습니다.
+    """
     _ensure_env_loaded()
-    db_url = os.getenv("DATABASE_URL", "sqlite:///./data/lawfirm_v2.db")
+    
+    # DATABASE_URL이 명시적으로 설정되어 있으면 사용
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        # SQLite URL 검증
+        if db_url.startswith("sqlite://"):
+            raise ValueError(
+                "SQLite is no longer supported. Please use PostgreSQL. "
+                "Set DATABASE_URL to a PostgreSQL URL (e.g., postgresql://user:password@host:port/database) "
+                "or configure POSTGRES_* environment variables."
+            )
+        return db_url
+    
+    # PostgreSQL 환경변수 조합
+    # 프로젝트 루트 .env 파일의 설정을 우선 사용 (21-29줄)
+    # 없으면 api/.env 파일의 설정 사용
+    postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+    postgres_port = os.getenv("POSTGRES_PORT", "5432")
+    postgres_db = os.getenv("POSTGRES_DB", "lawfirmai_local")
+    postgres_user = os.getenv("POSTGRES_USER", "lawfirmai")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "local_password")
+    
+    # URL 인코딩 (특수문자 처리)
+    from urllib.parse import quote_plus
+    encoded_password = quote_plus(postgres_password)
+    
+    # PostgreSQL URL 생성
+    db_url = f"postgresql://{postgres_user}:{encoded_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+    logger.debug(f"Database URL generated from environment variables: postgresql://{postgres_user}:***@{postgres_host}:{postgres_port}/{postgres_db}")
+    
     return db_url
 
 
 def get_database_type() -> str:
-    """데이터베이스 타입 감지"""
-    db_url = get_database_url()
-    if db_url.startswith("sqlite"):
-        return "sqlite"
-    elif db_url.startswith("postgresql"):
-        return "postgresql"
-    else:
-        raise ValueError(f"Unsupported database URL: {db_url}")
+    """데이터베이스 타입 반환 (PostgreSQL만 지원)"""
+    return "postgresql"
 
 
 def get_engine():
-    """데이터베이스 엔진 생성 (싱글톤)"""
+    """데이터베이스 엔진 생성 (싱글톤, PostgreSQL만 지원)"""
     global _engine
     
     if _engine is not None:
+        # 연결 풀 상태 확인 및 로깅
+        try:
+            pool = _engine.pool
+            logger.debug(
+                f"Database connection pool status: "
+                f"size={pool.size()}, checked_in={pool.checkedin()}, "
+                f"checked_out={pool.checkedout()}, overflow={pool.overflow()}, "
+                f"invalid={pool.invalid()}"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to get pool status: {e}")
+        
         return _engine
     
     db_url = get_database_url()
-    db_type = get_database_type()
     
-    if db_type == "sqlite":
-        engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-            echo=False
-        )
-        logger.info("SQLite database engine created")
-    elif db_type == "postgresql":
-        engine = create_engine(
-            db_url,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            echo=False
-        )
-        logger.info("PostgreSQL database engine created")
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
+    engine = create_engine(
+        db_url,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        echo=False
+    )
+    logger.info(
+        f"PostgreSQL database engine created: "
+        f"pool_size=10, max_overflow=20, pool_pre_ping=True"
+    )
     
     _engine = engine
     return engine

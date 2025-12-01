@@ -1,21 +1,22 @@
-﻿import logging
-from typing import List, Dict, Any, Tuple, Optional
-from collections import Counter
+﻿# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+from typing import List, Dict, Any, Tuple
 import json
 from pathlib import Path
 from datetime import datetime
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TermIntegrator:
     """용어 통합 및 중복 제거 시스템"""
     
     def __init__(self, similarity_threshold: float = 0.8):
         self.similarity_threshold = similarity_threshold
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def calculate_similarity(self, term1: str, term2: str) -> float:
         """용어 간 유사도 계산"""
@@ -127,6 +128,117 @@ class TermIntegrator:
                 similarities.append(sim)
         
         return np.mean(similarities) if similarities else 0.0
+    
+    def get_synonyms(self, keyword: str, domain: str = None, limit: int = 10) -> List[str]:
+        """
+        키워드의 동의어 조회
+        
+        Args:
+            keyword: 조회할 키워드
+            domain: 도메인 (선택사항)
+            limit: 반환할 최대 개수
+            
+        Returns:
+            동의어 리스트
+        """
+        try:
+            # 동의어 데이터베이스가 있는 경우 사용
+            from lawfirm_langgraph.core.search.optimizers.synonym_database import SynonymDatabase
+            import os
+            
+            # 🔥 개선: 환경 변수에서 동의어 DB URL 확인
+            synonym_db_url = os.getenv("SYNONYM_DB_URL")
+            if not synonym_db_url:
+                # SYNONYM_DB_URL이 없으면 DATABASE_URL 사용
+                synonym_db_url = os.getenv("DATABASE_URL")
+            if not synonym_db_url:
+                # DATABASE_URL도 없으면 Config에서 가져오기
+                try:
+                    from lawfirm_langgraph.config.app_config import Config
+                    config = Config()
+                    synonym_db_url = config.database_url
+                except Exception:
+                    pass
+            
+            if synonym_db_url:
+                synonym_db = SynonymDatabase(database_url=synonym_db_url)
+            else:
+                # database_url이 없으면 동의어 DB 사용 불가
+                self.logger.debug("⚠️ [SYNONYM] Database URL not available. Skipping synonym database.")
+                return []
+            
+            records = synonym_db.get_synonyms(keyword, domain=domain, limit=limit)
+            synonyms = [record.synonym for record in records]
+            if synonyms:
+                self.logger.debug(f"✅ [SYNONYM] Found {len(synonyms)} synonyms for '{keyword}' from database")
+            return synonyms
+        except ImportError as e:
+            # 🔥 개선: ImportError 명시적 처리
+            self.logger.debug(
+                f"⚠️ [SYNONYM] SynonymDatabase not available: {e}. "
+                f"Using fallback. Install dependencies if needed."
+            )
+            return []
+        except Exception as e:
+            # 🔥 개선: 오류 처리 강화 및 폴백 로직 개선
+            self.logger.debug(
+                f"⚠️ [SYNONYM] Synonym database not available or error: {e}. "
+                f"Using fallback synonym matching."
+            )
+            # 폴백: 유사 용어 그룹에서 찾기
+            # 실제 구현에서는 용어 통합 시스템의 그룹 정보를 활용할 수 있음
+            fallback_synonyms = []
+            try:
+                # 간단한 폴백: 키워드 변형 시도
+                if len(keyword) > 2:
+                    # 예: "계약" -> "계약서", "계약서류" 등 (간단한 예시)
+                    # 실제로는 더 정교한 동의어 사전이 필요
+                    pass
+            except Exception:
+                pass
+            return fallback_synonyms
+    
+    def get_related_laws(self, keyword: str, legal_field: str = None) -> List[Dict[str, Any]]:
+        """
+        키워드와 관련된 법령 조회
+        
+        Args:
+            keyword: 조회할 키워드
+            legal_field: 법률 분야 (선택사항)
+            
+        Returns:
+            관련 법령 정보 리스트
+        """
+        try:
+            # 법령 데이터베이스가 있는 경우 사용
+            # 실제 구현에서는 법령 데이터베이스와 연동
+            related_laws = []
+            
+            # 패턴 기반 법령 추출 (폴백)
+            import re
+            law_patterns = [
+                r'민법\s*제?\s*\d+조',
+                r'상법\s*제?\s*\d+조',
+                r'형법\s*제?\s*\d+조',
+                r'민사소송법\s*제?\s*\d+조',
+                r'형사소송법\s*제?\s*\d+조',
+            ]
+            
+            # 키워드에서 법령 패턴 추출
+            for pattern in law_patterns:
+                matches = re.findall(pattern, keyword)
+                for match in matches:
+                    related_laws.append({
+                        'law_name': match.split()[0] if ' ' in match else match,
+                        'article': match,
+                        'relevance': 0.7
+                    })
+            
+            self.logger.debug(f"Found {len(related_laws)} related laws for '{keyword}'")
+            return related_laws[:5]  # 최대 5개 반환
+        except Exception as e:
+            self.logger.debug(f"Related laws lookup failed: {e}")
+            return []
 
 class QualityFilter:
     """품질 기반 용어 필터링"""
@@ -134,7 +246,7 @@ class QualityFilter:
     def __init__(self, min_quality_score: int = 70, min_confidence: float = 0.7):
         self.min_quality_score = min_quality_score
         self.min_confidence = min_confidence
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def filter_terms(self, validated_terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """품질 기준으로 용어 필터링"""
@@ -181,7 +293,7 @@ class DatabaseUpdater:
     
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.existing_terms = self.load_existing_terms()
     
     def load_existing_terms(self) -> Dict[str, Any]:
@@ -293,7 +405,7 @@ class TermIntegrationSystem:
         self.integrator = TermIntegrator()
         self.quality_filter = QualityFilter()
         self.db_updater = DatabaseUpdater(db_path)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def process_extracted_terms(self, extracted_terms: List[str]) -> List[Dict[str, Any]]:
         """추출된 용어 처리"""

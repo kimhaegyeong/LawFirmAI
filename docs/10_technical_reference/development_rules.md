@@ -69,14 +69,16 @@ npm run preview
 ### 디렉토리 구조 준수
 ```
 LawFirmAI/
-├── core/                            # 핵심 비즈니스 로직
-│   ├── agents/                      # LangGraph 워크플로우 에이전트
-│   ├── services/                    # 비즈니스 서비스
-│   │   ├── search/                  # 검색 서비스
-│   │   ├── generation/              # 답변 생성
-│   │   └── enhancement/             # 품질 개선
-│   ├── data/                        # 데이터 레이어
-│   └── models/                      # AI 모델
+├── lawfirm_langgraph/               # 핵심 LangGraph 워크플로우 시스템
+│   ├── config/                      # 설정 파일
+│   ├── core/                        # 핵심 비즈니스 로직
+│   │   ├── workflow/                # LangGraph 워크플로우 (메인)
+│   │   ├── agents/                  # 레거시 에이전트 (하위 호환성)
+│   │   ├── services/                # 비즈니스 서비스
+│   │   ├── data/                    # 데이터 레이어
+│   │   ├── models/                  # AI 모델
+│   │   └── utils/                   # 유틸리티
+│   └── tests/                       # 테스트 코드
 ├── frontend/                        # React 프론트엔드
 │   ├── src/                         # 소스 코드
 │   ├── package.json                 # 의존성
@@ -84,11 +86,13 @@ LawFirmAI/
 ├── api/                              # FastAPI 서버
 │   ├── main.py                      # 메인 앱
 │   └── requirements.txt             # 의존성
-├── infrastructure/                  # 인프라 및 유틸리티
-│   └── utils/                       # 유틸리티 함수
-├── lawfirm_langgraph/               # 핵심 LangGraph 워크플로우 시스템
+├── scripts/                         # 유틸리티 스크립트
+│   ├── data_collection/             # 데이터 수집
+│   ├── data_processing/             # 데이터 전처리
+│   ├── database/                    # 데이터베이스 관리
+│   └── monitoring/                  # 모니터링
 ├── data/                            # 데이터 파일
-│   ├── lawfirm.db                   # SQLite 데이터베이스
+│   ├── lawfirm_v2.db                # SQLite 데이터베이스
 │   └── embeddings/                  # 벡터 임베딩
 └── docs/                            # 문서
 ```
@@ -105,10 +109,10 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # Core 모듈 Import
-from source.agents.workflow_service import LangGraphWorkflowService
-from source.services.search import HybridSearchEngine
-from source.services.generation import AnswerGenerator
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 ```
 
 **Import 순서**:
@@ -124,8 +128,8 @@ from fastapi import FastAPI
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # 3. 프로젝트 모듈
-from source.agents.workflow_service import LangGraphWorkflowService
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
 ```
 
 ## 📝 로깅 규칙
@@ -260,15 +264,15 @@ sys.path.insert(0, str(project_root))
 
 def test_vector_store_loading():
     """벡터 저장소 로딩 테스트"""
-    from source.data.vector_store import VectorStore
+    from lawfirm_langgraph.core.data.vector_store import VectorStore
     
     vector_store = VectorStore("test-model")
     assert vector_store is not None
 
 def test_workflow_service():
     """워크플로우 서비스 테스트"""
-    from source.agents.workflow_service import LangGraphWorkflowService
-    from infrastructure.utils.langgraph_config import LangGraphConfig
+    from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+    from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
     
     config = LangGraphConfig.from_env()
     workflow = LangGraphWorkflowService(config)

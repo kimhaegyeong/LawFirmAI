@@ -38,7 +38,7 @@ except ImportError as e:
 
 # Import database manager
 try:
-    from source.data.database import DatabaseManager
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
     DATABASE_MODULE_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Database module not available: {e}")

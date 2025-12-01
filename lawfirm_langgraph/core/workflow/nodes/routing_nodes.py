@@ -7,7 +7,10 @@ Routing Nodes
 향후 필요시 이 파일로 이동할 수 있습니다.
 """
 
-from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
 
 __all__ = []
 

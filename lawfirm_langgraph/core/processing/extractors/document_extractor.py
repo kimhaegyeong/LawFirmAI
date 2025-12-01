@@ -4,36 +4,118 @@ Document Extractor
 문서 관련 추출 유틸리티
 """
 
-import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from typing import Any, Dict, List
+from collections import Counter
 
-logger = logging.getLogger(__name__)
+# KoreanStopwordProcessor import (KoNLPy 기반 불용어 처리)
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
+logger = get_logger(__name__)
+
+# 최대 용어 수 제한 (성능 최적화)
+MAX_TERMS = 1000
 
 
 class DocumentExtractor:
     """문서 관련 추출 유틸리티"""
 
     @staticmethod
-    def extract_terms_from_documents(docs: List[Dict]) -> List[str]:
-        """문서에서 법률 용어 추출"""
+    def extract_terms_from_documents(docs: List[Dict], max_terms: int = MAX_TERMS) -> List[str]:
+        """문서에서 법률 용어 추출
+        
+        Args:
+            docs: 문서 리스트
+            max_terms: 최대 추출 용어 수 (기본값: 1000)
+        
+        Returns:
+            추출된 법률 용어 리스트 (중복 제거, 불용어 제거, 최대 개수 제한)
+        """
         all_terms = []
         try:
+            # KoreanStopwordProcessor 초기화 (KoNLPy 기반 불용어 처리)
+            stopword_processor = None
+            if KoreanStopwordProcessor:
+                try:
+                    stopword_processor = KoreanStopwordProcessor.get_instance()
+                except Exception as e:
+                    logger.warning(f"Error initializing KoreanStopwordProcessor: {e}, will use fallback method")
+            
             for doc in docs:
                 content = doc.get("content", "")
                 if not content:
                     continue
 
+                # 한글/영문/숫자 조합 추출
                 korean_terms = re.findall(r'[가-힣0-9A-Za-z]+', content)
+                
+                # 기본 필터링: 길이 2 이상, 한글 포함
                 legal_terms = [
                     term for term in korean_terms
                     if len(term) >= 2 and any('\uac00' <= c <= '\ud7af' for c in term)
                 ]
+                
+                # 불용어 제거 (KoreanStopwordProcessor.filter_stopwords() 사용)
+                if stopword_processor:
+                    original_count = len(legal_terms)
+                    legal_terms = stopword_processor.filter_stopwords(legal_terms)
+                    filtered_count = len(legal_terms)
+                    if original_count != filtered_count:
+                        logger.debug(
+                            f"불용어 제거: {original_count}개 → {filtered_count}개 "
+                            f"({original_count - filtered_count}개 제거됨)"
+                        )
+                else:
+                    # 폴백: 기본 불용어 제거
+                    basic_stopwords = {'것', '이', '그', '및', '또한', '따라서', '그러나', 
+                                      '하지만', '때문', '위해', '대해', '관련', '등', '또는'}
+                    legal_terms = [term for term in legal_terms if term not in basic_stopwords]
+                
                 all_terms.extend(legal_terms)
+                
         except Exception as e:
             logger.warning(f"Failed to extract terms from documents: {e}")
-
-        return all_terms
+        
+        if not all_terms:
+            return []
+        
+        # 중복 제거 및 빈도 계산
+        term_counts = Counter(all_terms)
+        unique_terms = list(term_counts.keys())
+        
+        logger.info(
+            f"용어 추출 완료: 원본 {len(all_terms)}개 → "
+            f"중복 제거 후 {len(unique_terms)}개"
+        )
+        
+        # 빈도순으로 정렬하여 상위 N개만 선택 (성능 최적화)
+        if len(unique_terms) > max_terms:
+            # 빈도가 높은 순으로 정렬
+            sorted_terms = sorted(
+                term_counts.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+            selected_terms = [term for term, count in sorted_terms[:max_terms]]
+            
+            logger.info(
+                f"용어 수 제한: {len(unique_terms)}개 → "
+                f"상위 {max_terms}개 선택 (빈도순)"
+            )
+            
+            return selected_terms
+        
+        return unique_terms
 
     @staticmethod
     def extract_key_insights(

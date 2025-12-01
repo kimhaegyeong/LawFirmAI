@@ -6,10 +6,42 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# 모듈 레벨 KoreanStopwordProcessor 인스턴스 (지연 로딩)
+_stopword_processor = None
+_stopword_processor_initialized = False
+
+
+def _get_stopword_processor():
+    """KoreanStopwordProcessor 지연 로딩 (최초 사용 시에만 초기화)"""
+    global _stopword_processor, _stopword_processor_initialized
+    
+    if _stopword_processor_initialized:
+        return _stopword_processor
+    
+    if KoreanStopwordProcessor:
+        try:
+            _stopword_processor = KoreanStopwordProcessor.get_instance()
+        except Exception as e:
+            logger.debug(f"Error initializing KoreanStopwordProcessor: {e}")
+    
+    _stopword_processor_initialized = True
+    return _stopword_processor
 
 
 class ContextValidator:
@@ -226,6 +258,33 @@ class AnswerValidator:
     """답변 품질 검증"""
 
     @staticmethod
+    def _extract_base_article_number(article_number: str) -> str:
+        """
+        조문번호에서 항/호를 제거한 기본 조문번호만 추출
+        
+        예시:
+        - "217" -> "217"
+        - "217-1" -> "217"
+        - "217-1-2" -> "217"
+        - "217조 제1항" -> "217"
+        
+        Args:
+            article_number: 조문번호 문자열
+            
+        Returns:
+            항/호를 제거한 기본 조문번호
+        """
+        if not article_number:
+            return ""
+        
+        # 숫자만 추출 (첫 번째 숫자 시퀀스)
+        match = re.search(r'(\d+)', str(article_number))
+        if match:
+            return match.group(1)
+        
+        return str(article_number).strip()
+
+    @staticmethod
     def _normalize_citation(citation: str) -> Dict[str, Any]:
         """
         Citation을 표준 형식으로 정규화
@@ -235,12 +294,14 @@ class AnswerValidator:
         - "민법 750조"
         - "[법령: 민법 제750조]"
         - "민법 제750조에 따르면..."
+        - "민사소송법 제217조 제1항"
+        - "민사소송법 제217조 제1항 제2호"
         
         Returns:
             {
                 "type": "law",  # "law" or "precedent"
                 "law_name": "민법",  # 법령명
-                "article_number": "750",  # 조문번호
+                "article_number": "750",  # 조문번호 (항/호 제거)
                 "normalized": "민법 제750조",  # 표준 형식
                 "original": citation  # 원본
             }
@@ -252,9 +313,10 @@ class AnswerValidator:
                 "original": citation
             }
         
-        # 1. 법령 조문 패턴 (다양한 형식 지원)
+        # 1. 법령 조문 패턴 (다양한 형식 지원 - 항/호 포함 패턴 추가)
         law_patterns = [
             (r'\[법령:\s*([^\]]+)\]', True),  # [법령: 민법 제750조]
+            (r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', False),  # 민법 제217조 제1항 제2호, 민법 제217조 제1항, 민법 제217조
             (r'([가-힣]+법)\s*제?\s*(\d+)\s*조', False),  # 민법 제750조, 민법 750조
             (r'([가-힣]+법)\s*(\d+)\s*조', False),  # 민법 750조 (제 없음)
         ]
@@ -265,12 +327,13 @@ class AnswerValidator:
                 if is_bracketed:
                     # [법령: ...] 형식
                     inner = match.group(1)
-                    law_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', inner)
+                    # 항/호 포함 패턴도 처리
+                    law_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', inner)
                     if law_match:
                         return {
                             "type": "law",
                             "law_name": law_match.group(1),
-                            "article_number": law_match.group(2),
+                            "article_number": law_match.group(2),  # 항/호 제거한 기본 조문번호만 추출
                             "normalized": f"{law_match.group(1)} 제{law_match.group(2)}조",
                             "original": citation
                         }
@@ -280,16 +343,21 @@ class AnswerValidator:
                         return {
                             "type": "law",
                             "law_name": match.group(1),
-                            "article_number": match.group(2),
+                            "article_number": match.group(2),  # 정규식에서 이미 항/호 제거된 기본 조문번호만 추출됨
                             "normalized": f"{match.group(1)} 제{match.group(2)}조",
                             "original": citation
                         }
         
-        # 2. 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
-        # "대법원 2007. 12. 27. 선고 2006다9408 판결" 형식 지원
+        # 2. 판례 패턴 (개선: 날짜/판결 형식 변형 처리 - 다양한 날짜 형식 지원)
+        # "대법원 2007. 12. 27. 선고 2006다9408 판결", "대법원 2014. 7. 24. 선고 2012다49933" 등 형식 지원
         precedent_patterns = [
-            (r'(대법원|법원)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # 날짜 포함 형식
-            (r'(대법원|법원).*?(\d{4}[다나마]\d+)', False),  # 기본 형식
+            # 날짜 포함 형식 (다양한 날짜 형식 지원)
+            (r'(대법원|법원)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014. 7. 24." 형식
+            (r'(대법원|법원)\s+(\d{4}\.\d{1,2}\.\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014.7.24." 형식
+            (r'(대법원|법원)\s+(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014년 7월 24일" 형식
+            (r'(대법원|법원)\s+(\d{4}-\d{1,2}-\d{1,2})\s*선고\s+(\d{4}[다나마]\d+)', True),  # "2014-7-24" 형식
+            # 기본 형식 (날짜 없음)
+            (r'(대법원|법원).*?(\d{4}[다나마]\d+)', False),  # "대법원 2012다49933" 형식
         ]
         
         for pattern, has_date in precedent_patterns:
@@ -297,16 +365,17 @@ class AnswerValidator:
             if precedent_match:
                 if has_date:
                     court = precedent_match.group(1)
-                    case_number = precedent_match.group(3)
+                    case_number = precedent_match.group(3)  # 날짜가 있으면 사건번호는 3번째 그룹
                 else:
                     court = precedent_match.group(1)
-                    case_number = precedent_match.group(2)
+                    case_number = precedent_match.group(2)  # 날짜가 없으면 사건번호는 2번째 그룹
                 
+                # 사건번호만 추출하여 정규화 (날짜 정보 제거)
                 return {
                     "type": "precedent",
                     "court": court,
-                    "case_number": case_number,
-                    "normalized": f"{court} {case_number}",
+                    "case_number": case_number,  # 사건번호만 저장
+                    "normalized": f"{court} {case_number}",  # 날짜 없이 사건번호만 포함
                     "original": citation
                 }
         
@@ -333,7 +402,7 @@ class AnswerValidator:
         if normalized_expected.get("type") != normalized_answer.get("type"):
             return False
         
-        # 법령 매칭 (개선: 부분 매칭 지원)
+        # 법령 매칭 (개선: 부분 매칭 지원, 항/호 제거한 기본 조문번호로도 매칭)
         if normalized_expected.get("type") == "law":
             expected_law = normalized_expected.get("law_name", "")
             expected_article = normalized_expected.get("article_number", "")
@@ -344,12 +413,15 @@ class AnswerValidator:
             law_match = expected_law == answer_law or expected_law in answer_law or answer_law in expected_law
             
             # 조문번호가 일치하는지 확인 (숫자 비교)
-            article_match = expected_article == answer_article
+            # 항/호를 제거한 기본 조문번호로 비교
+            expected_article_base = AnswerValidator._extract_base_article_number(expected_article)
+            answer_article_base = AnswerValidator._extract_base_article_number(answer_article)
+            article_match = expected_article_base == answer_article_base
             
             # 법령명과 조문번호가 모두 일치해야 함
             return law_match and article_match
         
-        # 판례 매칭 (개선: 부분 매칭 지원)
+        # 판례 매칭 (개선: 부분 매칭 지원, 사건번호만 비교)
         elif normalized_expected.get("type") == "precedent":
             expected_court = normalized_expected.get("court", "")
             expected_case = normalized_expected.get("case_number", "")
@@ -359,7 +431,8 @@ class AnswerValidator:
             # 법원명이 일치하는지 확인 (부분 매칭 지원)
             court_match = expected_court == answer_court or expected_court in answer_court or answer_court in expected_court
             
-            # 사건번호가 일치하는지 확인 (부분 매칭 지원)
+            # 사건번호가 일치하는지 확인 (사건번호만 비교, 날짜 정보 무시)
+            # 정규화 단계에서 이미 사건번호만 추출했으므로 직접 비교
             case_match = expected_case == answer_case or expected_case in answer_case or answer_case in expected_case
             
             # 법원명과 사건번호가 모두 일치해야 함
@@ -380,9 +453,10 @@ class AnswerValidator:
         
         normalized_citations = []
         
-        # 법령 조문 패턴 (다양한 형식 지원 - 개선: 더 포괄적인 패턴 및 중복 제거)
+        # 법령 조문 패턴 (다양한 형식 지원 - 개선: 항/호 포함 패턴 추가)
         law_patterns = [
             (r'\[법령:\s*([^\]]+)\]', True),  # [법령: 민법 제750조] - 괄호 내부 추출
+            (r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', False),  # 민법 제217조 제1항 제2호, 민법 제217조 제1항, 민법 제217조
             (r'([가-힣]+법)\s*제?\s*(\d+)\s*조', False),  # 민법 제750조, 민법 750조
             (r'([가-힣]+법)\s*(\d+)\s*조', False),  # 민법 750조 (제 없음)
         ]
@@ -395,17 +469,17 @@ class AnswerValidator:
                 if extract_inner:
                     # [법령: ...] 형식에서 내부 추출
                     inner_text = match.group(1)
-                    # 내부에서 법령명과 조문번호 추출
-                    inner_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', inner_text)
+                    # 내부에서 법령명과 조문번호 추출 (항/호 포함 패턴도 처리)
+                    inner_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조(?:\s*제?\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?', inner_text)
                     if inner_match:
-                        law_key = f"{inner_match.group(1)} 제{inner_match.group(2)}조"
+                        law_key = f"{inner_match.group(1)} 제{inner_match.group(2)}조"  # 항/호 제거한 기본 조문번호만 사용
                         if law_key not in seen_laws:
                             seen_laws.add(law_key)
                             law_matches.append(law_key)
                 else:
                     # 직접 매칭
                     if len(match.groups()) >= 2:
-                        law_key = f"{match.group(1)} 제{match.group(2)}조"
+                        law_key = f"{match.group(1)} 제{match.group(2)}조"  # 정규식에서 이미 항/호 제거된 기본 조문번호만 추출됨
                         if law_key not in seen_laws:
                             seen_laws.add(law_key)
                             law_matches.append(law_key)
@@ -415,17 +489,28 @@ class AnswerValidator:
             if normalized.get("type") != "unknown":
                 normalized_citations.append(normalized)
         
-        # 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
+        # 판례 패턴 (개선: 날짜/판결 형식 변형 처리 - 다양한 날짜 형식 지원)
         precedent_patterns = [
-            r'(?:대법원|법원)\s+\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # 날짜 포함 형식
-            r'(?:대법원|법원).*?\d{4}[다나마]\d+',  # 기본 형식
+            r'(?:대법원|법원)\s+\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # "2014. 7. 24." 형식
+            r'(?:대법원|법원)\s+\d{4}\.\d{1,2}\.\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # "2014.7.24." 형식
+            r'(?:대법원|법원)\s+\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*선고\s+\d{4}[다나마]\d+',  # "2014년 7월 24일" 형식
+            r'(?:대법원|법원)\s+\d{4}-\d{1,2}-\d{1,2}\s*선고\s+\d{4}[다나마]\d+',  # "2014-7-24" 형식
+            r'(?:대법원|법원).*?\d{4}[다나마]\d+',  # 기본 형식 (날짜 없음)
         ]
         
         precedent_matches = []
+        seen_precedents = set()
         for pattern in precedent_patterns:
             matches = re.finditer(pattern, answer)
             for match in matches:
-                precedent_matches.append(match.group(0))
+                matched_text = match.group(0)
+                # 중복 제거를 위해 정규화된 형식으로 키 생성
+                normalized_temp = AnswerValidator._normalize_citation(matched_text)
+                if normalized_temp.get("type") == "precedent":
+                    precedent_key = f"{normalized_temp.get('court', '')} {normalized_temp.get('case_number', '')}"
+                    if precedent_key not in seen_precedents:
+                        seen_precedents.add(precedent_key)
+                        precedent_matches.append(matched_text)
         
         for match in precedent_matches:
             normalized = AnswerValidator._normalize_citation(match)
@@ -529,9 +614,20 @@ class AnswerValidator:
                             has_law_in_docs = True
                             break
 
-            # 문서 인용 패턴 확인
-            document_citation_pattern = r'\[문서:\s*[^\]]+\]'
-            document_citations = len(re.findall(document_citation_pattern, answer))
+            # 문서 인용 패턴 확인 (개선: "[문서 N]" 형식도 감지)
+            document_citation_patterns = [
+                r'\[문서:\s*[^\]]+\]',  # [문서: ...] 형식
+                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식
+                r'문서\s*\[\s*\d+\s*\]',  # 문서[1], 문서[2] 형식
+                r'문서\s*\d+',  # 문서1, 문서2 형식 (표 내에서 사용)
+            ]
+            document_citations = 0
+            unique_doc_citations = set()
+            for pattern in document_citation_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    unique_doc_citations.add(match)
+            document_citations = len(unique_doc_citations)
 
             # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
             has_document_references = False
@@ -632,11 +728,65 @@ class AnswerValidator:
                     if has_document_references:
                         break
                     
-                    # 일반적인 키워드 매칭 (최소 3자 이상)
-                    source_keywords = [w for w in source.split() if len(w) >= 3][:3]
-                    if source_keywords and any(keyword.lower() in answer_lower for keyword in source_keywords):
+                    # 방법 3: 법령명 확인 (개선)
+                    statute_patterns = [
+                        r'([가-힣]+법)',
+                        r'([가-힣]+법령)',
+                        r'([가-힣]+규칙)'
+                    ]
+                    statute_found = False
+                    for statute_pattern in statute_patterns:
+                        statute_match = re.search(statute_pattern, source_lower)
+                        if statute_match:
+                            statute_name = statute_match.group(1)
+                            if statute_name in answer_lower:
+                                statute_found = True
+                                break
+                    
+                    # 방법 4: 조문번호 확인
+                    article_pattern = r'제\s*(\d+)\s*조'
+                    article_match = re.search(article_pattern, source_lower)
+                    article_found = False
+                    if article_match:
+                        article_no = article_match.group(1)
+                        if f"제{article_no}조" in answer_lower or f"{article_no}조" in answer_lower:
+                            article_found = True
+                    
+                    # 방법 5: 기관명 확인
+                    org_patterns = [
+                        r'([가-힣]+부)',
+                        r'([가-힣]+청)',
+                        r'([가-힣]+원)'
+                    ]
+                    org_found = False
+                    for org_pattern in org_patterns:
+                        org_match = re.search(org_pattern, source_lower)
+                        if org_match:
+                            org_name = org_match.group(1)
+                            if org_name in answer_lower:
+                                org_found = True
+                                break
+                    
+                    # 방법 6: 제목이나 사건명 확인 (핵심 키워드 추출)
+                    title_keywords = [w for w in source_lower.split() if len(w) >= 2 and w not in ['법원', '법', '조', '제', '선고']][:5]
+                    title_found = False
+                    if title_keywords:
+                        matched_keywords = sum(1 for kw in title_keywords if kw in answer_lower)
+                        if matched_keywords >= min(2, len(title_keywords) // 2):  # 최소 2개 또는 절반 이상 매칭
+                            title_found = True
+                    
+                    # 하나라도 매칭되면 문서 참조로 인정
+                    if court_found or case_found or statute_found or article_found or org_found or title_found:
                         has_document_references = True
                         break
+                    
+                    # 방법 7: 일반적인 키워드 매칭 (최소 3자 이상, 더 많은 키워드 확인)
+                    source_keywords = [w for w in source_lower.split() if len(w) >= 3][:5]  # 3개 → 5개로 증가
+                    if source_keywords:
+                        matched_keywords = sum(1 for kw in source_keywords if kw in answer_lower)
+                        if matched_keywords >= min(2, len(source_keywords) // 2):  # 최소 2개 또는 절반 이상 매칭
+                            has_document_references = True
+                            break
 
             # 컨텍스트에서 추출한 인용 정보와 비교 (개선: 정규화 및 유연한 매칭)
             expected_citations_raw = []
@@ -700,6 +850,7 @@ class AnswerValidator:
             found_citations = 0
             missing_citations = []
             matched_answer_citations = set()
+            unmatched_samples = []  # 요약 로그용 샘플 저장
 
             for expected_cit in normalized_expected_citations:
                 matched = False
@@ -718,10 +869,21 @@ class AnswerValidator:
                 
                 if not matched:
                     missing_citations.append(expected_cit.get("original", ""))
-                    logger.debug(
-                        f"[CITATION DEBUG] Not matched: {expected_cit.get('normalized', '')} "
-                        f"(original: {expected_cit.get('original', '')})"
-                    )
+                    # 샘플 저장 (최대 5개)
+                    if len(unmatched_samples) < 5:
+                        unmatched_samples.append({
+                            'normalized': expected_cit.get('normalized', ''),
+                            'original': expected_cit.get('original', '')
+                        })
+            
+            # 요약 로그 출력 (개별 로그 대신)
+            if missing_citations:
+                unmatched_count = len(missing_citations)
+                sample_text = ", ".join([f"{s['normalized']}" for s in unmatched_samples[:3]])
+                logger.debug(
+                    f"[CITATION DEBUG] Not matched: {unmatched_count} citations "
+                    f"(samples: {sample_text}{'...' if unmatched_count > 3 else ''})"
+                )
 
             # 4. Citation coverage 계산 개선
             if normalized_expected_citations:
@@ -986,9 +1148,13 @@ class AnswerValidator:
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
 
-            # 문장의 핵심 키워드 추출 (불용어 제거)
-            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
-            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+            # 문장의 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
+            sentence_words = []
+            stopword_processor = _get_stopword_processor()
+            for w in re.findall(r'[가-힣]+', sentence_lower):
+                if len(w) > 1:
+                    if not stopword_processor or not stopword_processor.is_stopword(w):
+                        sentence_words.append(w)
 
             if not sentence_words:
                 continue
@@ -1010,9 +1176,14 @@ class AnswerValidator:
                 sentence_key_phrases = [w for w in sentence_words if len(w) > 2][:5]  # 핵심 구문 추출
                 phrase_match_score = sum(1 for phrase in sentence_key_phrases if phrase in source_text) / max(len(sentence_key_phrases), 1) if sentence_key_phrases else 0.0
                 
-                # 의미적 유사도 (공통 단어 비율)
+                # 의미적 유사도 (공통 단어 비율 - KoreanStopwordProcessor 사용)
                 source_words = re.findall(r'[가-힣]+', source_text.lower())
-                source_words_set = set([w for w in source_words if len(w) > 1 and w not in stopwords])
+                source_words_set = set()
+                stopword_processor = _get_stopword_processor()
+                for w in source_words:
+                    if len(w) > 1:
+                        if not stopword_processor or not stopword_processor.is_stopword(w):
+                            source_words_set.add(w)
                 sentence_words_set = set(sentence_words)
                 semantic_similarity = len(sentence_words_set & source_words_set) / max(len(sentence_words_set), 1) if sentence_words_set else 0.0
 

@@ -5,6 +5,10 @@ Search Service (ML Enhanced)
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 import asyncio
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
@@ -12,12 +16,20 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..models.model_manager import LegalModelManager
 
-from ..data.database import DatabaseManager
+from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from ..data.vector_store import LegalVectorStore as VectorStore
 from ..utils.config import Config
-from ..services.ai_keyword_generator import AIKeywordGenerator
+from ..processing.extractors.ai_keyword_generator import AIKeywordGenerator
 
-logger = logging.getLogger(__name__)
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
+logger = get_logger(__name__)
 
 
 class MLEnhancedSearchService:
@@ -30,12 +42,20 @@ class MLEnhancedSearchService:
         self.database = database
         self.vector_store = vector_store
         self.model_manager = model_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # LLM 기반 키워드 확장기 초기화
         self.ai_keyword_generator = AIKeywordGenerator()
         self._keyword_cache = {}  # 키워드 확장 캐시
         self._max_cache_size = 100  # 최대 캐시 크기 (100개)
+        
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor.get_instance()
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
         
         # ML 강화 검색 설정
         self.use_ml_enhanced_search = True
@@ -277,10 +297,12 @@ class MLEnhancedSearchService:
         if not keywords:
             return '""'
         
-        # 키워드 정리 (1글자 제외, 불용어 제거)
-        stopwords = {'의', '을', '를', '이', '가', '은', '는', '에', '에서', '로', '으로', 
-                     '와', '과', '도', '만', '부터', '까지', '에', '대해', '관련', '질문'}
-        filtered_keywords = [kw for kw in keywords if len(kw) > 1 and kw not in stopwords]
+        # 키워드 정리 (1글자 제외, 불용어 제거 - KoreanStopwordProcessor 사용)
+        filtered_keywords = []
+        for kw in keywords:
+            if len(kw) > 1:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(kw):
+                    filtered_keywords.append(kw)
         
         if not filtered_keywords:
             filtered_keywords = keywords[:5]
@@ -715,29 +737,22 @@ class MLEnhancedSearchService:
             return []
     
     def _extract_keywords(self, query: str) -> List[str]:
-        """기본 키워드 추출 (조사 제거, 불용어 제거만 수행)"""
+        """기본 키워드 추출 (조사 제거, 불용어 제거만 수행 - KoreanStopwordProcessor 사용)"""
         try:
-            # 불용어 제거 (확장된 목록)
-            stopwords = {
-                '의', '을', '를', '이', '가', '은', '는', '에', '에서', '로', '으로', 
-                '와', '과', '도', '만', '부터', '까지', '에', '대해', '관련', '질문',
-                '어떻게', '무엇', '언제', '어디', '왜', '어떤', '누구', '몇', '얼마',
-                '법률', '법', '조문', '항', '호', '목', '단', '절', '장', '편'
-            }
-            
             # 조사 제거 패턴 (한글 조사)
             josa_pattern = r'(에|에서|로|으로|와|과|의|을|를|이|가|은|는|도|만|부터|까지|대해|관련)$'
             
             # 단어 분리 (한글, 숫자, 영문 포함)
             words = re.findall(r'[가-힣0-9a-zA-Z]+', query)
             
-            # 조사 제거 및 불용어 제거
+            # 조사 제거 및 불용어 제거 (KoreanStopwordProcessor 사용)
             keywords = []
             for word in words:
                 # 조사 제거
                 cleaned_word = re.sub(josa_pattern, '', word)
-                if cleaned_word and len(cleaned_word) > 1 and cleaned_word not in stopwords:
-                    keywords.append(cleaned_word)
+                if cleaned_word and len(cleaned_word) > 1:
+                    if not self.stopword_processor or not self.stopword_processor.is_stopword(cleaned_word):
+                        keywords.append(cleaned_word)
             
             # 중복 제거
             keywords = list(dict.fromkeys(keywords))  # 순서 유지하면서 중복 제거

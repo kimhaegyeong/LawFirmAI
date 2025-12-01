@@ -1,10 +1,14 @@
 ﻿# -*- coding: utf-8 -*-
 """
 개선된 답변 생성기
-Ollama 클라이언트와 프롬프트 템플릿을 활용한 지능형 답변 생성
+프롬프트 템플릿을 활용한 지능형 답변 생성
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
@@ -13,17 +17,17 @@ from ...services.gemini_client import GeminiClient, GeminiResponse
 from ...services.prompt_templates import PromptTemplateManager
 from ...services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
 from ...services.prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
-from ...services.semantic_domain_classifier import SemanticDomainClassifier
-from ...services.confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
+from ...classification.classifiers.semantic_domain_classifier import SemanticDomainClassifier
+from ...generation.validators.confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
 try:
     from ...classification.classifiers.question_classifier import QuestionType, QuestionClassification
 except ImportError:
-    # 호환성을 위한 fallback
-    from ...services.question_classifier import QuestionType, QuestionClassification
-from ...services.answer_formatter import AnswerFormatter, FormattedAnswer
+    QuestionType = None
+    QuestionClassification = None
+from ...generation.formatters.answer_formatter import AnswerFormatter, FormattedAnswer
 from .context_builder import ContextBuilder
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -51,7 +55,7 @@ class ImprovedAnswerGenerator:
                  unified_prompt_manager: Optional[UnifiedPromptManager] = None,
                  prompt_optimizer: Optional[PromptOptimizer] = None):
         """답변 생성기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 컴포넌트 초기화
         self.gemini_client = gemini_client or GeminiClient()
@@ -156,7 +160,7 @@ class ImprovedAnswerGenerator:
                 model_type=model_type
             )
             
-            # Ollama로 답변 생성 (재시도 로직 포함)
+            # LLM으로 답변 생성 (재시도 로직 포함)
             raw_answer = self._generate_with_retry(prompt, config)
             
             # 신뢰도 계산

@@ -8,8 +8,17 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 from typing import Dict, Any, List
 
-from lawfirm_langgraph.core.services.search_service import MLEnhancedSearchService
-from lawfirm_langgraph.core.data.database import DatabaseManager
+# LegalModelManager가 없으므로 mock으로 대체
+import sys
+from unittest.mock import MagicMock
+
+# search_service 모듈을 import하기 전에 LegalModelManager를 mock
+mock_model_manager = MagicMock()
+sys.modules['lawfirm_langgraph.core.models.model_manager'] = MagicMock()
+sys.modules['lawfirm_langgraph.core.models.model_manager'].LegalModelManager = mock_model_manager
+
+from lawfirm_langgraph.core.search.handlers.search_service import MLEnhancedSearchService
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from lawfirm_langgraph.core.data.vector_store import LegalVectorStore
 from lawfirm_langgraph.core.utils.config import Config
 
@@ -26,7 +35,7 @@ class TestMLEnhancedSearchService:
     
     @pytest.fixture
     def mock_database(self):
-        """Mock DatabaseManager"""
+        """Mock LegalDataConnectorV2"""
         db = MagicMock()
         db.execute_query = Mock(return_value=[])
         return db

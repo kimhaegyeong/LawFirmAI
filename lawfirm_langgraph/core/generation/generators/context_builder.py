@@ -8,9 +8,18 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from core.agents.extractors import DocumentExtractor
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.extractors import DocumentExtractor
+except ImportError:
+    from core.agents.extractors import DocumentExtractor
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class ContextBuilder:

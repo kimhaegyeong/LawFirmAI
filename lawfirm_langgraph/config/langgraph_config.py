@@ -5,47 +5,92 @@ LangGraph 설정 관리 모듈
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
-# 환경 변수 로드 (중앙 집중식 로더 사용)
-# 프로젝트 루트를 찾아서 공통 로더 사용
-try:
-    # 프로젝트 루트 찾기: lawfirm_langgraph/config/ -> lawfirm_langgraph/ -> 프로젝트 루트
-    _langgraph_dir = Path(__file__).parent.parent
-    _project_root = _langgraph_dir.parent
-    
-    # 공통 로더 사용 (이미 로드되었을 수 있으므로 ensure 사용)
-    try:
-        import sys
-        sys.path.insert(0, str(_project_root))
-        from utils.env_loader import ensure_env_loaded
-        ensure_env_loaded(_project_root)
-    except ImportError:
-        # 공통 로더가 없으면 기존 방식으로 fallback
-        _env_file = _langgraph_dir / ".env"
-        if _env_file.exists():
-            load_dotenv(dotenv_path=str(_env_file))
-except Exception:
-    # 모든 방법이 실패하면 기존 방식으로 fallback
-    _langgraph_dir = Path(__file__).parent.parent
-    _env_file = _langgraph_dir / ".env"
-    if _env_file.exists():
-        load_dotenv(dotenv_path=str(_env_file))
+# 환경 변수 로드 상태 추적 변수
+_env_loaded = False
 
-logger = logging.getLogger(__name__)
+# 환경 변수 로드 (중앙 집중식 로더 사용, 중복 로드 방지)
+# 프로젝트 루트의 .env 파일을 우선적으로 로드
+def _load_env_once():
+    """환경 변수를 한 번만 로드 (중복 방지)"""
+    global _env_loaded
+    if _env_loaded:
+        return
+    
+    try:
+        # 프로젝트 루트 찾기: lawfirm_langgraph/config/ -> lawfirm_langgraph/ -> 프로젝트 루트
+        _langgraph_dir = Path(__file__).parent.parent
+        _project_root = _langgraph_dir.parent
+        
+        # 공통 로더 사용 (프로젝트 루트 .env 파일 우선 로드)
+        try:
+            import sys
+            if str(_project_root) not in sys.path:
+                sys.path.insert(0, str(_project_root))
+            from utils.env_loader import ensure_env_loaded
+            
+            # 프로젝트 루트 .env 파일 명시적으로 로드 (중복 방지)
+            ensure_env_loaded(_project_root)
+        except ImportError:
+            # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
+            root_env = _project_root / ".env"
+            langgraph_env = _langgraph_dir / ".env"
+            
+            # 프로젝트 루트 .env 먼저 로드
+            if root_env.exists():
+                load_dotenv(dotenv_path=str(root_env), override=False)
+            
+            # lawfirm_langgraph/.env 로드 (덮어쓰기)
+            if langgraph_env.exists():
+                load_dotenv(dotenv_path=str(langgraph_env), override=True)
+        
+        _env_loaded = True
+    except Exception as e:
+        # 모든 방법이 실패하면 기존 방식으로 fallback
+        try:
+            _langgraph_dir = Path(__file__).parent.parent
+            _project_root = _langgraph_dir.parent
+            
+            # 프로젝트 루트 .env 시도
+            root_env = _project_root / ".env"
+            if root_env.exists():
+                load_dotenv(dotenv_path=str(root_env), override=False)
+            
+            # lawfirm_langgraph/.env 시도
+            _env_file = _langgraph_dir / ".env"
+            if _env_file.exists():
+                load_dotenv(dotenv_path=str(_env_file), override=True)
+            
+            _env_loaded = True
+        except Exception:
+            pass
+
+# 모듈 로드 시 환경 변수 로드 (한 번만)
+_load_env_once()
+
+logger = get_logger(__name__)
+
+# 설정 캐시 (싱글톤)
+_cached_config: Optional['LangGraphConfig'] = None
+# 환경 변수 로드 상태 추적 (중복 로드 방지)
+_env_loaded: bool = False
 
 
 class CheckpointStorageType(Enum):
     """체크포인트 저장소 타입"""
     MEMORY = "memory"  # MemorySaver 사용 (기본값, 개발용)
-    SQLITE = "sqlite"  # SqliteSaver 사용 (프로덕션용)
-    POSTGRES = "postgres"
+    POSTGRES = "postgres"  # PostgresSaver 사용 (프로덕션용)
     REDIS = "redis"
     DISABLED = "disabled"  # 체크포인터 비활성화
 
@@ -56,8 +101,7 @@ class LangGraphConfig:
 
     # 체크포인트 설정
     enable_checkpoint: bool = True  # 체크포인터 활성화 여부
-    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.MEMORY  # 기본값: MemorySaver
-    checkpoint_db_path: str = "./data/checkpoints/langgraph.db"
+    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.POSTGRES  # 기본값: PostgresSaver (로컬/개발/프로덕션 모두 지원)
     checkpoint_ttl: int = 3600  # 1시간
 
     # 워크플로우 설정
@@ -70,10 +114,6 @@ class LangGraphConfig:
     google_model: str = "gemini-2.5-flash-lite"  # .env 파일의 설정에 맞게 변경
     google_api_key: str = ""
 
-    # 기존 Ollama 설정 (백업용)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:3b"
-    ollama_timeout: int = 15
 
     # LangGraph 활성화 설정
     langgraph_enabled: bool = True
@@ -86,9 +126,29 @@ class LangGraphConfig:
     langsmith_tracing: bool = True
 
     # RAG 품질 제어 설정
-    similarity_threshold: float = 0.3  # 문서 유사도 임계값
+    similarity_threshold: float = 0.75  # 문서 유사도 임계값 (높은 관련성 결과만 반환)
     max_context_length: int = 4000  # 최대 컨텍스트 길이 (문자)
     max_tokens: int = 2000  # 최대 토큰 수
+    
+    # 성능 모니터링 설정
+    slow_node_threshold: float = 10.0  # 느린 노드 경고 임계값 (초) - LLM 호출 노드는 더 오래 걸릴 수 있음
+    slow_llm_node_threshold: float = 15.0  # LLM 호출 노드 경고 임계값 (초)
+    slow_search_node_threshold: float = 30.0  # 검색/처리 노드 경고 임계값 (초)
+    
+    # 캐시 설정
+    disable_query_cache: bool = False  # 쿼리 최적화 캐시 비활성화 (환경 변수 DISABLE_QUERY_CACHE로 설정 가능)
+    disable_llm_enhancement_cache: bool = False  # LLM 쿼리 확장 캐시 비활성화 (환경 변수 DISABLE_LLM_ENHANCEMENT_CACHE로 설정 가능)
+    
+    # 재랭킹 가중치 설정 (Cross-Encoder 재랭킹)
+    rerank_original_weight: float = 0.6  # 기존 점수 가중치 (환경 변수 RERANK_ORIGINAL_WEIGHT로 설정 가능, 기본값: 0.6)
+    rerank_cross_encoder_weight: float = 0.4  # Cross-Encoder 점수 가중치 (환경 변수 RERANK_CROSS_ENCODER_WEIGHT로 설정 가능, 기본값: 0.4)
+    
+    # Embedding Model 설정 (환경 변수 EMBEDDING_MODEL에서 읽음, 없으면 기본값)
+    embedding_model: str = ""  # from_env()에서 환경 변수로 설정됨
+    # 사용 가능한 법률 특화 모델:
+    # - "woong0322/ko-legal-sbert-finetuned" (법률 특화 모델)
+    # - "snunlp/KR-SBERT-V40K-klueNLI-augSTS" (기본 한국어 SBERT)
+    # - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2" (다국어 모델)
 
     # 통계 관리 설정
     enable_statistics: bool = True
@@ -109,8 +169,29 @@ class LangGraphConfig:
     use_agentic_mode: bool = False  # Agentic AI 모드 활성화 (Tool Use/Function Calling)
 
     @classmethod
-    def from_env(cls) -> 'LangGraphConfig':
-        """환경 변수에서 설정 로드"""
+    def from_env(cls, force_reload: bool = False) -> 'LangGraphConfig':
+        """
+        환경 변수에서 설정 로드 (캐싱 적용)
+        
+        Args:
+            force_reload: True이면 캐시 무시하고 새로 로드 (기본값: False)
+            
+        Returns:
+            LangGraphConfig 인스턴스
+        """
+        # global 선언을 먼저 해야 함
+        global _cached_config
+        
+        if not force_reload and _cached_config is not None:
+            # 캐시에서 재사용 시 DEBUG 레벨로만 로그 출력 (중복 방지)
+            logger.debug("LangGraphConfig reused from cache")
+            return _cached_config
+        
+        # 환경 변수 로드 (한 번만)
+        _load_env_once()
+        
+        # 최초 로드 시에만 로그 출력
+        logger.debug("LangGraphConfig loading from environment...")
         config = cls()
 
         # LangGraph 활성화 설정
@@ -119,11 +200,9 @@ class LangGraphConfig:
         # 체크포인트 설정
         config.enable_checkpoint = os.getenv("ENABLE_CHECKPOINT", "true").lower() == "true"
         
-        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "memory")
+        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "postgres")
         if checkpoint_storage == "memory":
             config.checkpoint_storage = CheckpointStorageType.MEMORY
-        elif checkpoint_storage == "sqlite":
-            config.checkpoint_storage = CheckpointStorageType.SQLITE
         elif checkpoint_storage == "postgres":
             config.checkpoint_storage = CheckpointStorageType.POSTGRES
         elif checkpoint_storage == "redis":
@@ -131,8 +210,12 @@ class LangGraphConfig:
         elif checkpoint_storage == "disabled":
             config.checkpoint_storage = CheckpointStorageType.DISABLED
             config.enable_checkpoint = False
+        else:
+            # 알 수 없는 타입은 memory로 폴백
+            logger.warning(f"Unknown checkpoint storage type: {checkpoint_storage}, using memory")
+            config.checkpoint_storage = CheckpointStorageType.MEMORY
 
-        config.checkpoint_db_path = os.getenv("LANGGRAPH_CHECKPOINT_DB", config.checkpoint_db_path)
+        # PostgreSQL은 DATABASE_URL 또는 CHECKPOINT_DATABASE_URL을 사용
         config.checkpoint_ttl = int(os.getenv("CHECKPOINT_TTL", config.checkpoint_ttl))
 
         # 워크플로우 설정
@@ -145,11 +228,21 @@ class LangGraphConfig:
         config.google_model = os.getenv("GOOGLE_MODEL", config.google_model)
         config.google_api_key = os.getenv("GOOGLE_API_KEY", config.google_api_key)
 
-        # Ollama 설정 (백업용)
-        config.ollama_base_url = os.getenv("OLLAMA_BASE_URL", config.ollama_base_url)
-        config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
-        config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
 
+        # Embedding Model 설정 (환경 변수에서 읽음)
+        embedding_model_env = os.getenv("EMBEDDING_MODEL")
+        if embedding_model_env:
+            config.embedding_model = embedding_model_env.strip().strip('"').strip("'")
+        else:
+            # 환경 변수가 없으면 Config 클래스에서 가져오기
+            try:
+                from lawfirm_langgraph.core.utils.config import Config
+                core_config = Config()
+                config.embedding_model = core_config.embedding_model
+            except Exception:
+                # 최후의 수단: 기본값 사용
+                config.embedding_model = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+        
         # LangSmith 설정 (LangSmith 환경 변수 사용, 하위 호환성을 위해 LANGCHAIN_*도 지원)
         config.langsmith_enabled = (
             os.getenv("LANGSMITH_TRACING", "false").lower() == "true" or
@@ -179,6 +272,17 @@ class LangGraphConfig:
         config.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", config.similarity_threshold))
         config.max_context_length = int(os.getenv("MAX_CONTEXT_LENGTH", config.max_context_length))
         config.max_tokens = int(os.getenv("MAX_TOKENS", config.max_tokens))
+        
+        # 성능 모니터링 설정
+        config.slow_node_threshold = float(os.getenv("SLOW_NODE_THRESHOLD", config.slow_node_threshold))
+        config.slow_llm_node_threshold = float(os.getenv("SLOW_LLM_NODE_THRESHOLD", config.slow_llm_node_threshold))
+        config.slow_search_node_threshold = float(os.getenv("SLOW_SEARCH_NODE_THRESHOLD", config.slow_search_node_threshold))
+        
+        # 캐시 설정
+        config.disable_query_cache = os.getenv("DISABLE_QUERY_CACHE", "false").lower() == "true"
+        config.disable_llm_enhancement_cache = os.getenv("DISABLE_LLM_ENHANCEMENT_CACHE", "false").lower() == "true"
+        
+        # Embedding Model 설정은 이미 from_env() 시작 부분에서 처리됨
 
         # 통계 관리 설정
         config.enable_statistics = os.getenv("ENABLE_STATISTICS", "true").lower() == "true"
@@ -197,8 +301,28 @@ class LangGraphConfig:
         
         # Agentic AI 모드 설정
         config.use_agentic_mode = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
+        
+        # 재랭킹 가중치 설정
+        config.rerank_original_weight = float(os.getenv("RERANK_ORIGINAL_WEIGHT", str(config.rerank_original_weight)))
+        config.rerank_cross_encoder_weight = float(os.getenv("RERANK_CROSS_ENCODER_WEIGHT", str(config.rerank_cross_encoder_weight)))
+        
+        # 가중치 합이 1.0이 되도록 정규화
+        total_weight = config.rerank_original_weight + config.rerank_cross_encoder_weight
+        if total_weight > 0:
+            config.rerank_original_weight = config.rerank_original_weight / total_weight
+            config.rerank_cross_encoder_weight = config.rerank_cross_encoder_weight / total_weight
+        else:
+            # 잘못된 값이면 기본값으로 재설정
+            config.rerank_original_weight = 0.6
+            config.rerank_cross_encoder_weight = 0.4
 
-        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
+        # 중복 로그 방지: 캐시에서 반환된 경우가 아니면 로그 출력
+        if force_reload or _cached_config is None:
+            logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}, rerank_weights: original={config.rerank_original_weight:.2f}, cross_encoder={config.rerank_cross_encoder_weight:.2f}")
+        
+        # 캐시 저장 (global은 이미 함수 시작 부분에서 선언됨)
+        _cached_config = config
+        
         return config
 
     def validate(self) -> List[str]:
@@ -207,8 +331,8 @@ class LangGraphConfig:
 
         # 필수 설정 검사
         if self.langgraph_enabled:
-            if not self.checkpoint_db_path:
-                errors.append("LANGGRAPH_CHECKPOINT_DB is required when LangGraph is enabled")
+            # PostgreSQL checkpoint는 DATABASE_URL 또는 CHECKPOINT_DATABASE_URL을 사용
+            # checkpoint_db_path는 더 이상 사용하지 않음
 
             if self.checkpoint_ttl <= 0:
                 errors.append("CHECKPOINT_TTL must be positive")
@@ -219,8 +343,6 @@ class LangGraphConfig:
             if self.recursion_limit <= 0:
                 errors.append("RECURSION_LIMIT must be positive")
 
-            if self.ollama_timeout <= 0:
-                errors.append("OLLAMA_TIMEOUT must be positive")
 
         return errors
 
@@ -229,14 +351,10 @@ class LangGraphConfig:
         return {
             "enable_checkpoint": self.enable_checkpoint,
             "checkpoint_storage": self.checkpoint_storage.value,
-            "checkpoint_db_path": self.checkpoint_db_path,
             "checkpoint_ttl": self.checkpoint_ttl,
             "max_iterations": self.max_iterations,
             "recursion_limit": self.recursion_limit,
             "enable_streaming": self.enable_streaming,
-            "ollama_base_url": self.ollama_base_url,
-            "ollama_model": self.ollama_model,
-            "ollama_timeout": self.ollama_timeout,
             "langgraph_enabled": self.langgraph_enabled,
             "langfuse_enabled": self.langfuse_enabled,
             "langsmith_enabled": self.langsmith_enabled,

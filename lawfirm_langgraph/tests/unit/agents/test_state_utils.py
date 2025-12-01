@@ -6,7 +6,7 @@ State Utils 테스트
 
 import pytest
 
-from lawfirm_langgraph.core.agents.state_utils import (
+from lawfirm_langgraph.core.workflow.state.state_utils import (
     summarize_document,
     prune_retrieved_docs,
     prune_conversation_history,

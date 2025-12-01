@@ -34,8 +34,6 @@ lawfirm_langgraph/
 │   ├── data/            # 데이터 레이어
 │   ├── models/          # AI 모델
 │   └── utils/           # 유틸리티
-├── langgraph_core/      # ⚠️ DEPRECATED: 하위 호환성을 위한 re-export 모듈
-│                        # 새로운 코드에서는 core.*를 직접 사용하세요
 ├── tests/              # 테스트 파일
 │   ├── __init__.py
 │   ├── conftest.py              # pytest 설정 및 픽스처

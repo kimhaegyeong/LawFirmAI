@@ -2,6 +2,24 @@
 
 LawFirmAI 프로젝트의 스크립트들이 목적과 용도에 따라 체계적으로 분류되어 관리됩니다.
 
+## 📊 현재 상태 (2025-01-XX)
+
+- **루트 레벨 파일**: 0개 ✅ (정리 완료)
+- **카테고리별 폴더**: 19개
+- **전체 스크립트 파일**: 약 275개
+
+### ✅ 정리 완료
+
+루트 레벨 파일들이 모두 적절한 하위 폴더로 이동되었습니다:
+
+- **테스트 파일 (15개)** → `testing/` (하위 폴더별 분류)
+- **검증 파일 (3개)** → `verification/`
+- **체크 파일 (6개)** → `checks/`
+- **도구 파일 (3개)** → `tools/`
+- **기타 파일 (8개)** → `analysis/`, `migrations/`, `monitoring/`, `setup/`, `scripts/`
+
+자세한 정리 내용은 `docs/scripts_organization_plan.md`를 참조하세요.
+
 ## 📁 폴더 구조
 
 ### 📊 **data_collection/** - 데이터 수집
@@ -96,17 +114,34 @@ AI 모델의 훈련, 평가, 벡터 임베딩 생성을 담당하는 스크립�
 - `ingest_cases.py` - 판례 데이터 수집 및 저장 (참조조문 자동 추출)
 - `ingest_decisions.py` - 결정례 데이터 수집 및 저장 (참조조문 자동 추출)
 - `ingest_interpretations.py` - 해석례 데이터 수집 및 저장 (참조조문 자동 추출)
+- `ingest_aihub_from_r2.py` - AIHub 데이터 R2에서 다운로드 및 PostgreSQL 적재
+
+### ⚙️ **setup/** - 환경 설정 스크립트
+프로젝트 환경 설정 및 초기화 스크립트들
+
+- `setup_aihub_env.bat` - AIHub 데이터 적재 환경 설정 (Windows)
+- `setup_aihub_env.sh` - AIHub 데이터 적재 환경 설정 (Linux/Mac)
 
 ### 🔧 **utils/** - 유틸리티
 공통 유틸리티 및 헬퍼 함수들
 
 - `reference_statute_extractor.py` - 참조조문 추출기 (판례/결정례/해석례에서 법령 정보 추출)
 
-### 🔄 **migrations/** - 데이터베이스 마이그레이션
-데이터베이스 스키마 변경 및 데이터 마이그레이션 스크립트들
+### 🔄 **migrations/** - 데이터베이스 스키마 초기화 및 검증
+데이터베이스 스키마 초기화, 검증, 유지보수 스크립트들
 
-- `003_add_reference_statutes.sql` - 참조조문 필드 추가 마이그레이션
-- `migrate_reference_statutes.py` - 기존 데이터 참조조문 재추출 마이그레이션
+#### 구조
+- `schema/` - 초기 스키마 SQL 파일들
+- `scripts/init/` - 스키마 초기화 스크립트
+- `scripts/validate/` - 스키마 검증 스크립트
+- `scripts/maintenance/` - 유지보수 스크립트
+- `utils/` - 공통 유틸리티 모듈
+
+#### 주요 스크립트
+- `scripts/init/run_postgresql_migration.py` - PostgreSQL 메인 스키마 초기화
+- `scripts/init/init_open_law_schema.py` - Open Law 스키마 초기화
+- `scripts/validate/validate_postgresql_schema.py` - 스키마 검증
+- `scripts/validate/check_extensions.py` - 확장 확인
 
 ### 📊 **analysis/** - 데이터 분석
 데이터 품질 분석, 모델 성능 분석을 담당하는 스크립트들
@@ -132,16 +167,63 @@ AI 모델의 훈련, 평가, 벡터 임베딩 생성을 담당하는 스크립�
 - `metrics_collector.py` - 메트릭 수집
 - `quality_monitor.py` - 품질 모니터링
 
-### 🧪 **tests/** - 테스트
+### 🧪 **testing/** - 테스트
 각종 기능과 모듈의 테스트를 담당하는 스크립트들
 
-- `test_ko_sroberta_korean.py` - ko-sroberta Korean 테스트
-- `test_final_vector_embedding_performance.py` - 최종 벡터 임베딩 성능 테스트
-- `test_law_record.py` - 법률 레코드 테스트
-- `test_real_data.py` - 실제 데이터 테스트
-- `test_simple_embedding.py` - 간단한 임베딩 테스트
-- `test_vector_builder.py` - 벡터 빌더 테스트
-- `test_vector_store.py` - 벡터 저장소 테스트
+#### 통합 테스트 (`integration/`)
+- `test_v2_integration.py` - v2 통합 테스트
+- `test_faiss_version_with_real_data.py` - FAISS 버전 실제 데이터 테스트
+- `test_ingest_with_new_chunking.py` - 새 청킹 방식 수집 테스트
+
+#### 품질 검증 테스트 (`quality/`)
+- `test_reference_quality_improvements.py` - 참조 품질 개선 테스트
+- `test_reference_quality_with_workflow.py` - 워크플로우 참조 품질 테스트
+- `test_content_quality_validation.py` - 콘텐츠 품질 검증 테스트
+- `test_performance_monitoring.py` - 성능 모니터링 테스트
+
+#### 검색 테스트 (`search/`)
+- `test_search_engine_hybrid_integration.py` - 하이브리드 검색 엔진 통합 테스트
+- `test_search_quality_with_hybrid_chunking.py` - 하이브리드 청킹 검색 품질 테스트
+- `test_partial_match_improvements.py` - 부분 일치 개선 테스트
+
+#### 청킹 테스트 (`chunking/`)
+- `test_chunking_strategies.py` - 청킹 전략 테스트
+
+#### 추출 테스트 (`extraction/`)
+- `test_complex_keyword_extraction.py` - 복잡한 키워드 추출 테스트
+- `test_statute_content_extraction.py` - 법령 내용 추출 테스트
+- `test_reference_statutes_in_sources.py` - 소스 내 참조 법령 테스트
+- `test_stream_handler_integration.py` - 스트림 핸들러 통합 테스트
+
+### ✅ **verification/** - 검증
+데이터 검증 및 결과 확인 스크립트들
+
+- `verify_reference_statutes.py` - 참조 법령 검증
+- `verify_extraction_quality.py` - 추출 품질 검증
+- `verify_dynamic_chunking_results.py` - 다이나믹 청킹 결과 검증
+
+### 🔍 **checks/** - 체크
+상태 확인 및 시스템 체크 스크립트들
+
+- `check_auto_complete_status.py` - 자동 완료 상태 확인
+- `check_pytorch_threads.py` - PyTorch 스레드 확인
+- `check_re_embedding_status.ps1` - 재임베딩 상태 확인 (PowerShell)
+- `check_search_logs.py` - 검색 로그 확인
+- `check_statute_article_status.py` - 법령 조문 상태 확인
+- `check_system_specs.py` - 시스템 사양 확인
+
+### 🛠️ **tools/** - 도구
+유틸리티 도구 스크립트들
+
+- `create_test_version.py` - 테스트 버전 생성
+- `assign_version_to_existing_embeddings.py` - 기존 임베딩에 버전 할당
+- `wait_and_build_faiss_index.py` - 대기 후 FAISS 인덱스 빌드
+- `analyze_scripts.py` - 스크립트 분석 도구
+
+### 📜 **scripts/** - 래퍼 스크립트
+자동화 래퍼 스크립트들
+
+- `start_auto_complete.ps1` - 자동 완료 스크립트 시작 (PowerShell)
 
 ## 🚀 사용법
 
@@ -200,6 +282,20 @@ python scripts/ingest/ingest_decisions.py --file data/... --domain "민사법"
 
 # 해석례 수집 (참조조문 자동 추출)
 python scripts/ingest/ingest_interpretations.py --file data/... --domain "민사법"
+
+# AIHub 데이터 적재 (R2에서 다운로드)
+python scripts/ingest/ingest_aihub_from_r2.py --dataset civil --object-key aihub/civil/data.zip
+```
+
+### 환경 설정
+```bash
+# AIHub 데이터 적재 환경 설정
+# Windows
+scripts\setup\setup_aihub_env.bat
+
+# Linux/Mac
+chmod +x scripts/setup/setup_aihub_env.sh
+./scripts/setup/setup_aihub_env.sh
 ```
 
 ### 참조조문 마이그레이션

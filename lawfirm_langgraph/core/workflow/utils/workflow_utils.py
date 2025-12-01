@@ -10,15 +10,41 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.processing.extractors.extractors import ResponseExtractor
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.state_helpers import ensure_state_group, get_field, set_field
-from core.workflow.state.state_utils import (
-    MAX_PROCESSING_STEPS,
-    prune_processing_steps,
-)
-from core.classification.classifiers.question_classifier import QuestionType
-from core.agents.prompt_builders.unified_prompt_manager import LegalDomain
+try:
+    from lawfirm_langgraph.core.processing.extractors.extractors import ResponseExtractor
+except ImportError:
+    from core.processing.extractors.extractors import ResponseExtractor
+
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+
+try:
+    from lawfirm_langgraph.core.workflow.state.state_helpers import ensure_state_group, get_field, set_field
+except ImportError:
+    from core.workflow.state.state_helpers import ensure_state_group, get_field, set_field
+
+try:
+    from lawfirm_langgraph.core.workflow.state.state_utils import (
+        MAX_PROCESSING_STEPS,
+        prune_processing_steps,
+    )
+except ImportError:
+    from core.workflow.state.state_utils import (
+        MAX_PROCESSING_STEPS,
+        prune_processing_steps,
+    )
+
+try:
+    from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    from core.classification.classifiers.question_classifier import QuestionType
+
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import LegalDomain
 
 
 class WorkflowUtils:
@@ -35,6 +61,7 @@ class WorkflowUtils:
 
         state_helpers의 get_field를 사용하여 일관된 접근 제공
         개선: query_type 전용 검색 로직 추가
+        개선: answer 전용 처리 로직 추가 (딕셔너리 형태 처리)
 
         Args:
             state: State 객체 (flat 또는 nested)
@@ -49,6 +76,18 @@ class WorkflowUtils:
             return WorkflowUtils._get_query_type_enhanced(state, default)
         
         result = get_field(state, key)
+        
+        # answer 전용 처리: 딕셔너리 형태인 경우 실제 답변 문자열 추출
+        if key == "answer" and isinstance(result, dict):
+            # 딕셔너리에서 실제 답변 추출 시도
+            answer_str = result.get("answer", "") or result.get("content", "") or result.get("text", "")
+            if answer_str and isinstance(answer_str, str) and len(answer_str.strip()) >= 10:
+                return answer_str
+            # 딕셔너리 안의 answer가 비어있거나 너무 짧으면, 딕셔너리 자체를 반환하지 않고 default 반환
+            # (이렇게 하면 상위에서 다시 시도할 수 있음)
+            if not answer_str or (isinstance(answer_str, str) and len(answer_str.strip()) < 10):
+                return default
+        
         return result if result is not None else default
     
     @staticmethod

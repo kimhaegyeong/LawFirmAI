@@ -5,17 +5,21 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from typing import Dict, List, Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QueryDiversifier:
     """검색 쿼리 다변화 클래스"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def diversify_search_queries(self, query: str) -> Dict[str, List[str]]:
         """

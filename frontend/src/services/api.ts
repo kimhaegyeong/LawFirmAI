@@ -3,11 +3,11 @@
  */
 import axios, { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import logger, { apiLogger } from '../utils/logger';
+import { getEnvironmentDefaults, isDebugEnabled } from '../utils/environment';
 
-// 개발 환경에서는 명시적으로 localhost:8000 사용
-// 프로덕션 환경에서는 환경 변수 또는 기본값 사용
-const isDev = import.meta.env.DEV;
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (isDev ? 'http://localhost:8000' : 'http://localhost:8000');
+// 환경별 기본값 가져오기
+const envDefaults = getEnvironmentDefaults();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || envDefaults.apiBaseUrl;
 const API_VERSION = '/api/v1'; // API 버전 prefix
 
 /**
@@ -30,7 +30,7 @@ api.interceptors.request.use(
     const token = getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      if (import.meta.env.DEV) {
+      if (isDebugEnabled()) {
         apiLogger.debug(`Token included: ${token.substring(0, 20)}...`);
       }
     } else {
@@ -40,14 +40,14 @@ api.interceptors.request.use(
       if (anonymousSessionId) {
         config.headers['X-Anonymous-Session-Id'] = anonymousSessionId;
       }
-      if (import.meta.env.DEV) {
+      if (isDebugEnabled()) {
         apiLogger.debug('No token found, using anonymous session');
       }
     }
     
     // 디버깅: 요청 정보 로깅
     const fullURL = `${config.baseURL || ''}${config.url || ''}`;
-    if (import.meta.env.DEV) {
+    if (isDebugEnabled()) {
       apiLogger.debug(`${config.method?.toUpperCase()} ${config.url}`);
       apiLogger.debug('Base URL:', config.baseURL);
       apiLogger.debug('Full URL:', fullURL);
@@ -77,7 +77,7 @@ function getAccessToken(): string | null {
 api.interceptors.response.use(
   (response: AxiosResponse) => {
     // 디버깅: 응답 정보 로깅
-    if (import.meta.env.DEV) {
+    if (isDebugEnabled()) {
       apiLogger.debug(`${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
       // CORS 헤더 확인
       const corsHeaders = {
@@ -113,8 +113,16 @@ api.interceptors.response.use(
           logger.error('접근 권한이 없습니다.');
           break;
         case 404:
-          // 리소스 없음
-          logger.error('요청한 리소스를 찾을 수 없습니다.');
+          // 리소스 없음 (세션 조회의 경우 정상적인 상황일 수 있으므로 디버그 레벨로 변경)
+          // 세션 조회의 경우 getSession에서 null을 반환하므로 여기서는 로깅만
+          if (error.config?.url?.includes('/sessions/')) {
+            // 세션 조회는 정상적인 상황일 수 있으므로 디버그 레벨
+            if (isDebugEnabled()) {
+              apiLogger.debug(`Session not found: ${error.config.url}`);
+            }
+          } else {
+            logger.error('요청한 리소스를 찾을 수 없습니다.');
+          }
           break;
         case 429: {
           // Rate Limit 또는 익명 사용자 제한 초과
