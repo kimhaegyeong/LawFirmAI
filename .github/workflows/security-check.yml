@@ -23,11 +23,13 @@ jobs:
         run: |
           cd frontend
           npm run lint
+        continue-on-error: false
       
       - name: Run TypeScript type check
         run: |
           cd frontend
           npm run type-check
+        continue-on-error: false
       
       - name: Run npm audit
         run: |
