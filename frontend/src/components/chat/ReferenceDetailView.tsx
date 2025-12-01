@@ -79,14 +79,20 @@ function getDocumentName(reference: LegalReferenceDetail): string {
 }
 
 function getDocumentTypeUrlType(documentType: DocumentType): LawUrlType {
-  const mapping: Record<DocumentType, LawUrlType> = {
-    law: 'statute',
-    precedent: 'case',
-    decision: 'decision',
-    interpretation: 'interpretation',
-    regulation: 'statute',
-  };
-  return mapping[documentType];
+  switch (documentType) {
+    case 'law':
+      return 'statute';
+    case 'precedent':
+      return 'case';
+    case 'decision':
+      return 'decision';
+    case 'interpretation':
+      return 'interpretation';
+    case 'regulation':
+      return 'statute';
+    default:
+      return 'statute';
+  }
 }
 
 function buildMetadataForUrl(
@@ -171,7 +177,26 @@ function Header({
   onBack: () => void;
   onClose?: () => void;
 }) {
-  const config = DOCUMENT_TYPE_CONFIG[documentType];
+  let config = DOCUMENT_TYPE_CONFIG.law;
+  switch (documentType) {
+    case 'law':
+      config = DOCUMENT_TYPE_CONFIG.law;
+      break;
+    case 'precedent':
+      config = DOCUMENT_TYPE_CONFIG.precedent;
+      break;
+    case 'decision':
+      config = DOCUMENT_TYPE_CONFIG.decision;
+      break;
+    case 'interpretation':
+      config = DOCUMENT_TYPE_CONFIG.interpretation;
+      break;
+    case 'regulation':
+      config = DOCUMENT_TYPE_CONFIG.regulation;
+      break;
+    default:
+      config = DOCUMENT_TYPE_CONFIG.law;
+  }
   const Icon = config.icon;
   
   return (
@@ -203,7 +228,26 @@ function Header({
 }
 
 function DocumentTypeBadge({ documentType }: { documentType: DocumentType }) {
-  const config = DOCUMENT_TYPE_CONFIG[documentType];
+  let config = DOCUMENT_TYPE_CONFIG.law;
+  switch (documentType) {
+    case 'law':
+      config = DOCUMENT_TYPE_CONFIG.law;
+      break;
+    case 'precedent':
+      config = DOCUMENT_TYPE_CONFIG.precedent;
+      break;
+    case 'decision':
+      config = DOCUMENT_TYPE_CONFIG.decision;
+      break;
+    case 'interpretation':
+      config = DOCUMENT_TYPE_CONFIG.interpretation;
+      break;
+    case 'regulation':
+      config = DOCUMENT_TYPE_CONFIG.regulation;
+      break;
+    default:
+      config = DOCUMENT_TYPE_CONFIG.law;
+  }
   
   return (
     <div className="flex items-center gap-2">
