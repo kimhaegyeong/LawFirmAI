@@ -294,7 +294,6 @@ lawfirm_langgraph/core/models/
 ```
 lawfirm_langgraph/core/utils/
 ├── langgraph_config.py              # LangGraph 설정
-├── langchain_config.py              # LangChain 설정
 ├── logger.py                         # 로깅
 ├── config.py                        # 일반 설정
 └── ... (기타 유틸리티)

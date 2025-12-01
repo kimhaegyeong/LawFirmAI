@@ -49,7 +49,6 @@
 
 ### 6. AI 모델 시스템
 - **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
-- **LangChain 기반**: 안정적인 LLM 관리
 - **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
 - **UnifiedPromptManager**: 법률 도메인별 프롬프트 통합 관리
 - **Gemini 클라이언트**: `lawfirm_langgraph/core/services/gemini_client.py`
@@ -76,7 +75,6 @@
 
 ### AI/ML
 - **LangGraph**: State 기반 워크플로우 관리
-- **LangChain**: LLM 통합 프레임워크
 - **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
 - **Sentence-BERT**: 텍스트 임베딩 모델 (snunlp/KR-SBERT-V40K-klueNLI-augSTS)
 - **FAISS**: 벡터 검색 엔진 (외부 인덱스 지원, 버전 관리)
