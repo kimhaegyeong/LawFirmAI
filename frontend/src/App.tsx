@@ -152,7 +152,11 @@ function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const sessionIdParam = urlParams.get('session_id');
       
-      if (sessionIdParam) {
+      // OAuth2 콜백인 경우 session_id는 토큰 교환용이므로 채팅 세션 ID로 사용하지 않음
+      const hasOAuthCallback = urlParams.get('code') && urlParams.get('state');
+      
+      if (sessionIdParam && !hasOAuthCallback) {
+        // OAuth2 콜백이 아닌 경우에만 채팅 세션 ID로 사용
         // URL 파라미터에서 세션 ID가 있으면 해당 세션 로드
         const loadSessionFromUrl = async () => {
           try {
@@ -207,7 +211,7 @@ function App() {
         loadSessionFromUrl();
       }
     }
-  }, [loadSession, isAuthenticated, login, showToast]);
+  }, [loadSession, isAuthenticated, login, showToast, newSession]);
 
   // 세션 변경 시 메시지 로드
   useEffect(() => {

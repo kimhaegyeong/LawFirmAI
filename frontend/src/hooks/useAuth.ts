@@ -17,6 +17,7 @@ import type { UserInfo } from '../types/auth';
 let globalLoadingPromise: Promise<UserInfo | null> | null = null;
 let globalHasLoaded = false;
 let globalInitialMountStarted = false; // 초기 마운트 시작 여부 추적
+let globalUserInfo: UserInfo | null = null; // 전역 사용자 정보 저장
 
 export function useAuth() {
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -44,14 +45,17 @@ export function useAuth() {
    */
   const loadUser = useCallback(async () => {
     // 전역적으로 이미 로드되었으면 즉시 스킵 (가장 먼저 체크)
-    if (globalHasLoaded) {
-      logger.debug('loadUser: User already loaded globally, skipping duplicate call');
-      // 이미 로드된 사용자 정보가 있으면 상태 동기화
-      if (userRef.current) {
-        setUser(userRef.current);
-        setIsAuthenticated(isAuthenticatedRef.current);
-        hasLoadedUser.current = true;
-      }
+    if (globalHasLoaded && globalUserInfo) {
+      logger.debug('loadUser: User already loaded globally, syncing state', {
+        userId: globalUserInfo.user_id,
+        authenticated: globalUserInfo.authenticated
+      });
+      // 전역 사용자 정보로 상태 동기화
+      setUser(globalUserInfo);
+      setIsAuthenticated(globalUserInfo.authenticated);
+      hasLoadedUser.current = true;
+      userRef.current = globalUserInfo;
+      isAuthenticatedRef.current = globalUserInfo.authenticated;
       return;
     }
 
@@ -107,9 +111,11 @@ export function useAuth() {
         try {
           const userInfo = await getCurrentUser();
           globalHasLoaded = true;
+          globalUserInfo = userInfo; // 전역 사용자 정보 저장
           return userInfo;
         } catch (err) {
           globalHasLoaded = false;
+          globalUserInfo = null;
           throw err;
         } finally {
           globalLoadingPromise = null;
@@ -120,9 +126,28 @@ export function useAuth() {
     try {
       const userInfo = await globalLoadingPromise;
       if (userInfo) {
+        logger.info('loadUser: User info received', { 
+          authenticated: userInfo.authenticated, 
+          userId: userInfo.user_id,
+          email: userInfo.email,
+          name: userInfo.name 
+        });
+        
+        // 전역 사용자 정보 업데이트
+        globalUserInfo = userInfo;
+        
         setUser(userInfo);
         setIsAuthenticated(userInfo.authenticated);
         hasLoadedUser.current = true;
+        userRef.current = userInfo;
+        isAuthenticatedRef.current = userInfo.authenticated;
+        
+        // 상태 업데이트 확인을 위한 로그
+        logger.info('loadUser: State updated', { 
+          authenticated: userInfo.authenticated,
+          hasUser: !!userInfo,
+          userId: userInfo.user_id 
+        });
         
         // handleCallback이 실행 중이면 토큰을 삭제하지 않음
         if (!userInfo.authenticated && !isHandlingCallback.current) {
@@ -130,10 +155,13 @@ export function useAuth() {
           logoutService();
           hasLoadedUser.current = false;
           globalHasLoaded = false;
+          globalUserInfo = null;
         } else if (!userInfo.authenticated && isHandlingCallback.current) {
           logger.debug('loadUser: Callback handling in progress, not clearing tokens');
         }
       } else {
+        logger.warn('loadUser: User info is null or undefined');
+        globalUserInfo = null;
         setIsAuthenticated(false);
         hasLoadedUser.current = true;
       }
@@ -257,9 +285,11 @@ export function useAuth() {
           try {
             const info = await getCurrentUser();
             globalHasLoaded = true;
+            globalUserInfo = info; // 전역 사용자 정보 저장
             return info;
           } catch (err) {
             globalHasLoaded = false;
+            globalUserInfo = null;
             throw err;
           } finally {
             globalLoadingPromise = null;
@@ -280,10 +310,13 @@ export function useAuth() {
       }
       
       // 사용자 정보 설정 (retryLoadUser useEffect가 실행되지 않도록)
+      globalUserInfo = userInfo; // 전역 사용자 정보 저장
       setUser(userInfo);
       setIsAuthenticated(userInfo.authenticated);
       hasLoadedUser.current = true;
       globalHasLoaded = true;
+      userRef.current = userInfo;
+      isAuthenticatedRef.current = userInfo.authenticated;
       logger.info('Login successful');
       
       // handleCallback에서 이미 사용자 정보를 가져왔으므로, 
@@ -317,9 +350,12 @@ export function useAuth() {
     setError(null);
     hasLoadedUser.current = false;
     globalHasLoaded = false;
+    globalUserInfo = null;
     globalLoadingPromise = null;
     globalInitialMountStarted = false;
     isInitialMountComplete.current = false;
+    userRef.current = null;
+    isAuthenticatedRef.current = false;
     // 로그아웃 후 페이지 새로고침하여 상태 초기화
     window.location.href = '/';
   }, []);
@@ -373,14 +409,14 @@ export function useAuth() {
             setIsLoading(false);
             isInitialMountComplete.current = true;
           });
-        } else if (globalHasLoaded) {
+        } else if (globalHasLoaded && globalUserInfo) {
           setIsLoading(false);
           isInitialMountComplete.current = true;
-          if (userRef.current) {
-            setUser(userRef.current);
-            setIsAuthenticated(isAuthenticatedRef.current);
-            hasLoadedUser.current = true;
-          }
+          setUser(globalUserInfo);
+          setIsAuthenticated(globalUserInfo.authenticated);
+          hasLoadedUser.current = true;
+          userRef.current = globalUserInfo;
+          isAuthenticatedRef.current = globalUserInfo.authenticated;
         } else {
           setIsLoading(false);
           isInitialMountComplete.current = true;
@@ -392,16 +428,19 @@ export function useAuth() {
       globalInitialMountStarted = true;
       
       // 전역적으로 이미 로드되었으면 스킵 (가장 먼저 체크)
-      if (globalHasLoaded) {
-        logger.debug('Initial mount: User already loaded globally, skipping');
+      if (globalHasLoaded && globalUserInfo) {
+        logger.debug('Initial mount: User already loaded globally, syncing state', {
+          userId: globalUserInfo.user_id,
+          authenticated: globalUserInfo.authenticated
+        });
         setIsLoading(false);
         isInitialMountComplete.current = true;
-        // 이미 로드된 사용자 정보가 있으면 상태 동기화
-        if (userRef.current) {
-          setUser(userRef.current);
-          setIsAuthenticated(isAuthenticatedRef.current);
-          hasLoadedUser.current = true;
-        }
+        // 전역 사용자 정보로 상태 동기화
+        setUser(globalUserInfo);
+        setIsAuthenticated(globalUserInfo.authenticated);
+        hasLoadedUser.current = true;
+        userRef.current = globalUserInfo;
+        isAuthenticatedRef.current = globalUserInfo.authenticated;
         return;
       }
       // 이미 로딩 중이면 스킵
@@ -409,9 +448,12 @@ export function useAuth() {
         logger.debug('Initial mount: Already loading, waiting for existing call');
         globalLoadingPromise.then((userInfo) => {
           if (userInfo) {
+            globalUserInfo = userInfo;
             setUser(userInfo);
             setIsAuthenticated(userInfo.authenticated);
             hasLoadedUser.current = true;
+            userRef.current = userInfo;
+            isAuthenticatedRef.current = userInfo.authenticated;
           }
           setIsLoading(false);
           isInitialMountComplete.current = true;
@@ -422,12 +464,14 @@ export function useAuth() {
         return;
       }
       if (checkAuthenticated()) {
+        logger.info('Initial mount: Token found, loading user info');
         loadUser().catch((err) => {
           logger.error('Failed to load user on mount:', err);
         }).finally(() => {
           isInitialMountComplete.current = true;
         });
       } else {
+        logger.debug('Initial mount: No token found, user not authenticated');
         setIsLoading(false);
         setIsAuthenticated(false);
         setUser(null);
@@ -448,8 +492,19 @@ export function useAuth() {
     }
 
     // 전역적으로 이미 로드되었으면 스킵
-    if (globalHasLoaded) {
-      logger.debug('retryLoadUser: User already loaded globally, skipping');
+    if (globalHasLoaded && globalUserInfo) {
+      logger.debug('retryLoadUser: User already loaded globally, syncing state', {
+        userId: globalUserInfo.user_id,
+        authenticated: globalUserInfo.authenticated
+      });
+      // 전역 사용자 정보로 상태 동기화
+      if (!user || user.user_id !== globalUserInfo.user_id) {
+        setUser(globalUserInfo);
+        setIsAuthenticated(globalUserInfo.authenticated);
+        hasLoadedUser.current = true;
+        userRef.current = globalUserInfo;
+        isAuthenticatedRef.current = globalUserInfo.authenticated;
+      }
       return;
     }
 
@@ -473,12 +528,28 @@ export function useAuth() {
 
     // 토큰이 있고 사용자 정보가 없을 때만 실행
     if (checkAuthenticated() && !user) {
-      logger.debug('retryLoadUser: Token found but no user, loading user info');
+      logger.info('retryLoadUser: Token found but no user, loading user info', {
+        hasToken: checkAuthenticated(),
+        hasUser: !!user,
+        isAuthenticated,
+        isLoading
+      });
       loadUser().catch((err) => {
         logger.error('Failed to reload user:', err);
       });
+    } else if (checkAuthenticated() && user && !isAuthenticated) {
+      // 토큰이 있고 사용자 정보가 있지만 인증 상태가 false인 경우
+      // user.authenticated를 확인하여 상태 동기화
+      logger.warn('retryLoadUser: User exists but isAuthenticated is false, syncing state', {
+        userAuthenticated: user.authenticated,
+        isAuthenticated,
+        userId: user.user_id
+      });
+      if (user.authenticated) {
+        setIsAuthenticated(true);
+      }
     }
-  }, [user, loadUser, isLoading]);
+  }, [user, loadUser, isLoading, isAuthenticated]);
 
   return {
     user,

@@ -126,26 +126,14 @@ export async function* sendStreamingChatMessage(
         
         // ERR_INCOMPLETE_CHUNKED_ENCODING 오류는 스트림이 완전히 종료되지 않았다고 브라우저가 판단할 때 발생
         // 서버에서 done 이벤트를 보내지 않았거나 연결이 중간에 끊겼을 때 발생할 수 있음
-        // 이 경우 경고만 로깅하고 실제 오류로 처리하지 않음 (데이터는 이미 처리되었을 수 있음)
+        // 이 경우 사용자에게 오류 메시지를 표시하도록 예외를 던짐
         if (errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
             errorMessage.includes('incomplete') ||
             errorMessage.includes('chunked') ||
             errorName.includes('ERR_INCOMPLETE')) {
-          logger.warn('[Stream] ERR_INCOMPLETE_CHUNKED_ENCODING detected, but data may have been processed correctly');
-          // 이 오류는 브라우저 콘솔에만 경고로 표시되고 실제 동작에는 문제가 없을 수 있음
-          // 하지만 서버에서 done 이벤트를 보내도록 수정했으므로 이 오류가 발생하지 않아야 함
-          // 불완전한 스트림 오류는 경고로 처리
-          // 실제로는 데이터가 정상적으로 처리되었을 수 있음
-          if (import.meta.env.DEV) {
-            logger.debug('[SSE] Fetch error (incomplete chunked encoding, but data may be processed):', {
-              error: fetchError,
-              message: errorMessage,
-              name: errorName
-            });
-          }
-          // 조용히 처리하고 사용자에게는 성공으로 표시
-          // 빈 제너레이터 반환 (이미 처리된 데이터가 있을 수 있음)
-          return;
+          logger.warn('[Stream] ERR_INCOMPLETE_CHUNKED_ENCODING detected');
+          // 사용자에게 오류 메시지를 표시하도록 예외를 던짐
+          throw new Error('ERR_INCOMPLETE_CHUNKED_ENCODING');
         }
       }
       throw fetchError;
@@ -197,94 +185,26 @@ export async function* sendStreamingChatMessage(
                readError.message.includes('incomplete'));
           
           if (isIncompleteError) {
-            // 네트워크 오류 또는 불완전한 스트림 오류
-            // 이미 받은 데이터는 정상적으로 처리
-            // ERR_INCOMPLETE_CHUNKED_ENCODING은 브라우저 콘솔에 경고로 표시되지만
-            // 실제로는 데이터가 정상적으로 처리되었을 수 있음
-            if (import.meta.env.DEV) {
-              logger.debug('[SSE] Stream reading error (incomplete chunked encoding, but data may be processed):', readError);
-            }
-            
-            // 버퍼에 남은 데이터 처리
-            if (buffer.trim()) {
-              const lines = buffer.split('\n');
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  const content = line.slice(6);
-                  if (content !== '[스트리밍 완료]' && content !== '[완료]' && content.trim() !== '') {
-                    try {
-                      // JSON 파싱 시도
-                      JSON.parse(content);
-                      yield content;
-                    } catch (e) {
-                      // 파싱 실패 시 그대로 yield (하위 호환성)
-                      yield content;
-                    }
-                  }
-                } else if (line.trim() !== '' && !line.startsWith('event:') && !line.startsWith('id:')) {
-                  // SSE 형식이 아닌 경우도 처리 (하위 호환성)
-                  try {
-                    JSON.parse(line);
-                    yield line;
-                  } catch (e) {
-                    // 파싱 실패 시 무시
-                  }
-                }
-              }
-            }
-            
-            // JSON 버퍼에 남은 데이터 처리
-            if (jsonBuffer.trim()) {
-              try {
-                // JSON 파싱 시도
-                const parsed = JSON.parse(jsonBuffer);
-                // "done" 이벤트가 있으면 yield
-                if (parsed.type === 'done' || parsed.type === 'final') {
-                  yield jsonBuffer;
-                } else {
-                  yield jsonBuffer;
-                }
-              } catch (e) {
-                // 파싱 실패 시 그대로 yield (하위 호환성)
-                if (jsonBuffer !== '[스트리밍 완료]' && jsonBuffer !== '[완료]' && jsonBuffer.trim() !== '') {
-                  yield jsonBuffer;
-                }
-              }
-            }
-            
-            // 리더 닫기 시도
-            if (!readerClosed) {
-              try {
-                readerClosed = true;
-                reader.releaseLock();
-              } catch (e) {
-                // 이미 닫혔거나 닫을 수 없는 경우 무시
-              }
-            }
-            
-            // ERR_INCOMPLETE_CHUNKED_ENCODING 오류는 정상적으로 처리되었으므로
-            // 예외를 다시 던지지 않고 종료
-            // 브라우저 콘솔에 경고가 표시되지만 실제 동작에는 문제가 없음
-            if (import.meta.env.DEV) {
-              logger.debug('[SSE] Stream ended with incomplete error, but data was processed');
-            }
-            return; // break 대신 return 사용하여 함수 종료
-          } else {
-            // 다른 오류는 다시 던짐
-            logger.error('[SSE] Error reading from stream:', readError);
-            
-            // 리더 닫기 시도
-            if (!readerClosed) {
-              try {
-                readerClosed = true;
-                reader.releaseLock();
-              } catch (e) {
-                // 이미 닫혔거나 닫을 수 없는 경우 무시
-              }
-            }
-            
-            throw readError; // 다른 오류는 다시 던짐
+            logger.warn('[Stream] ERR_INCOMPLETE_CHUNKED_ENCODING detected during stream reading');
+            // 사용자에게 오류 메시지를 표시하도록 예외를 던짐
+            // 버퍼에 남은 데이터는 이미 처리되었을 수 있지만, 오류를 사용자에게 알려야 함
+            throw new Error('ERR_INCOMPLETE_CHUNKED_ENCODING');
           }
+          
+          // 다른 읽기 오류는 그대로 전파
+          logger.error('[SSE] Error reading from stream:', readError);
+          
+          // 리더 닫기 시도
+          if (!readerClosed) {
+            try {
+              readerClosed = true;
+              reader.releaseLock();
+            } catch (e) {
+              // 이미 닫혔거나 닫을 수 없는 경우 무시
+            }
+          }
+          
+          throw readError;
         }
         
         const { done, value } = readResult;
@@ -555,71 +475,9 @@ export async function* sendStreamingChatMessage(
            error.message.includes('chunked'));
       
       if (isIncompleteError) {
-        // ERR_INCOMPLETE_CHUNKED_ENCODING은 브라우저 콘솔에 경고로 표시되지만
-        // 실제로는 데이터가 정상적으로 처리되었을 수 있음
-        if (import.meta.env.DEV) {
-          logger.debug('[SSE] Network error during streaming (incomplete chunked encoding, but data may be processed):', error);
-        }
-        
-        // 버퍼에 남은 데이터 처리
-        if (buffer.trim()) {
-          const lines = buffer.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const content = line.slice(6);
-              if (content !== '[스트리밍 완료]' && content !== '[완료]' && content.trim() !== '') {
-                try {
-                  const parsed = JSON.parse(content);
-                  // "done" 또는 "final" 이벤트 확인
-                  if (parsed.type === 'done' || parsed.type === 'final') {
-                    yield content;
-                  } else {
-                    yield content;
-                  }
-                } catch (e) {
-                  // 파싱 실패 시 그대로 yield (하위 호환성)
-                  yield content;
-                }
-              }
-            }
-          }
-        }
-        
-        // JSON 버퍼에 남은 데이터 처리
-        if (jsonBuffer.trim()) {
-          try {
-            const parsed = JSON.parse(jsonBuffer);
-            // "done" 또는 "final" 이벤트 확인
-            if (parsed.type === 'done' || parsed.type === 'final') {
-              yield jsonBuffer;
-            } else {
-              yield jsonBuffer;
-            }
-          } catch (e) {
-            // 파싱 실패 시 그대로 yield (하위 호환성)
-            if (jsonBuffer !== '[스트리밍 완료]' && jsonBuffer !== '[완료]' && jsonBuffer.trim() !== '') {
-              yield jsonBuffer;
-            }
-          }
-        }
-        
-        // 리더 명시적으로 닫기
-        if (!readerClosed && reader) {
-          try {
-            readerClosed = true;
-            reader.releaseLock();
-          } catch (e) {
-            // 이미 닫혔거나 닫을 수 없는 경우 무시
-          }
-        }
-        
-        if (import.meta.env.DEV) {
-          logger.debug('[SSE] Stream ended with incomplete error, but data was processed');
-        }
-        
-        // ERR_INCOMPLETE_CHUNKED_ENCODING은 정상적으로 처리되었으므로 예외를 다시 던지지 않음
-        // 브라우저 콘솔에 경고가 표시되지만 실제 동작에는 문제가 없음
-        return;
+        logger.warn('[Stream] ERR_INCOMPLETE_CHUNKED_ENCODING detected during network error');
+        // 사용자에게 오류 메시지를 표시하도록 예외를 던짐
+        throw new Error('ERR_INCOMPLETE_CHUNKED_ENCODING');
       } else {
         // 리더 닫기 시도
         if (!readerClosed && reader) {

@@ -102,12 +102,31 @@ export function useSession() {
       setCurrentSession(session);
       return session;
     } catch (err) {
+      // 400 오류는 OAuth2 세션 ID를 채팅 세션 ID로 사용한 경우일 수 있음
+      const apiError = err as Error & { status?: number; message?: string };
+      if (apiError?.status === 400 && 
+          (apiError?.message?.includes('OAuth2') || 
+           apiError?.message?.includes('Invalid session ID format'))) {
+        console.warn(`[useSession] Invalid session ID (possibly OAuth2 session ID): ${sessionId}. Creating a new session.`);
+        try {
+          const newSessionData = await createSession({});
+          setCurrentSession(newSessionData);
+          return newSessionData;
+        } catch (createErr) {
+          const error = createErr instanceof Error ? createErr : new Error('새 세션을 생성할 수 없습니다.');
+          console.error('[useSession] Failed to create new session after 400:', createErr);
+          setError(error);
+          throw error;
+        }
+      }
+      
       const error = err instanceof Error ? err : new Error('세션을 불러올 수 없습니다.');
       setError(error);
       throw error;
     } finally {
       setIsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createSession]);
 
   /**

@@ -159,14 +159,32 @@ export function OriginalDocumentViewer({ source, onClose }: OriginalDocumentView
           )}
 
           <div className="prose max-w-none">
-            {selectedChunkIndex !== null && chunks && chunks.chunks[selectedChunkIndex] ? (
+            {selectedChunkIndex !== null && chunks?.chunks && 
+             selectedChunkIndex >= 0 && selectedChunkIndex < chunks.chunks.length ? (
               <div>
-                <h4 className="text-md font-semibold mb-2">
-                  선택된 청크 ({chunks.chunks[selectedChunkIndex].chunk_size_category || '청크'})
-                </h4>
-                <div className="bg-gray-50 p-4 rounded border">
-                  <pre className="whitespace-pre-wrap text-sm">{chunks.chunks[selectedChunkIndex].text}</pre>
-                </div>
+                {(() => {
+                  // 안전한 배열 접근: 인덱스 범위가 이미 검증됨
+                  const chunksArray = chunks.chunks;
+                  const validIndex = selectedChunkIndex;
+                  // 배열 접근은 이미 범위 검증이 완료되었으므로 안전함
+                  let selectedChunk;
+                  if (validIndex >= 0 && validIndex < chunksArray.length) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    selectedChunk = chunksArray[validIndex];
+                  } else {
+                    selectedChunk = null;
+                  }
+                  return (
+                    <>
+                      <h4 className="text-md font-semibold mb-2">
+                        선택된 청크 ({selectedChunk?.chunk_size_category || '청크'})
+                      </h4>
+                      <div className="bg-gray-50 p-4 rounded border">
+                        <pre className="whitespace-pre-wrap text-sm">{selectedChunk?.text || ''}</pre>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ) : (
               <div>

@@ -223,32 +223,23 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
         setCurrentProgress(null);
         setProgressHistory([]);
 
-        // done 이벤트 타임아웃 설정 (90초 = 90000ms)
-        const DONE_EVENT_TIMEOUT = 90000;
+        // done 이벤트 타임아웃 설정 (5분 = 300000ms)
+        // 타임아웃 발생 시에도 사용자에게 메시지를 표시하지 않음
+        const DONE_EVENT_TIMEOUT = 300000;
         const timeoutId = setTimeout(() => {
           const elapsed = Date.now() - streamStartTime;
           const timeSinceLastEvent = Date.now() - lastEventTime;
           
           if (import.meta.env.DEV) {
-            logger.warn('[Stream] Done event timeout:', {
+            logger.warn('[Stream] Done event timeout (silent):', {
               assistantMessageId,
               elapsed,
               timeSinceLastEvent,
             });
           }
 
-          // 타임아웃 에러 표시
-          addError(assistantMessageId, {
-            type: ErrorType.TIMEOUT,
-            message: '응답 생성이 90초 이상 지연되고 있습니다. 네트워크 연결을 확인하거나 다시 시도해주세요.',
-          });
-
-          showToast({
-            message: '응답 생성이 지연되고 있습니다. 네트워크 연결을 확인해주세요.',
-            type: 'error',
-          });
-
-          // 스트리밍 상태 해제
+          // 타임아웃 발생 시 사용자에게 메시지를 표시하지 않음
+          // 스트리밍 상태만 해제
           if (streamingMessageId === assistantMessageId) {
             setStreamingId(null);
           }
@@ -1341,6 +1332,12 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
           errorMessage.includes('무료로 3회 체험')
         )) {
           errorMessage = '요청이 너무 많습니다. 잠시 후 다시 시도하세요.';
+        }
+
+        // ERR_INCOMPLETE_CHUNKED_ENCODING 오류에 대한 특별 처리
+        if (errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
+            errorMessage.includes('incomplete')) {
+          errorMessage = '스트리밍 연결이 완료되지 않았습니다. 잠시 후 다시 시도해주세요.';
         }
 
         const streamError = toStreamError(error, isAuthenticated);

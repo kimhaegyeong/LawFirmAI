@@ -90,7 +90,7 @@ export function classifyStreamError(error: Error): StreamError {
       error.message.includes('incomplete')) {
     return {
       type: ErrorType.NETWORK,
-      message: '스트리밍 연결이 완료되지 않았습니다. 서버에서 스트리밍이 제대로 종료되지 않았을 수 있습니다.',
+      message: '스트리밍 연결이 완료되지 않았습니다. 잠시 후 다시 시도해주세요.',
       originalError: error,
       canRetry: true,
     };

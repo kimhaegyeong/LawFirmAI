@@ -56,7 +56,7 @@ export const isDebugEnabled = () =>
 export const getEnvironmentDefaults = () => {
   const env = getCurrentEnvironment();
   
-  const defaults = {
+  const defaults: Record<Environment, { apiBaseUrl: string; logLevel: string; enableDebugTools: boolean }> = {
     [Environment.LOCAL]: {
       apiBaseUrl: 'http://localhost:8000',
       logLevel: 'debug',
@@ -74,6 +74,11 @@ export const getEnvironmentDefaults = () => {
     },
   };
   
-  return defaults[env];
+  // 타입 안전한 환경 접근
+  if (env in defaults) {
+    return defaults[env as Environment];
+  }
+  // 기본값으로 LOCAL 환경 설정 반환
+  return defaults[Environment.LOCAL];
 };
 

@@ -55,25 +55,37 @@ export async function createSession(data: SessionCreate): Promise<Session> {
 /**
  * 세션 조회
  * 404 오류 발생 시 null을 반환하여 호출자가 새 세션을 생성할 수 있도록 함
+ * 400 오류 (OAuth2 세션 ID 등 잘못된 형식)도 null을 반환하여 새 세션 생성 가능하도록 함
  */
 export async function getSession(sessionId: string): Promise<Session | null> {
   try {
     const response = await api.get<Session>(`/sessions/${sessionId}`);
     return response.data;
   } catch (error) {
-    // 404 오류인 경우 null 반환 (호출자가 새 세션을 생성할 수 있도록)
+    // 404 또는 400 오류인 경우 null 반환 (호출자가 새 세션을 생성할 수 있도록)
     // axios 에러에서 직접 status 확인 (extractApiError 호출 전에 확인)
     if (error && typeof error === 'object' && 'response' in error) {
       const axiosError = error as { response?: { status?: number } };
-      if (axiosError.response?.status === 404) {
+      const status = axiosError.response?.status;
+      if (status === 404) {
         // 404는 정상적인 상황 (세션이 존재하지 않음)이므로 조용히 처리
+        return null;
+      }
+      if (status === 400) {
+        // 400은 잘못된 세션 ID 형식 (예: OAuth2 세션 ID)이므로 null 반환
         return null;
       }
     }
     
-    // 404가 아닌 다른 오류는 그대로 throw
-    const apiError = extractApiError(error) as Error & { status?: number };
+    // extractApiError로 변환 후 다시 확인
+    const apiError = extractApiError(error) as Error & { status?: number; message?: string };
     if (apiError.status === 404) {
+      return null;
+    }
+    if (apiError.status === 400 && 
+        (apiError.message?.includes('OAuth2') || 
+         apiError.message?.includes('Invalid session ID format'))) {
+      // OAuth2 세션 ID를 채팅 세션 ID로 사용한 경우 null 반환
       return null;
     }
     throw apiError;

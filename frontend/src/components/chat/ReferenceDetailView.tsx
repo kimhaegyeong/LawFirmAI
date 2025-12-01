@@ -46,6 +46,9 @@ export function ReferenceDetailView({
   // sourceDetail 또는 reference에서 정보 추출 (useMemo로 최적화)
   const docMetadata = useMemo(() => sourceDetail?.metadata || {}, [sourceDetail?.metadata]);
   
+  // 해석례 여부 확인 (타입 안전성을 위해)
+  const isInterpretation: boolean = documentType === 'interpretation';
+  
   // URL 생성 (useMemo로 최적화)
   const generatedUrl = useMemo(() => {
     if (sourceDetail?.url) {
@@ -329,44 +332,41 @@ export function ReferenceDetailView({
             </div>
           )}
 
-          {(
-            documentType === 'interpretation' &&
-            (
-              <div className="space-y-3">
-                <InfoField
-                  label="제목"
-                  value={reference.title || sourceDetail?.title || docMetadata.title}
-                  fieldName="title"
-                />
-                <InfoField
-                  label="기관"
-                  value={reference.org || sourceDetail?.org || docMetadata.org}
-                  fieldName="org"
-                />
-                <InfoField
-                  label="일련번호"
-                  value={reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
-                  fieldName="interpretation_number"
-                />
-                <InfoField
-                  label="법령해석례일련번호"
-                  value={
-                    getMetadataValue(docMetadata.interpretation_serial_number) ||
-                    getMetadataValue(docMetadata.법령해석례일련번호) ||
-                    getMetadataValue(docMetadata.해석ID) ||
-                    getMetadataValue(docMetadata.expcId)
-                  }
-                  fieldName="interpretation_serial_number"
-                  isMonospace
-                />
-                <InfoField
-                  label="회신일"
-                  value={sourceDetail?.response_date || getMetadataValue(docMetadata.response_date)}
-                  fieldName="response_date"
-                />
-              </div>
-            )
-          ) as any}
+          {(documentType as string) === 'interpretation' ? (
+            <div className="space-y-3">
+              <InfoField
+                label="제목"
+                value={reference.title || sourceDetail?.title || docMetadata.title}
+                fieldName="title"
+              />
+              <InfoField
+                label="기관"
+                value={reference.org || sourceDetail?.org || docMetadata.org}
+                fieldName="org"
+              />
+              <InfoField
+                label="일련번호"
+                value={reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
+                fieldName="interpretation_number"
+              />
+              <InfoField
+                label="법령해석례일련번호"
+                value={
+                  getMetadataValue(docMetadata.interpretation_serial_number) ||
+                  getMetadataValue(docMetadata.법령해석례일련번호) ||
+                  getMetadataValue(docMetadata.해석ID) ||
+                  getMetadataValue(docMetadata.expcId)
+                }
+                fieldName="interpretation_serial_number"
+                isMonospace
+              />
+              <InfoField
+                label="회신일"
+                value={sourceDetail?.response_date || getMetadataValue(docMetadata.response_date)}
+                fieldName="response_date"
+              />
+            </div>
+          ) : null}
 
           {/* 기타 정보 */}
           {documentType === 'regulation' && (reference.org || sourceDetail?.org || docMetadata.org) && (
@@ -377,6 +377,43 @@ export function ReferenceDetailView({
               </p>
             </div>
           )}
+
+          {/* 해석례 정보 */}
+          {isInterpretation ? (
+            <div className="space-y-3">
+              <InfoField
+                label="제목"
+                value={reference.title || sourceDetail?.title || docMetadata.title}
+                fieldName="title"
+              />
+              <InfoField
+                label="기관"
+                value={reference.org || sourceDetail?.org || docMetadata.org}
+                fieldName="org"
+              />
+              <InfoField
+                label="일련번호"
+                value={reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
+                fieldName="interpretation_number"
+              />
+              <InfoField
+                label="법령해석례일련번호"
+                value={
+                  getMetadataValue(docMetadata.interpretation_serial_number) ||
+                  getMetadataValue(docMetadata.법령해석례일련번호) ||
+                  getMetadataValue(docMetadata.해석ID) ||
+                  getMetadataValue(docMetadata.expcId)
+                }
+                fieldName="interpretation_serial_number"
+                isMonospace
+              />
+              <InfoField
+                label="회신일"
+                value={sourceDetail?.response_date || getMetadataValue(docMetadata.response_date)}
+                fieldName="response_date"
+              />
+            </div>
+          ) : null}
 
           {/* 원문 링크 및 검색 링크 */}
           <div className="pt-3 border-t border-slate-200 space-y-2">
