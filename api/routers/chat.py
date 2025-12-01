@@ -200,58 +200,27 @@ def _maybe_generate_session_title(session_id: str):
 
 
 def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> dict:
-    """sources 이벤트 생성 (related_questions 제외, sources_by_type 포함)"""
+    """sources 이벤트 생성 (sources_by_type 사용)"""
     try:
-        sources_detail = metadata.get("sources_detail", [])
-        
-        # sources_by_type이 없으면 생성 (판례의 참조 법령 포함)
+        # sources_by_type이 있으면 직접 사용
         sources_by_type = metadata.get("sources_by_type")
-        if not sources_by_type and sources_detail:
-            try:
-                from api.services.chat_service import get_chat_service
-                chat_service = get_chat_service()
-                if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
-                    sources_by_type = chat_service.sources_extractor._get_sources_by_type_with_reference_statutes(sources_detail)
-                    logger.debug(f"[_create_sources_event] Generated sources_by_type with reference statutes: {len(sources_by_type.get('statutes_articles', []))} statutes")
-            except Exception as e:
-                logger.warning(f"[_create_sources_event] Failed to generate sources_by_type: {e}", exc_info=True)
-                # 예외 발생 시 기본 sources_by_type 생성 (참조 법령 없이)
+        if not sources_by_type:
+            # retrieved_docs에서 직접 생성 시도
+            retrieved_docs = metadata.get("retrieved_docs", [])
+            if retrieved_docs and isinstance(retrieved_docs, list):
                 try:
+                    from api.services.chat_service import get_chat_service
                     chat_service = get_chat_service()
                     if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
-                        from api.utils.source_type_mapper import get_default_sources_by_type
-                        sources_by_type = chat_service.sources_extractor._get_sources_by_type(sources_detail) if sources_detail else get_default_sources_by_type()
-                    else:
-                        sources_by_type = None
-                except Exception as fallback_error:
-                    logger.error(f"[_create_sources_event] Failed to generate fallback sources_by_type: {fallback_error}", exc_info=True)
-                    sources_by_type = None
-        # sources_by_type이 이미 있는 경우에도 참조 법령 추가 (중복 체크)
-        elif sources_by_type and sources_detail:
-            try:
-                from api.services.chat_service import get_chat_service
-                chat_service = get_chat_service()
-                if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
-                    extracted_statutes = chat_service.sources_extractor._extract_statutes_from_reference_clauses(sources_detail)
-                    
-                    if extracted_statutes:
-                        existing_statutes = sources_by_type.get("statutes_articles", [])
-                        existing_keys = {
-                            f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
-                            for s in existing_statutes if isinstance(s, dict)
-                        }
-                        
-                        for statute in extracted_statutes:
-                            statute_key = f"{statute.get('statute_name', '')}_{statute.get('article_no', '')}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
-                            if statute_key not in existing_keys:
-                                existing_statutes.append(statute)
-                                existing_keys.add(statute_key)
-                        
-                        sources_by_type["statutes_articles"] = existing_statutes
-                        logger.debug(f"[_create_sources_event] Added {len(extracted_statutes)} statutes from reference clauses to existing sources_by_type")
-            except Exception as e:
-                logger.warning(f"[_create_sources_event] Failed to add reference statutes to existing sources_by_type: {e}", exc_info=True)
-                # 예외 발생 시 기존 sources_by_type 유지 (참조 법령 추가 실패해도 계속 진행)
+                        sources_by_type = chat_service.sources_extractor._generate_sources_by_type_from_retrieved_docs(retrieved_docs)
+                        logger.debug(f"[_create_sources_event] Generated sources_by_type from retrieved_docs: {len(sources_by_type.get('statutes_articles', []))} statutes")
+                except Exception as e:
+                    logger.warning(f"[_create_sources_event] Failed to generate sources_by_type from retrieved_docs: {e}", exc_info=True)
+                    from api.utils.source_type_mapper import get_default_sources_by_type
+                    sources_by_type = get_default_sources_by_type()
+            else:
+                from api.utils.source_type_mapper import get_default_sources_by_type
+                sources_by_type = get_default_sources_by_type()
         
         # sources_by_type의 각 항목 정리 (클라이언트용)
         cleaned_sources_by_type = None
@@ -318,25 +287,18 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
             "metadata": {
                 "message_id": message_id or metadata.get("message_id"),
                 "sources_by_type": cleaned_sources_by_type,  # 유일한 필요한 필드 (정리됨)
-                # sources_detail도 포함 (done 이벤트와 일관성 유지, 프론트엔드에서 즉시 사용 가능)
-                "sources_detail": sources_detail,  # 실제 값 사용 (빈 배열 아님)
-                # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
-                "sources": [],  # deprecated: sources_by_type에서 재구성 가능
-                "legal_references": [],  # deprecated: sources_by_type에서 재구성 가능
             },
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"[_create_sources_event] Critical error creating sources event: {e}", exc_info=True)
         # 최종 예외 발생 시에도 기본 이벤트 반환 (스트림 중단 방지)
+        from api.utils.source_type_mapper import get_default_sources_by_type
         return {
             "type": "sources",
             "metadata": {
                 "message_id": message_id or metadata.get("message_id"),
-                "sources_by_type": None,
-                "sources": metadata.get("sources", []),
-                "legal_references": metadata.get("legal_references", []),
-                "sources_detail": metadata.get("sources_detail", []),
+                "sources_by_type": get_default_sources_by_type(),
             },
             "timestamp": datetime.now().isoformat()
         }
@@ -345,20 +307,18 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
 def _has_sources_data(metadata: dict) -> bool:
     """metadata에 sources 데이터가 있는지 확인"""
     return bool(
-        metadata.get("sources") or
-        metadata.get("legal_references") or
-        metadata.get("sources_detail") or
+        metadata.get("sources_by_type") or
+        metadata.get("retrieved_docs") or
         metadata.get("related_questions")
     )
 
 
 def _has_actual_sources(metadata: dict) -> bool:
-    """metadata에 실제 참고자료(sources, legal_references (deprecated), sources_detail)가 있는지 확인
+    """metadata에 실제 참고자료(sources_by_type 또는 retrieved_docs)가 있는지 확인
     related_questions는 제외"""
     return bool(
-        metadata.get("sources") or
-        metadata.get("legal_references") or  # deprecated: Phase 4에서 제거 예정
-        metadata.get("sources_detail")
+        metadata.get("sources_by_type") or
+        metadata.get("retrieved_docs")
     )
 
 
@@ -390,6 +350,8 @@ async def _generate_stream_response(
     
     try:
         # stream_final_answer를 직접 호출하여 chunk 단위 스트리밍
+        stream_final_answer_raised_exception = False
+        stream_final_answer_exception = None
         try:
             async for chunk in chat_service.stream_final_answer(
                 message=message,
@@ -446,42 +408,65 @@ async def _generate_stream_response(
                         
                         # chunk를 그대로 yield (클라이언트로 전송)
                         yield chunk
-                    except (GeneratorExit, asyncio.CancelledError) as cancel_error:
-                        # 클라이언트가 연결을 끊은 경우
-                        logger.debug(f"[_generate_stream_response] Client disconnected, stopping stream: {cancel_error}")
+                    except GeneratorExit:
+                        # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                        logger.debug("[_generate_stream_response] Generator exit while yielding chunk")
                         stream_completed = True
-                        raise  # 상위로 전파하여 제너레이터 종료
+                        raise
+                    except asyncio.CancelledError:
+                        # 클라이언트가 연결을 끊은 경우
+                        logger.debug("[_generate_stream_response] Client disconnected, stopping stream")
+                        stream_completed = True
+                        raise
                     except Exception as yield_error:
                         logger.warning(f"[_generate_stream_response] Error yielding chunk: {yield_error}")
                         # yield 오류는 무시하고 계속 진행
         except asyncio.CancelledError:
             logger.warning("⚠️ [_generate_stream_response] 워크플로우 스트리밍이 취소되었습니다 (CancelledError)")
-            # 에러 이벤트 전송
-            try:
-                error_event = {
-                    "type": "error",
-                    "content": "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
-                    "metadata": {"error": True, "cancelled": True},
-                    "timestamp": datetime.now().isoformat()
-                }
-                yield format_sse_event(error_event)
-                
-                # ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 done 이벤트도 전송
-                if not done_event_sent:
+            # CancelledError는 클라이언트 연결이 끊어진 경우이므로 yield 시도하지 않음
+            stream_completed = True
+            raise  # 상위로 전파
+        except Exception as stream_error:
+            # stream_final_answer에서 예외 발생 (CancelledError가 아닌 일반 예외)
+            stream_final_answer_raised_exception = True
+            stream_final_answer_exception = stream_error
+            logger.error(f"[_generate_stream_response] stream_final_answer raised exception: {stream_error}", exc_info=True)
+            # stream_final_answer가 이미 done 이벤트를 보냈을 수 있으므로 확인
+            # 하지만 예외가 발생했다는 것은 done 이벤트가 전송되지 않았을 가능성이 높음
+            # 따라서 done 이벤트를 보내도록 시도
+            if not done_event_sent:
+                try:
+                    error_event = {
+                        "type": "error",
+                        "content": f"[오류] 스트리밍 처리 중 오류가 발생했습니다: {str(stream_error)}",
+                        "metadata": {
+                            "error": True,
+                            "error_type": type(stream_error).__name__
+                        },
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield format_sse_event(error_event)
+                    
                     done_event = {
                         "type": "done",
                         "timestamp": datetime.now().isoformat()
                     }
                     yield format_sse_event(done_event)
                     done_event_sent = True
-                stream_completed = True
-            except (GeneratorExit, asyncio.CancelledError):
-                # 이미 연결이 끊어진 경우 무시
-                stream_completed = True
-            except Exception as cancel_error:
-                logger.warning(f"Error sending error/done event after cancellation: {cancel_error}")
-                stream_completed = True
-            raise  # 상위로 전파
+                    stream_completed = True
+                    logger.debug("[_generate_stream_response] Error and done event sent after stream_final_answer exception")
+                except GeneratorExit:
+                    # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                    logger.debug("[_generate_stream_response] Generator exit while sending error/done event")
+                    stream_completed = True
+                    raise
+                except asyncio.CancelledError:
+                    logger.debug("[_generate_stream_response] Client disconnected while sending error/done event")
+                    stream_completed = True
+                    raise
+                except Exception as yield_error:
+                    logger.error(f"[_generate_stream_response] Failed to send error/done event: {yield_error}")
+                    stream_completed = True
         
         # full_answer가 비어있으면 경고 로그
         if not full_answer:
@@ -501,9 +486,8 @@ async def _generate_stream_response(
                         message_id=None
                     )
                     if sources_data:
-                        metadata["sources"] = sources_data.get("sources", [])
-                        metadata["legal_references"] = sources_data.get("legal_references", [])
-                        metadata["sources_detail"] = sources_data.get("sources_detail", [])
+                        metadata["sources_by_type"] = sources_data.get("sources_by_type")
+                        metadata["retrieved_docs"] = sources_data.get("retrieved_docs", [])
                 except Exception as e:
                     logger.warning(f"Failed to get sources after stream: {e}")
             
@@ -532,7 +516,7 @@ async def _generate_stream_response(
             else:
                 logger.debug("[_generate_stream_response] Stream cache is disabled or not available")
             
-            # sources, legal_references, sources_detail 중 하나라도 있으면 sources 이벤트 전송
+            # sources_by_type 또는 retrieved_docs가 있으면 sources 이벤트 전송
             # related_questions가 없어도 실제 참고자료가 있으면 전송
             # 중요: sources 이벤트는 done 이벤트 전에 전송되어야 함
             sources_event_sent = False
@@ -540,10 +524,8 @@ async def _generate_stream_response(
             # metadata 상세 로깅
             logger.info(
                 f"[_generate_stream_response] Sources 이벤트 생성 시도: "
-                f"sources={len(metadata.get('sources', []))}, "
-                f"legal_references={len(metadata.get('legal_references', []))}, "
-                f"sources_detail={len(metadata.get('sources_detail', []))}, "
                 f"sources_by_type={bool(metadata.get('sources_by_type'))}, "
+                f"retrieved_docs={len(metadata.get('retrieved_docs', []))}, "
                 f"has_actual_sources={_has_actual_sources(metadata)}"
             )
             
@@ -562,7 +544,11 @@ async def _generate_stream_response(
                     
                     yield format_sse_event(sources_event)
                     sources_event_sent = True
-                except (GeneratorExit, asyncio.CancelledError):
+                except GeneratorExit:
+                    # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                    logger.debug("[_generate_stream_response] Generator exit while sending sources event")
+                    raise
+                except asyncio.CancelledError:
                     # 클라이언트가 연결을 끊은 경우
                     logger.debug("[_generate_stream_response] Client disconnected while sending sources event")
                     raise
@@ -600,7 +586,12 @@ async def _generate_stream_response(
                 done_event_sent = True
                 stream_completed = True
                 logger.debug("[_generate_stream_response] Done event sent at end of stream")
-            except (GeneratorExit, asyncio.CancelledError):
+            except GeneratorExit:
+                # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                logger.debug("[_generate_stream_response] Generator exit while sending done event")
+                stream_completed = True
+                raise
+            except asyncio.CancelledError:
                 logger.debug("[_generate_stream_response] Client disconnected while sending done event")
                 stream_completed = True
                 raise
@@ -612,11 +603,16 @@ async def _generate_stream_response(
             logger.debug("[_generate_stream_response] Done event already sent by stream_final_answer")
             stream_completed = True
         
-    except (GeneratorExit, asyncio.CancelledError) as cancel_error:
-        # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
-        logger.debug(f"[_generate_stream_response] Client disconnected or cancelled: {cancel_error}")
+    except GeneratorExit:
+        # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 yield를 시도하면 안 됨
+        logger.debug("[_generate_stream_response] Generator exit (client disconnected)")
         stream_completed = True
-        # GeneratorExit와 CancelledError는 상위로 전파하여 제너레이터 종료
+        # GeneratorExit는 바로 raise (yield 시도하지 않음)
+        raise
+    except asyncio.CancelledError:
+        # CancelledError는 클라이언트 연결이 끊어진 경우
+        logger.debug("[_generate_stream_response] Client disconnected or cancelled")
+        stream_completed = True
         raise
     except Exception as e:
         logger.error(f"Error in _generate_stream_response: {e}", exc_info=True)
@@ -644,7 +640,12 @@ async def _generate_stream_response(
                     yield format_sse_event(done_event)
                     done_event_sent = True
                     stream_completed = True
-                except (GeneratorExit, asyncio.CancelledError):
+                except GeneratorExit:
+                    # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                    logger.debug("[_generate_stream_response] Generator exit while sending error done event")
+                    stream_completed = True
+                    raise
+                except asyncio.CancelledError:
                     logger.debug("[_generate_stream_response] Client disconnected while sending error done event")
                     stream_completed = True
                     raise
@@ -653,7 +654,12 @@ async def _generate_stream_response(
                     stream_completed = True
             else:
                 stream_completed = True
-        except (GeneratorExit, asyncio.CancelledError):
+        except GeneratorExit:
+            # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+            logger.debug("[_generate_stream_response] Generator exit during error handling")
+            stream_completed = True
+            raise
+        except asyncio.CancelledError:
             logger.debug("[_generate_stream_response] Client disconnected or cancelled during error handling")
             stream_completed = True
             raise
@@ -913,7 +919,11 @@ async def chat_stream(
                         yield format_sse_event(done_event)
                         
                         _maybe_generate_session_title(stream_request.session_id)
-                    except (GeneratorExit, asyncio.CancelledError):
+                    except GeneratorExit:
+                        # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 return
+                        logger.debug("[cached_stream] Generator exit")
+                        return
+                    except asyncio.CancelledError:
                         logger.debug("[cached_stream] Client disconnected or cancelled")
                         return
                     except Exception as e:
@@ -1043,17 +1053,22 @@ async def chat_stream(
                             yield format_sse_event(done_event)
                             done_event_sent = True
                             logger.debug("[stream_with_quota_management] Sent done event after stream completion")
-                        except (GeneratorExit, asyncio.CancelledError):
+                        except GeneratorExit:
+                            # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                            raise
+                        except asyncio.CancelledError:
                             # 이미 연결이 끊어진 경우 무시
                             pass
                         except Exception as done_error:
                             logger.warning(f"[stream_with_quota_management] Failed to send done event after completion: {done_error}")
                             
-                except (GeneratorExit, asyncio.CancelledError):
+                except GeneratorExit:
+                    # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                    logger.debug("[stream_with_quota_management] Generator exit (client disconnected)")
+                    raise
+                except asyncio.CancelledError:
                     # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
                     logger.debug("[stream_with_quota_management] Client disconnected or cancelled")
-                    # GeneratorExit나 CancelledError는 제너레이터가 이미 종료된 상태이므로 yield 불가
-                    # done 이벤트는 전송하지 않음 (이미 연결이 끊어짐)
                     raise
                 except Exception as e:
                     # 에러 발생 시 쿼터 증가하지 않음
@@ -1078,7 +1093,10 @@ async def chat_stream(
                             }
                             yield format_sse_event(done_event)
                             done_event_sent = True
-                        except (GeneratorExit, asyncio.CancelledError):
+                        except GeneratorExit:
+                            # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 raise
+                            raise
+                        except asyncio.CancelledError:
                             # 이미 연결이 끊어진 경우 무시
                             pass
                         except Exception as yield_error:
@@ -1134,7 +1152,11 @@ async def chat_stream(
                     "X-Stream-Status": "cancelled",
                 }
             )
-        except (GeneratorExit, asyncio.CancelledError):
+        except GeneratorExit:
+            # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 바로 return
+            logger.debug("[chat_stream] Generator exit")
+            return
+        except asyncio.CancelledError:
             logger.debug("[chat_stream] Client disconnected or cancelled")
             # 취소된 경우 쿼터 증가하지 않음
             return

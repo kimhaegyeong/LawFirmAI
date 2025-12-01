@@ -316,6 +316,28 @@ async def get_session(
     """세션 상세 조회"""
     try:
         logger.info(f"[get_session] Request received: session_id={session_id}, user_id={current_user.get('user_id') if current_user else None}")
+        
+        # 세션 ID 형식 검증 (UUID 형식인지 확인)
+        import re
+        uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+        
+        # UUID 형식이 아닌 경우, OAuth2 토큰 교환 세션 ID일 가능성 확인
+        if not uuid_pattern.match(session_id):
+            # OAuth2 토큰 교환 세션 ID는 base64url 형식 (약 43자, - 또는 _ 포함 가능)
+            # secrets.token_urlsafe(32)로 생성됨
+            base64url_pattern = re.compile(r'^[A-Za-z0-9_-]{30,50}$')
+            
+            if base64url_pattern.match(session_id):
+                # OAuth2 토큰 스토어에서 확인 (간접적으로 확인)
+                # 실제로는 데이터베이스 조회 후 없으면 OAuth2 세션 ID일 가능성 높음
+                logger.warning(f"[get_session] Non-UUID session ID format detected: {session_id[:20]}... (might be OAuth2 token exchange session ID)")
+            else:
+                logger.warning(f"[get_session] Invalid session ID format: {session_id} (expected UUID format)")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid session ID format. Expected UUID format for chat sessions, got: {session_id[:50]}..."
+                )
+        
         session = session_service.get_session(session_id, check_expiry=False)  # 만료 확인 비활성화하여 디버깅
         if not session:
             logger.warning(f"[get_session] Session not found in database: {session_id}")
@@ -329,11 +351,33 @@ async def get_session(
                     logger.error(f"[get_session] Session exists in DB but get_session() returned None! session_id={session_id}, title={direct_check.title}")
                 else:
                     logger.info(f"[get_session] Session does not exist in database: {session_id}")
+                    
+                    # UUID 형식이 아니고 데이터베이스에 없으면 OAuth2 토큰 교환 세션 ID일 가능성
+                    if not uuid_pattern.match(session_id):
+                        base64url_pattern = re.compile(r'^[A-Za-z0-9_-]{30,50}$')
+                        if base64url_pattern.match(session_id):
+                            logger.warning(f"[get_session] This appears to be an OAuth2 token exchange session ID, not a chat session ID: {session_id[:20]}...")
+                            raise HTTPException(
+                                status_code=400,
+                                detail="This appears to be an OAuth2 token exchange session ID, not a chat session ID. Please create a new chat session or use a valid chat session ID."
+                            )
+                    
+                    # 유사한 세션 ID 검색 (디버깅용)
+                    similar_sessions = db.query(SessionModel).filter(
+                        SessionModel.session_id.like(f"%{session_id[:10]}%")
+                    ).limit(5).all()
+                    if similar_sessions:
+                        logger.debug(f"[get_session] Found {len(similar_sessions)} similar session IDs (first 10 chars match)")
+            except HTTPException:
+                raise
             except Exception as db_error:
                 logger.error(f"[get_session] Error checking database directly: {db_error}", exc_info=True)
             finally:
                 db.close()
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Session not found. The session ID '{session_id[:50]}...' does not exist in the database."
+            )
         
         # 소유자 확인
         if current_user.get("authenticated"):

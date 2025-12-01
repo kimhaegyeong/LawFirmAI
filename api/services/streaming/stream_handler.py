@@ -264,13 +264,19 @@ class StreamHandler:
                 except Exception as iter_error:
                     logger.error(f"[_process_stream_events] ⚠️ astream_events() 제너레이터 생성 실패: {iter_error}", exc_info=True)
                     # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 제너레이터 생성 실패해도 done 이벤트 전송
+                    # done 이벤트를 보낸 후에는 raise하지 않고 정상 종료 (스트림은 완료됨)
                     try:
+                        error_event = self.event_builder.create_error_event(str(iter_error))
+                        yield format_sse_event(error_event)
                         minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(iter_error)}
                         yield format_sse_event(minimal_done)
-                        logger.debug("[_process_stream_events] Minimal done event sent after generator creation error")
-                    except Exception:
-                        pass
-                    raise
+                        logger.debug("[_process_stream_events] Error and done event sent after generator creation error")
+                    except (GeneratorExit, asyncio.CancelledError):
+                        # 클라이언트가 연결을 끊은 경우
+                        raise
+                    except Exception as yield_error:
+                        logger.error(f"[_process_stream_events] Failed to send error/done event: {yield_error}")
+                    # 예외는 로깅만 하고 raise하지 않음 (done 이벤트를 보냈으므로 스트림은 정상 종료)
                 
                 try:
                     async for event in astream_events_iter:
@@ -370,14 +376,19 @@ class StreamHandler:
                 except Exception as iter_error:
                     logger.error(f"[_process_stream_events] ⚠️ astream_events() 이터레이터 실행 중 오류: {iter_error}", exc_info=True)
                     # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                    # done 이벤트를 보낸 후에는 raise하지 않고 정상 종료 (스트림은 완료됨)
                     try:
+                        error_event = self.event_builder.create_error_event(str(iter_error))
+                        yield format_sse_event(error_event)
                         minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(iter_error)}
                         yield format_sse_event(minimal_done)
-                        logger.debug("[_process_stream_events] Minimal done event sent after iterator error")
-                    except Exception:
-                        pass
-                    # 예외는 상위로 전파하되, done 이벤트는 이미 전송했으므로 스트림은 정상 종료됨
-                    raise
+                        logger.debug("[_process_stream_events] Error and done event sent after iterator error")
+                    except (GeneratorExit, asyncio.CancelledError):
+                        # 클라이언트가 연결을 끊은 경우
+                        raise
+                    except Exception as yield_error:
+                        logger.error(f"[_process_stream_events] Failed to send error/done event: {yield_error}")
+                    # 예외는 로깅만 하고 raise하지 않음 (done 이벤트를 보냈으므로 스트림은 정상 종료)
                 
                 logger.info(
                     f"[stream_final_answer] ✅ astream_events() 루프 완료: "
@@ -483,23 +494,36 @@ class StreamHandler:
                 except Exception as ve2:
                     logger.error(f"[_process_stream_events] 구버전 API도 실패: {ve2}", exc_info=True)
                     # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                    # done 이벤트를 보낸 후에는 raise하지 않고 정상 종료 (스트림은 완료됨)
                     try:
+                        error_event = self.event_builder.create_error_event(str(ve2))
+                        yield format_sse_event(error_event)
                         minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(ve2)}
                         yield format_sse_event(minimal_done)
-                        logger.debug("[_process_stream_events] Minimal done event sent after v2 API error")
-                    except Exception:
-                        pass
-                    raise
+                        logger.debug("[_process_stream_events] Error and done event sent after v2 API error")
+                    except (GeneratorExit, asyncio.CancelledError):
+                        # 클라이언트가 연결을 끊은 경우
+                        raise
+                    except Exception as yield_error:
+                        logger.error(f"[_process_stream_events] Failed to send error/done event: {yield_error}")
+                    # 예외는 로깅만 하고 raise하지 않음 (done 이벤트를 보냈으므로 스트림은 정상 종료)
             except Exception as e:
                 logger.error(f"[_process_stream_events] ⚠️ astream_events() 실행 중 예상치 못한 오류: {e}", exc_info=True)
                 # 🔥 ERR_INCOMPLETE_CHUNKED_ENCODING 방지: 예외 발생해도 done 이벤트 전송
+                # done 이벤트를 보낸 후에는 raise하지 않고 정상 종료 (스트림은 완료됨)
                 try:
+                    error_event = self.event_builder.create_error_event(str(e))
+                    yield format_sse_event(error_event)
                     minimal_done = {"type": "done", "timestamp": datetime.now().isoformat(), "error": str(e)}
                     yield format_sse_event(minimal_done)
-                    logger.debug("[_process_stream_events] Minimal done event sent after unexpected error")
-                except Exception:
-                    pass
-                raise
+                    logger.debug("[_process_stream_events] Error and done event sent after unexpected error")
+                except (GeneratorExit, asyncio.CancelledError):
+                    # 클라이언트가 연결을 끊은 경우
+                    raise
+                except Exception as yield_error:
+                    logger.error(f"[_process_stream_events] Failed to send error/done event: {yield_error}")
+                # 예외는 로깅만 하고 raise하지 않음 (done 이벤트를 보냈으므로 스트림은 정상 종료)
+                # 상위에서 예외를 처리할 필요가 있으면 로깅된 예외 정보를 사용
         
         except asyncio.CancelledError:
             logger.debug("[stream_final_answer] Stream cancelled (client disconnected)")
@@ -511,13 +535,8 @@ class StreamHandler:
                 pass  # 이미 연결이 끊어진 경우 무시
             raise
         except GeneratorExit:
+            # GeneratorExit는 제너레이터가 이미 종료된 상태이므로 yield를 시도하면 안 됨
             logger.debug("[stream_final_answer] Generator exit (client disconnected)")
-            # 🔥 개선: ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 done 이벤트 전송 시도
-            try:
-                done_event = self.event_builder.create_done_event("", {})
-                yield format_sse_event(done_event)
-            except Exception:
-                pass  # 이미 연결이 끊어진 경우 무시
             raise
         except Exception as e:
             logger.error(f"[stream_final_answer] Unexpected error: {e}", exc_info=True)
@@ -888,16 +907,17 @@ class StreamHandler:
                                 except Exception as e:
                                     logger.warning(f"[stream_final_answer] Failed to extract legal_references: {e}", exc_info=True)
                             
-                            # sources_detail이 없을 때만 추출 시도
-                            if not sources_detail:
-                                try:
-                                    sources_detail_data = self.sources_extractor._extract_sources_detail(temp_state)
-                                    if sources_detail_data:
-                                        sources_detail = sources_detail_data
-                                        state_values["sources_detail"] = sources_detail_data
-                                        logger.info(f"[stream_final_answer] ✅ Extracted {len(sources_detail)} sources_detail from retrieved_docs")
-                                except Exception as e:
-                                    logger.warning(f"[stream_final_answer] Failed to extract sources_detail: {e}", exc_info=True)
+                            # sources_by_type이 없을 때만 retrieved_docs에서 생성 시도
+                            sources_by_type = temp_state.get("sources_by_type")
+                            if not sources_by_type:
+                                retrieved_docs = temp_state.get("retrieved_docs", [])
+                                if retrieved_docs and isinstance(retrieved_docs, list):
+                                    try:
+                                        sources_by_type = self.sources_extractor._generate_sources_by_type_from_retrieved_docs(retrieved_docs)
+                                        temp_state["sources_by_type"] = sources_by_type
+                                        logger.info(f"[stream_final_answer] ✅ Generated sources_by_type from {len(retrieved_docs)} retrieved_docs")
+                                    except Exception as e:
+                                        logger.warning(f"[stream_final_answer] Failed to generate sources_by_type from retrieved_docs: {e}", exc_info=True)
                             
                             logger.debug(
                                 f"[stream_final_answer] Sources extraction result: "
@@ -1161,18 +1181,54 @@ class StreamHandler:
         # 타겟 노드 확인 및 토큰 추출
         if self.node_filter.is_target_node(event_name, event_parent, last_node_name):
             logger.info(f"[stream_final_answer] ✅ 타겟 노드 확인됨: {event_name}, 토큰 추출 시작")
+            
+            # 🔥 [END] 키워드가 이미 발견되었는지 확인
+            # 이미 [END] 이후라면 더 이상 전송하지 않음
+            if '[END]' in full_answer.upper():
+                logger.debug(
+                    f"[stream_final_answer] ⚠️ [END] 키워드가 이미 발견되어 추가 토큰 전송 중단"
+                )
+                return False, full_answer, stream_event_count, None
+            
             token = self.token_extractor.extract_from_event(event_data)
             
             if token:
                 stream_event_count += 1
                 updated_full_answer = full_answer + token
-                logger.info(
-                    f"[stream_final_answer] ✅ 토큰 전송 #{stream_event_count}: "
-                    f"token_length={len(token)}, "
-                    f"token_preview={token[:50]}..., "
-                    f"full_answer_length={len(updated_full_answer)}"
-                )
-                return True, updated_full_answer, stream_event_count, token
+                
+                # 🔥 [END] 키워드 이후 내용 필터링
+                # 대소문자 구분 없이 [END] 키워드 찾기
+                end_keyword_pos = -1
+                updated_full_answer_upper = updated_full_answer.upper()
+                for keyword in ['[END]', '[END', 'END]']:
+                    pos = updated_full_answer_upper.find(keyword.upper())
+                    if pos != -1:
+                        end_keyword_pos = pos
+                        break
+                
+                if end_keyword_pos != -1:
+                    # [END] 키워드가 발견되면 그 이후 내용은 제외
+                    updated_full_answer = updated_full_answer[:end_keyword_pos].rstrip()
+                    token = updated_full_answer[len(full_answer):] if len(updated_full_answer) > len(full_answer) else ""
+                    logger.info(
+                        f"[stream_final_answer] ✅ [END] 키워드 발견, 이후 내용 필터링 "
+                        f"(위치: {end_keyword_pos}, 필터링된 토큰 길이: {len(token)})"
+                    )
+                
+                if token:
+                    logger.info(
+                        f"[stream_final_answer] ✅ 토큰 전송 #{stream_event_count}: "
+                        f"token_length={len(token)}, "
+                        f"token_preview={token[:50]}..., "
+                        f"full_answer_length={len(updated_full_answer)}"
+                    )
+                    return True, updated_full_answer, stream_event_count, token
+                else:
+                    # [END] 이후 내용만 있어서 필터링됨
+                    logger.debug(
+                        f"[stream_final_answer] ⚠️ [END] 이후 내용만 있어 토큰 전송 중단"
+                    )
+                    return False, updated_full_answer, stream_event_count, None
             else:
                 logger.warning(
                     f"[stream_final_answer] ⚠️ 토큰 추출 실패: "

@@ -11,7 +11,8 @@ import ast
 
 from api.utils.source_type_mapper import (
     convert_sources_by_type_to_table_based,
-    get_default_sources_by_type
+    get_default_sources_by_type,
+    normalize_source_type
 )
 from api.utils.langgraph_config_helper import create_langgraph_config
 
@@ -94,7 +95,7 @@ class SourceTypeProcessor:
         return " ".join(source_parts)
     
     @staticmethod
-    def process_case_paragraph(doc: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[str]:
+    def process_precedent_content(doc: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[str]:
         """판례 처리"""
         court = doc.get("court") or metadata.get("court")
         casenames = doc.get("casenames") or metadata.get("casenames")
@@ -206,7 +207,7 @@ class SourceTypeProcessor:
         if source_lower in SourcesExtractorConstants.INVALID_SOURCES:
             return False
         
-        if source_type and source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+        if source_type and source_type in ["statute_article", "precedent_content", "decision_paragraph", "interpretation_paragraph"]:
             return len(source_lower) >= SourcesExtractorConstants.MIN_SOURCE_LENGTH_TYPED
         else:
             return len(source_lower) >= SourcesExtractorConstants.MIN_SOURCE_LENGTH
@@ -277,7 +278,7 @@ class RelatedQuestionsLLMGenerator:
                         statute_summary.append(f"- {statute} 제{article}조")
                     else:
                         statute_summary.append(f"- {statute}")
-            elif detail_type == "case_paragraph":
+            elif detail_type == "precedent_content":
                 court = meta.get("court", "")
                 case_name = meta.get("case_name", "") or meta.get("casenames", "")
                 if court or case_name:
@@ -457,30 +458,30 @@ class SourcesExtractor:
         if not isinstance(metadata, dict):
             return ExtractionResult.empty().to_dict()
         
-        sources_detail = metadata.get("sources_detail", []) if isinstance(metadata.get("sources_detail"), list) else []
-        if sources_detail:
-            sources_detail = self._normalize_sources_detail(sources_detail)
+        # sources_by_type이 있으면 직접 사용
+        sources_by_type = metadata.get("sources_by_type")
+        if not sources_by_type:
+            # sources_by_type이 없으면 retrieved_docs에서 생성 시도
+            retrieved_docs = metadata.get("retrieved_docs", [])
+            if retrieved_docs and isinstance(retrieved_docs, list):
+                sources_by_type = self._generate_sources_by_type_from_retrieved_docs(retrieved_docs)
+            else:
+                # fallback: sources_detail이 있으면 사용 (하위 호환성)
+                sources_detail = metadata.get("sources_detail", []) if isinstance(metadata.get("sources_detail"), list) else []
+                if sources_detail:
+                    sources_detail = self._normalize_sources_detail(sources_detail)
+                    sources_by_type = self._get_sources_by_type_with_reference_statutes(sources_detail)
+                else:
+                    from api.utils.source_type_mapper import get_default_sources_by_type
+                    sources_by_type = get_default_sources_by_type()
         
-        # legal_references는 sources_detail에서 추출 (deprecated)
-        extracted_legal_refs = self._extract_legal_references_from_sources_detail_only(sources_detail)
-        existing_legal_refs = metadata.get("legal_references", []) if isinstance(metadata.get("legal_references"), list) else []
-        all_legal_refs = list(set(extracted_legal_refs + existing_legal_refs))
-        
-        # 타입별 그룹화 (새로운 기능) - 판례의 참조 법령 포함
-        sources_by_type = self._get_sources_by_type_with_reference_statutes(sources_detail) if sources_detail else get_default_sources_by_type()
-        
-        # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
         return {
-            "sources_by_type": sources_by_type,  # 유일한 필요한 필드
+            "sources_by_type": sources_by_type,
             "related_questions": metadata.get("related_questions", []) if isinstance(metadata.get("related_questions"), list) else [],
-            # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
-            "sources": metadata.get("sources", []) if isinstance(metadata.get("sources"), list) else [],  # deprecated: sources_by_type에서 재구성 가능
-            "legal_references": all_legal_refs,  # deprecated: sources_by_type에서 재구성 가능
-            "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
         }
     
     async def extract_from_state(self, session_id: str) -> Dict[str, List[Any]]:
-        """LangGraph state에서 sources 추출"""
+        """LangGraph state에서 sources 추출 (retrieved_docs에서 직접 sources_by_type 생성)"""
         if not self.workflow_service or not self.workflow_service.app:
             logger.warning("Workflow service is not available")
             return ExtractionResult.empty().to_dict()
@@ -496,60 +497,24 @@ class SourcesExtractor:
             
             state_values = final_state.values
             
-            sources = self._extract_sources(state_values)
-            legal_references = self._extract_legal_references(state_values)
-            sources_detail = self._extract_sources_detail(state_values)
+            # retrieved_docs에서 직접 sources_by_type 생성
+            retrieved_docs = state_values.get("retrieved_docs", [])
             related_questions = self._extract_related_questions(state_values)
             
-            sources_detail = self._enhance_sources_detail_with_sources(sources, sources_detail)
-            sources_detail = self._normalize_sources_detail(sources_detail)
-            
-            # legal_references는 sources_detail에서 추출 (deprecated)
-            extracted_legal_refs = self._extract_legal_references_from_sources_detail_only(sources_detail)
-            
-            # 기존 legal_references와 병합 (하위 호환성)
-            existing_legal_refs = self._extract_legal_references(state_values)
-            legal_references = self._extract_legal_references_from_sources_detail(sources_detail, existing_legal_refs)
-            
-            # 모든 legal_references 병합 (중복 제거)
-            all_legal_refs = list(set(extracted_legal_refs + legal_references))
-            
-            # 타입별 그룹화 (새로운 기능)
-            sources_by_type = self._get_sources_by_type(sources_detail)
-            
-            # 판례/결정례/해석례에서 참조조문 추출하여 법령 추가
-            extracted_statutes = self._extract_statutes_from_reference_clauses(sources_detail)
-            
-            if extracted_statutes:
-                # 기존 statutes_articles와 병합 (중복 제거)
-                existing_statutes = sources_by_type.get("statutes_articles", [])
-                existing_keys = {
-                    f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
-                    for s in existing_statutes if isinstance(s, dict)
-                }
-                
-                for statute in extracted_statutes:
-                    statute_key = f"{statute.get('statute_name', '')}_{statute.get('article_no', '')}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
-                    if statute_key not in existing_keys:
-                        # _clean_source_for_client를 통해 정리하여 name과 statute_name이 제대로 설정되도록 함
-                        cleaned_statute = self._clean_source_for_client(statute)
-                        if cleaned_statute:
-                            existing_statutes.append(cleaned_statute)
-                            existing_keys.add(statute_key)
-                
-                sources_by_type["statutes_articles"] = existing_statutes
-                logger.info(f"Extracted {len(extracted_statutes)} statutes from reference clauses")
+            if retrieved_docs and isinstance(retrieved_docs, list):
+                logger.info(f"[extract_from_state] retrieved_docs에서 sources_by_type 생성: {len(retrieved_docs)}개 문서")
+                sources_by_type = self._generate_sources_by_type_from_retrieved_docs(retrieved_docs)
+            else:
+                logger.warning(f"[extract_from_state] retrieved_docs가 없거나 유효하지 않음: type={type(retrieved_docs).__name__}")
+                from api.utils.source_type_mapper import get_default_sources_by_type
+                sources_by_type = get_default_sources_by_type()
             
             logger.info(f"Sources extracted from session {session_id}: {len(sources_by_type.get('statutes_articles', []))} statutes, {len(sources_by_type.get('precedent_contents', []))} cases, {len(sources_by_type.get('precedent_chunks', []))} precedent chunks, {len(related_questions)} related_questions")
             
-            # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
+            # sources_by_type만 반환
             return {
                 "sources_by_type": sources_by_type,  # 유일한 필요한 필드
                 "related_questions": related_questions,
-                # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
-                "sources": sources,  # deprecated: sources_by_type에서 재구성 가능
-                "legal_references": all_legal_refs,  # deprecated: sources_by_type에서 재구성 가능
-                "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
             }
         except Exception as e:
             logger.error(f"Error extracting sources from state: {e}", exc_info=True)
@@ -654,7 +619,7 @@ class SourcesExtractor:
         if article_no:
             # 다른 문서들에서 같은 조문 번호를 가진 법령명 찾기
             for other_doc in all_docs:
-                if other_doc.get("type") == "case_paragraph":
+                if other_doc.get("type") == "precedent_content":
                     other_content = other_doc.get("content") or other_doc.get("text") or ""
                     # "민법 제XXX조" 패턴 찾기
                     pattern = r'([가-힣]{1,20}법)\s*제\s*' + re.escape(article_no) + r'\s*조'
@@ -738,7 +703,7 @@ class SourcesExtractor:
             if key in doc and not merged_metadata.get(key):
                 merged_metadata[key] = doc[key]
         
-        if source_type == "case_paragraph":
+        if source_type == "precedent_content":
             court = merged_metadata.get("court") or ""
             case_name = merged_metadata.get("casenames") or ""
             doc_id = merged_metadata.get("doc_id") or merged_metadata.get("case_id") or ""
@@ -916,8 +881,8 @@ class SourcesExtractor:
         
         if source_type == "statute_article":
             return self.source_processor.process_statute_article(doc, metadata)
-        elif source_type == "case_paragraph":
-            return self.source_processor.process_case_paragraph(doc, metadata)
+        elif source_type == "precedent_content":
+            return self.source_processor.process_precedent_content(doc, metadata)
         elif source_type == "decision_paragraph":
             return self.source_processor.process_decision_paragraph(doc, metadata)
         elif source_type == "interpretation_paragraph":
@@ -1312,11 +1277,240 @@ class SourcesExtractor:
         
         return []
     
+    def _generate_sources_by_type_from_retrieved_docs(
+        self, 
+        retrieved_docs: List[Dict[str, Any]]
+    ) -> Dict[str, List[Any]]:
+        """retrieved_docs에서 직접 sources_by_type 생성"""
+        logger.info(
+            f"[_generate_sources_by_type_from_retrieved_docs] Called with "
+            f"{len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'} retrieved_docs, "
+            f"type={type(retrieved_docs).__name__}"
+        )
+        if not isinstance(retrieved_docs, list) or not retrieved_docs:
+            logger.warning(
+                f"[_generate_sources_by_type_from_retrieved_docs] ⚠️ retrieved_docs가 유효하지 않습니다: "
+                f"type={type(retrieved_docs).__name__}, "
+                f"is_list={isinstance(retrieved_docs, list)}, "
+                f"length={len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'}"
+            )
+            from api.utils.source_type_mapper import get_default_sources_by_type
+            return get_default_sources_by_type()
+        
+        try:
+            # 🔥 정규화 함수로 type 통합 (단일 소스 원칙)
+            from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_documents_type
+            
+            # normalize_documents_type 호출 전에 원본 type 정보 확인 및 로깅
+            logger.debug(
+                f"[_generate_sources_by_type_from_retrieved_docs] Before normalize_documents_type: "
+                f"retrieved_docs count={len(retrieved_docs)}, "
+                f"types={[doc.get('type', 'None') if isinstance(doc, dict) else 'N/A' for doc in retrieved_docs[:5]]}"
+            )
+            
+            normalized_docs = normalize_documents_type(retrieved_docs)
+            
+            # normalize_documents_type 호출 후 type 정보 확인 및 로깅
+            logger.debug(
+                f"[_generate_sources_by_type_from_retrieved_docs] After normalize_documents_type: "
+                f"normalized_docs count={len(normalized_docs)}, "
+                f"types={[doc.get('type', 'None') if isinstance(doc, dict) else 'N/A' for doc in normalized_docs[:5]]}"
+            )
+            
+            # sources_detail 형식으로 변환 (내부적으로 _get_sources_by_type_with_reference_statutes가 필요)
+            # 하지만 sources_detail을 거치지 않고 직접 sources_by_type을 생성
+            sources_detail = []
+            UnifiedSourceFormatter = None
+            try:
+                from lawfirm_langgraph.core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+            except (ImportError, AttributeError):
+                try:
+                    from core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+                except (ImportError, AttributeError):
+                    try:
+                        from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter
+                    except (ImportError, AttributeError):
+                        pass
+            
+            if UnifiedSourceFormatter is None:
+                logger.warning("UnifiedSourceFormatter not found, using fallback method")
+                from api.utils.source_type_mapper import get_default_sources_by_type
+                return get_default_sources_by_type()
+            
+            formatter = UnifiedSourceFormatter()
+            
+            for doc in normalized_docs:
+                if not isinstance(doc, dict):
+                    continue
+                
+                # 🔥 정규화 후 doc.type만 확인 (단일 소스)
+                source_type = doc.get("type") or doc.get("source_type") or "unknown"
+                
+                # 🔥 개선: 중앙화된 정규화 함수 사용
+                source_type = normalize_source_type(source_type)
+                
+                # merged_metadata 초기화
+                metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                merged_metadata = metadata.copy()
+                merged_metadata["type"] = source_type
+                merged_metadata["source_type"] = source_type
+                
+                # 최상위 레벨 필드도 merged_metadata에 포함
+                for key in [
+                    "chunk_id", "source_id", "id",
+                    "search_type", "original_search_type",
+                    "relevance_score", "cross_encoder_score", "original_score", 
+                    "keyword_match_score", "combined_relevance_score",
+                    "statute_name", "law_name", "article_no", "article_number", 
+                    "clause_no", "item_no", "statute_id", "law_id",
+                    "court", "doc_id", "casenames", "case_name", "precedent_id",
+                    "org", "title", "announce_date", "decision_date", "response_date",
+                    "effective_date", "proclamation_number", "category", "domain",
+                    "section_type", "referenced_articles", "referenced_precedents",
+                    "abbrv", "statute_abbrv", "law_abbrv",
+                ]:
+                    if key in doc:
+                        merged_metadata[key] = doc[key]
+                
+                # precedent_content의 경우 casenames 확인
+                if source_type == "precedent_content":
+                    if "casenames" in doc:
+                        merged_metadata["casenames"] = doc["casenames"]
+                    elif "case_name" in doc:
+                        merged_metadata["case_name"] = doc["case_name"]
+                    elif isinstance(metadata, dict):
+                        if "casenames" in metadata:
+                            merged_metadata["casenames"] = metadata["casenames"]
+                        elif "case_name" in metadata:
+                            merged_metadata["case_name"] = metadata["case_name"]
+                
+                source_info_detail = formatter.format_source(source_type, merged_metadata)
+                
+                # 원본 문서 URL 생성
+                source_id = merged_metadata.get("source_id") or doc.get("source_id") or merged_metadata.get("id")
+                original_url = None
+                if source_id and source_type:
+                    original_url = f"/api/documents/original/{source_type}/{source_id}"
+                
+                detail_dict = {
+                    "name": source_info_detail.name,
+                    "type": source_info_detail.type,
+                    "url": source_info_detail.url or "",
+                    "original_url": original_url,
+                    "metadata": source_info_detail.metadata or {}
+                }
+                
+                # 타입별 필드 추가
+                if source_type == "precedent_content":
+                    doc_id = (
+                        doc.get("doc_id") or
+                        doc.get("case_id") or
+                        merged_metadata.get("doc_id") or 
+                        merged_metadata.get("case_id") or
+                        ""
+                    )
+                    if doc_id:
+                        detail_dict["case_number"] = doc_id
+                        detail_dict["doc_id"] = doc_id
+                        if not detail_dict.get("name") or detail_dict.get("name") == "판례":
+                            detail_dict["name"] = doc_id
+                
+                if source_info_detail.metadata:
+                    meta = source_info_detail.metadata
+                    if source_type == "statute_article":
+                        if meta.get("statute_name"):
+                            detail_dict["statute_name"] = meta["statute_name"]
+                        if meta.get("article_no"):
+                            detail_dict["article_no"] = meta["article_no"]
+                        if meta.get("clause_no"):
+                            detail_dict["clause_no"] = meta["clause_no"]
+                        if meta.get("item_no"):
+                            detail_dict["item_no"] = meta["item_no"]
+                    elif source_type == "precedent_content":
+                        if "case_number" not in detail_dict or not detail_dict.get("case_number"):
+                            doc_id = (
+                                meta.get("doc_id") or 
+                                merged_metadata.get("doc_id") or 
+                                doc.get("doc_id") or 
+                                ""
+                            )
+                            if doc_id:
+                                detail_dict["case_number"] = doc_id
+                                detail_dict["doc_id"] = doc_id
+                        if meta.get("court"):
+                            detail_dict["court"] = meta["court"]
+                        casenames = (
+                            meta.get("casenames") or 
+                            meta.get("case_name") or
+                            merged_metadata.get("casenames") or 
+                            merged_metadata.get("case_name") or
+                            doc.get("casenames") or
+                            doc.get("case_name")
+                        )
+                        if casenames:
+                            detail_dict["case_name"] = casenames
+                
+                # content 필드 정리
+                content = self._normalize_content(doc.get("content") or doc.get("text"))
+                if content:
+                    detail_dict["content"] = content
+                
+                # type=unknown인 경우 normalize_document_type으로 재시도
+                if source_type.lower() == "unknown":
+                    try:
+                        from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                        normalized_doc = normalize_document_type(doc.copy())
+                        inferred_type = normalized_doc.get("type")
+                        if inferred_type and inferred_type.lower() != "unknown":
+                            source_type = inferred_type
+                            detail_dict["type"] = inferred_type
+                            logger.info(
+                                f"[_generate_sources_by_type_from_retrieved_docs] ✅ Inferred type: "
+                                f"unknown → {inferred_type} for doc keys={list(doc.keys())[:10]}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"[_generate_sources_by_type_from_retrieved_docs] Failed to infer type: {e}")
+                
+                # 불필요한 필드 제거 및 정리
+                cleaned_dict = self._clean_source_for_client(detail_dict)
+                if cleaned_dict:
+                    sources_detail.append(cleaned_dict)
+                    logger.debug(
+                        f"[_generate_sources_by_type_from_retrieved_docs] ✅ Added source: "
+                        f"type={cleaned_dict.get('type')}, name={cleaned_dict.get('name', 'N/A')[:50]}"
+                    )
+                else:
+                    logger.warning(
+                        f"[_generate_sources_by_type_from_retrieved_docs] ⚠️ cleaned_dict is None for doc: "
+                        f"type={source_type}, keys={list(doc.keys())[:10]}"
+                    )
+            
+            logger.info(
+                f"[_generate_sources_by_type_from_retrieved_docs] Generated {len(sources_detail)} sources_detail "
+                f"from {len(normalized_docs)} normalized_docs"
+            )
+            
+            # sources_detail에서 sources_by_type 생성 (참조 법령 포함)
+            sources_by_type = self._get_sources_by_type_with_reference_statutes(sources_detail)
+            
+            logger.info(
+                f"[_generate_sources_by_type_from_retrieved_docs] ✅ Generated sources_by_type: "
+                f"statutes={len(sources_by_type.get('statutes_articles', []))}, "
+                f"precedents={len(sources_by_type.get('precedent_contents', []))}, "
+                f"chunks={len(sources_by_type.get('precedent_chunks', []))}"
+            )
+            
+            return sources_by_type
+        except Exception as e:
+            logger.error(f"Error generating sources_by_type from retrieved_docs: {e}", exc_info=True)
+            from api.utils.source_type_mapper import get_default_sources_by_type
+            return get_default_sources_by_type()
+    
     def _generate_sources_detail_from_retrieved_docs(
         self, 
         retrieved_docs: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """retrieved_docs에서 sources_detail 생성"""
+        """retrieved_docs에서 sources_detail 생성 (deprecated - _generate_sources_by_type_from_retrieved_docs 사용 권장)"""
         logger.info(
             f"[_generate_sources_detail_from_retrieved_docs] Called with "
             f"{len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'} retrieved_docs, "
@@ -1362,6 +1556,9 @@ class SourcesExtractor:
                 # 🔥 정규화 후 doc.type만 확인 (단일 소스)
                 source_type = doc.get("type", "unknown")
                 
+                # 🔥 개선: 중앙화된 정규화 함수 사용
+                source_type = normalize_source_type(source_type)
+                
                 # 디버깅: source_type 추출 과정 로깅
                 logger.info(
                     f"[_generate_sources_detail_from_retrieved_docs] source_type 추출: "
@@ -1399,8 +1596,8 @@ class SourcesExtractor:
                     if key in doc:
                         merged_metadata[key] = doc[key]
                 
-                # case_paragraph의 경우 casenames를 여러 위치에서 확인 (우선순위: doc 최상위 > metadata)
-                if source_type == "case_paragraph":
+                # precedent_content의 경우 casenames를 여러 위치에서 확인 (우선순위: doc 최상위 > metadata)
+                if source_type == "precedent_content":
                     # 1. doc 최상위 레벨에서 확인 (가장 우선)
                     if "casenames" in doc:
                         merged_metadata["casenames"] = doc["casenames"]
@@ -1447,8 +1644,8 @@ class SourcesExtractor:
                     "metadata": source_info_detail.metadata or {}
                 }
                 
-                # case_paragraph의 경우 doc_id를 최상위 레벨에도 포함 (우선순위 높음)
-                if source_type == "case_paragraph":
+                # precedent_content의 경우 doc_id를 최상위 레벨에도 포함 (우선순위 높음)
+                if source_type == "precedent_content":
                     doc_id = (
                         doc.get("doc_id") or
                         doc.get("case_id") or
@@ -1477,7 +1674,7 @@ class SourcesExtractor:
                             detail_dict["clause_no"] = meta["clause_no"]
                         if meta.get("item_no"):
                             detail_dict["item_no"] = meta["item_no"]
-                    elif source_type == "case_paragraph":
+                    elif source_type == "precedent_content":
                         # doc_id가 아직 설정되지 않았으면 meta에서 확인
                         if "case_number" not in detail_dict or not detail_dict.get("case_number"):
                             doc_id = (
@@ -1518,7 +1715,7 @@ class SourcesExtractor:
                         else:
                             # casenames가 없으면 로깅 (디버깅용)
                             logger.warning(
-                                f"[_generate_sources_detail_from_retrieved_docs] case_paragraph에 casenames가 없습니다. "
+                                f"[_generate_sources_detail_from_retrieved_docs] precedent_content에 casenames가 없습니다. "
                                 f"doc keys: {list(doc.keys())}, "
                                 f"doc.metadata keys: {list(doc.get('metadata', {}).keys()) if isinstance(doc.get('metadata'), dict) else []}, "
                                 f"merged_metadata keys: {list(merged_metadata.keys())}, "
@@ -1585,7 +1782,7 @@ class SourcesExtractor:
             if not source_type:
                 metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                 if metadata.get("case_id") or metadata.get("court") or metadata.get("casenames"):
-                    source_type = "case_paragraph"
+                    source_type = "precedent_content"
                 elif metadata.get("decision_id") or metadata.get("org"):
                     source_type = "decision_paragraph"
                 elif metadata.get("interpretation_number") or (metadata.get("org") and metadata.get("title")):
@@ -1773,7 +1970,7 @@ class SourcesExtractor:
                 if item_no:
                     detail_dict["item_no"] = item_no
             
-            elif source_type == "case_paragraph":
+            elif source_type == "precedent_content":
                 # 판례 정보 추출
                 court = merged_metadata.get("court") or ""
                 doc_id = merged_metadata.get("doc_id") or merged_metadata.get("case_id") or ""
@@ -2082,7 +2279,7 @@ class SourcesExtractor:
                 return " ".join(title_parts)
             return cleaned.get("name", "법령")
         
-        elif source_type == "case_paragraph":
+        elif source_type == "precedent_content":
             # 제목: "판례번호" 또는 "사건명 (판례번호)"
             case_number = cleaned.get("case_number") or cleaned.get("doc_id")
             case_name = cleaned.get("case_name") or cleaned.get("casenames")
@@ -2210,7 +2407,7 @@ class SourcesExtractor:
                 "version_effective_date": cleaned.get("version_effective_date") or source_item.get("version_effective_date") or metadata.get("version_effective_date"),  # 버전 시행일
             }
         
-        elif source_type == "case_paragraph":
+        elif source_type == "precedent_content":
             # case_name 추출: 여러 위치에서 확인 (우선순위 순)
             case_name = (
                 cleaned.get("case_name") or 
@@ -2311,7 +2508,7 @@ class SourcesExtractor:
             
             # name 필드 처리 (타입별로 다르게 처리)
             source_type = source_item.get("type", "")
-            if source_type == "case_paragraph":
+            if source_type == "precedent_content":
                 # 판례의 경우: case_number 또는 doc_id를 name으로 사용
                 # 최상위 레벨에서 먼저 확인 (이미 _normalize_sources_detail에서 이동됨)
                 case_number = source_item.get("case_number")
@@ -2464,7 +2661,7 @@ class SourcesExtractor:
             # 타입별 필드 복사 (빈 값 제외)
             type_specific_fields = {
                 "statute_article": ["statute_name", "article_no", "clause_no", "item_no"],
-                "case_paragraph": ["case_number", "case_name", "court", "decision_date"],
+                "precedent_content": ["case_number", "case_name", "court", "decision_date"],
                 "decision_paragraph": ["decision_number", "org", "decision_date", "result"],
                 "interpretation_paragraph": ["interpretation_number", "title", "org", "response_date"],
                 "regulation_paragraph": ["title", "doc_id"]
@@ -2486,7 +2683,7 @@ class SourcesExtractor:
                                 cleaned[field] = value
                 
                 # 타입별로 필드 복사 후 name 업데이트 (개선)
-                if source_type == "case_paragraph":
+                if source_type == "precedent_content":
                     # case_number가 있으면 name으로 설정
                     if "case_number" in cleaned and cleaned["case_number"]:
                         cleaned["name"] = cleaned["case_number"]
@@ -2608,12 +2805,12 @@ class SourcesExtractor:
                         continue
                     
                     # 타입별 필요한 필드 포함
-                    if source_type == "case_paragraph" and key in ["doc_id", "case_id", "announce_date", "decision_date", "court", "casenames", "case_name"]:
+                    if source_type == "precedent_content" and key in ["doc_id", "case_id", "announce_date", "decision_date", "court", "casenames", "case_name"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                             cleaned_metadata[key] = value
                 
-                # case_paragraph의 경우 metadata에 casenames가 있을 수 있으므로 추가 확인
-                if source_type == "case_paragraph":
+                # precedent_content의 경우 metadata에 casenames가 있을 수 있으므로 추가 확인
+                if source_type == "precedent_content":
                     # metadata에서 casenames나 case_name이 있으면 cleaned_metadata에 포함 (위 루프에서 누락되었을 수 있음)
                     if "casenames" in metadata and "casenames" not in cleaned_metadata:
                         casenames_val = metadata.get("casenames")
@@ -2647,7 +2844,7 @@ class SourcesExtractor:
                             cleaned_metadata[key] = value
                 
                 # metadata에서 타입별 필드 추출 (이미 최상위에 없을 경우)
-                if source_type == "case_paragraph":
+                if source_type == "precedent_content":
                     if "case_number" not in cleaned and "doc_id" in cleaned_metadata:
                         cleaned["case_number"] = cleaned_metadata["doc_id"]
                     # case_name 추출: 여러 위치에서 확인 (우선순위 순)
@@ -2705,7 +2902,7 @@ class SourcesExtractor:
                         else:
                             # 모든 방법이 실패하면 빈 문자열로 설정 (하지만 로그 남김)
                             if not cleaned.get("name"):
-                                logger.warning(f"[_clean_source_for_client] case_paragraph에 case_number/doc_id가 없습니다. source_item keys: {list(source_item.keys())}, metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else []}")
+                                logger.warning(f"[_clean_source_for_client] precedent_content에 case_number/doc_id가 없습니다. source_item keys: {list(source_item.keys())}, metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else []}")
                                 # name이 없으면 빈 문자열로 설정 (하지만 최소한 필드는 존재하도록)
                                 cleaned["name"] = ""
                     
@@ -2749,11 +2946,11 @@ class SourcesExtractor:
                             if doc_id:
                                 cleaned["name"] = str(doc_id).strip()
                                 cleaned["case_number"] = str(doc_id).strip()
-                                logger.debug(f"[_clean_source_for_client] case_paragraph의 name을 source_item의 doc_id로 설정: {doc_id}")
+                                logger.debug(f"[_clean_source_for_client] precedent_content의 name을 source_item의 doc_id로 설정: {doc_id}")
                             else:
                                 # 모든 방법이 실패하면 "판례"로 설정
                                 cleaned["name"] = "판례"
-                                logger.warning(f"[_clean_source_for_client] case_paragraph의 name이 없어서 '판례'로 설정했습니다. source_item keys: {list(source_item.keys())}, metadata keys: {list(source_item.get('metadata', {}).keys()) if isinstance(source_item.get('metadata'), dict) else []}")
+                                logger.warning(f"[_clean_source_for_client] precedent_content의 name이 없어서 '판례'로 설정했습니다. source_item keys: {list(source_item.keys())}, metadata keys: {list(source_item.get('metadata', {}).keys()) if isinstance(source_item.get('metadata'), dict) else []}")
                 elif source_type == "statute_article":
                     # statute_name이 아직 설정되지 않았거나 "법령"인 경우에만 metadata에서 추출
                     current_statute_name = cleaned.get("statute_name", "")
@@ -2933,6 +3130,30 @@ class SourcesExtractor:
             if not isinstance(metadata, dict):
                 metadata = {}
             
+            # 🔥 개선: 중앙화된 정규화 함수 사용
+            source_type = normalize_source_type(source_type)
+            
+            # 🔥 개선: type이 "unknown"이거나 빈 문자열인 경우 normalize_document_type으로 추론
+            if not source_type or source_type.lower() == "unknown":
+                try:
+                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                    normalized_doc = normalize_document_type(detail.copy())
+                    inferred_type = normalized_doc.get("type")
+                    if inferred_type and inferred_type.lower() != "unknown":
+                        source_type = inferred_type
+                        detail["type"] = inferred_type
+                        # metadata에도 저장
+                        if "metadata" not in detail:
+                            detail["metadata"] = {}
+                        if not isinstance(detail["metadata"], dict):
+                            detail["metadata"] = {}
+                        detail["metadata"]["type"] = inferred_type
+                        detail["metadata"]["source_type"] = inferred_type
+                        logger.debug(f"[_normalize_sources_detail] ✅ Inferred type for unknown document: {inferred_type}")
+                except (ImportError, Exception) as e:
+                    logger.debug(f"[_normalize_sources_detail] Failed to infer type for unknown document: {e}")
+                    # 추론 실패 시 "unknown" 유지
+            
             # content 필드 정리
             content = self._normalize_content(detail.get("content") or detail.get("text"))
             
@@ -3021,7 +3242,7 @@ class SourcesExtractor:
                 elif statute_name:
                     normalized_detail["name"] = str(statute_name).strip()
             
-            elif source_type == "case_paragraph":
+            elif source_type == "precedent_content":
                 # case_number 추출: 여러 위치에서 확인 (우선순위 순)
                 case_number = (
                     detail.get("case_number") or 
@@ -3072,7 +3293,7 @@ class SourcesExtractor:
                     # 여전히 없으면 로깅 및 "판례"로 설정
                     if not normalized_detail.get("case_number"):
                         logger.warning(
-                            f"[_normalize_sources_detail] case_paragraph에 case_number/doc_id가 없습니다. "
+                            f"[_normalize_sources_detail] precedent_content에 case_number/doc_id가 없습니다. "
                             f"detail keys: {list(detail.keys())}, metadata keys: {list(metadata.keys())}, "
                             f"content length: {len(content) if content else 0}"
                         )
@@ -3155,7 +3376,7 @@ class SourcesExtractor:
         # source_type 값 기반으로 먼저 그룹화
         grouped_by_source_type = {
             "statute_article": [],
-            "case_paragraph": [],
+            "precedent_content": [],
             "decision_paragraph": [],
             "interpretation_paragraph": [],
             "regulation_paragraph": []
@@ -3166,6 +3387,25 @@ class SourcesExtractor:
                 continue
             
             source_type = detail.get("type", "")
+            
+            # 🔥 개선: 중앙화된 정규화 함수 사용
+            source_type = normalize_source_type(source_type)
+            
+            # 🔥 개선: "unknown" 타입도 처리 (normalize_document_type으로 추론 시도)
+            if not source_type or source_type.lower() == "unknown":
+                try:
+                    from lawfirm_langgraph.core.utils.document_type_normalizer import normalize_document_type
+                    normalized_doc = normalize_document_type(detail.copy())
+                    inferred_type = normalized_doc.get("type")
+                    if inferred_type and inferred_type.lower() != "unknown":
+                        source_type = inferred_type
+                        detail["type"] = inferred_type
+                        logger.debug(f"[_get_sources_by_type] ✅ Inferred type for unknown document: {inferred_type}")
+                except (ImportError, Exception) as e:
+                    logger.debug(f"[_get_sources_by_type] Failed to infer type for unknown document: {e}")
+                    # 추론 실패 시 건너뛰기
+                    continue
+            
             if source_type in grouped_by_source_type:
                 # 클라이언트용으로 정리
                 cleaned = self._clean_source_for_client(detail)
@@ -3236,7 +3476,7 @@ class SourcesExtractor:
             metadata = detail.get("metadata", {})
             
             # 판례, 결정례, 해석례만 처리
-            if source_type not in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+            if source_type not in ["precedent_content", "decision_paragraph", "interpretation_paragraph"]:
                 continue
             
             # 데이터베이스에서 참조조문 가져오기
@@ -3318,26 +3558,166 @@ class SourcesExtractor:
             import json
             
             # doc_id 추출
-            doc_id = (
-                detail.get("doc_id") or 
-                detail.get("metadata", {}).get("doc_id") or
+            # 🔥 CRITICAL: doc_id 추출 우선순위 조정
+            # 1순위: precedents.id (precedent_contents.precedent_id) - 가장 빠른 인덱스 조회
+            # 2순위: precedent_contents.id - 직접 조회 가능
+            # 3순위: case_number - 판례일련번호 형식
+            metadata = detail.get("metadata", {}) if isinstance(detail.get("metadata"), dict) else {}
+            
+            # precedents.id 또는 precedent_contents.precedent_id 추출
+            precedent_id = (
+                detail.get("precedent_id") or
+                metadata.get("precedent_id") or
+                detail.get("id")  # precedent_contents.id일 수도 있음
+            )
+            
+            # case_number 추출 (fallback)
+            case_number = (
                 detail.get("case_number") or
+                detail.get("doc_id") or 
+                metadata.get("doc_id") or
+                metadata.get("case_number") or
                 detail.get("decision_number") or
                 detail.get("interpretation_number")
             )
             
-            if not doc_id:
-                return []
-            
             db = get_session()
             try:
                 # source_type에 따라 테이블 선택
-                if source_type == "case_paragraph":
+                if source_type == "precedent_content":
                     # precedent_contents 테이블에서 referenced_articles 조회
-                    result = db.execute(
-                        text("SELECT referenced_articles FROM precedent_contents WHERE id = :doc_id OR precedent_id = :doc_id LIMIT 1"),
-                        {"doc_id": doc_id}
-                    ).fetchone()
+                    # 🔥 CRITICAL: 우선순위에 따라 조회 방법 결정
+                    # 1. precedents.id (precedent_contents.precedent_id) - 가장 빠름
+                    # 2. precedent_contents.id - 빠름
+                    # 3. precedents.case_number - 상대적으로 느림 (JOIN 필요)
+                    
+                    result = None
+                    
+                    # 1순위: precedents.id로 직접 조회 (가장 빠름)
+                    if precedent_id:
+                        try:
+                            precedent_id_int = int(precedent_id) if isinstance(precedent_id, (str, int)) else None
+                            if precedent_id_int is not None:
+                                # precedent_contents.precedent_id로 조회 (인덱스 활용)
+                                result = db.execute(
+                                    text("""
+                                        SELECT referenced_articles 
+                                        FROM precedent_contents 
+                                        WHERE precedent_id = :precedent_id 
+                                        LIMIT 1
+                                    """),
+                                    {"precedent_id": precedent_id_int}
+                                ).fetchone()
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 2순위: precedent_contents.id로 조회
+                    if not result or not result[0]:
+                        if precedent_id:
+                            try:
+                                content_id_int = int(precedent_id) if isinstance(precedent_id, (str, int)) else None
+                                if content_id_int is not None:
+                                    result = db.execute(
+                                        text("""
+                                            SELECT referenced_articles 
+                                            FROM precedent_contents 
+                                            WHERE id = :content_id 
+                                            LIMIT 1
+                                        """),
+                                        {"content_id": content_id_int}
+                                    ).fetchone()
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    # 3순위: case_number로 조회 (판례일련번호 형식)
+                    if (not result or not result[0]) and case_number:
+                        # 판례일련번호 형식인지 확인
+                        import re
+                        case_number_pattern = r'^\d{4}[가-힣]+\d+$'
+                        is_case_number_format = bool(re.match(case_number_pattern, str(case_number)))
+                        
+                        if is_case_number_format:
+                            # 판례일련번호 형식인 경우: 
+                            # 1. precedents.case_number로 precedents.id를 먼저 찾고
+                            # 2. 그 id로 precedent_contents를 조회 (인덱스 활용)
+                            precedent_id_result = db.execute(
+                                text("""
+                                    SELECT id FROM precedents 
+                                    WHERE case_number = :case_number 
+                                    LIMIT 1
+                                """),
+                                {"case_number": str(case_number)}
+                            ).fetchone()
+                            
+                            if precedent_id_result and precedent_id_result[0]:
+                                # precedents.id를 찾았으면, precedent_contents를 인덱스로 빠르게 조회
+                                found_precedent_id = precedent_id_result[0]
+                                result = db.execute(
+                                    text("""
+                                        SELECT referenced_articles 
+                                        FROM precedent_contents 
+                                        WHERE precedent_id = :precedent_id 
+                                        LIMIT 1
+                                    """),
+                                    {"precedent_id": found_precedent_id}
+                                ).fetchone()
+                            else:
+                                result = None
+                        else:
+                            # 판례일련번호 형식이 아닌 경우: 숫자인지 확인
+                            try:
+                                case_number_int = int(case_number) if isinstance(case_number, (str, int)) else None
+                                if case_number_int is not None:
+                                    # 숫자인 경우: precedent_contents.id로 조회 시도
+                                    result = db.execute(
+                                        text("""
+                                            SELECT referenced_articles 
+                                            FROM precedent_contents 
+                                            WHERE id = :content_id
+                                            LIMIT 1
+                                        """),
+                                        {"content_id": case_number_int}
+                                    ).fetchone()
+                                    
+                                    # precedent_contents.id로 찾지 못한 경우, precedents.precedent_id로 조회
+                                    if not result or not result[0]:
+                                        result = db.execute(
+                                            text("""
+                                                SELECT pc.referenced_articles 
+                                                FROM precedent_contents pc
+                                                JOIN precedents p ON pc.precedent_id = p.id
+                                                WHERE p.precedent_id = :precedent_serial_id
+                                                LIMIT 1
+                                            """),
+                                            {"precedent_serial_id": case_number_int}
+                                        ).fetchone()
+                                else:
+                                    # 숫자도 아니고 판례일련번호 형식도 아닌 경우: precedents.case_number로 조회 시도
+                                    result = db.execute(
+                                        text("""
+                                            SELECT pc.referenced_articles 
+                                            FROM precedent_contents pc
+                                            JOIN precedents p ON pc.precedent_id = p.id
+                                            WHERE p.case_number = :case_number
+                                            LIMIT 1
+                                        """),
+                                        {"case_number": str(case_number)}
+                                    ).fetchone()
+                            except (ValueError, TypeError):
+                                # 변환 실패 시 precedents.case_number로 조회
+                                result = db.execute(
+                                    text("""
+                                        SELECT pc.referenced_articles 
+                                        FROM precedent_contents pc
+                                        JOIN precedents p ON pc.precedent_id = p.id
+                                        WHERE p.case_number = :case_number
+                                        LIMIT 1
+                                    """),
+                                    {"case_number": str(case_number)}
+                                ).fetchone()
+                    
+                    if not result or not result[0]:
+                        return []
                 elif source_type == "decision_paragraph":
                     # decisions 테이블은 PostgreSQL에 존재하지 않을 수 있음
                     logger.debug(f"decisions table not available in PostgreSQL for doc_id={doc_id}")
@@ -3538,7 +3918,7 @@ class SourcesExtractor:
         if case_match:
             parsed["doc_id"] = f"case_{case_match.group(1)}"
             parsed["case_id"] = case_match.group(1)
-            parsed["source_type"] = "case_paragraph"
+            parsed["source_type"] = "precedent_content"
         
         decision_pattern = r'(?:decision_|detc_)([가-힣0-9\-]+)'
         decision_match = re.search(decision_pattern, source_str)
@@ -3648,7 +4028,7 @@ class SourcesExtractor:
                 metadata = {}
                 detail["metadata"] = metadata
             
-            if source_type == "case_paragraph":
+            if source_type == "precedent_content":
                 doc_id = detail.get("case_number") or metadata.get("doc_id") or ""
                 
                 if doc_id:
@@ -3717,19 +4097,19 @@ class SourcesExtractor:
         
         for doc_id, parsed_info in sources_parsed.items():
             if doc_id not in existing_doc_ids:
-                source_type_from_sources = parsed_info.get("source_type", "case_paragraph")
+                source_type_from_sources = parsed_info.get("source_type", "precedent_content")
                 if not source_type_from_sources:
                     if "case_" in doc_id:
-                        source_type_from_sources = "case_paragraph"
+                        source_type_from_sources = "precedent_content"
                     elif "decision_" in doc_id or "detc_" in doc_id:
                         source_type_from_sources = "decision_paragraph"
                     elif "interp_" in doc_id or "expc_" in doc_id or "interpretation_" in doc_id:
                         source_type_from_sources = "interpretation_paragraph"
                 
-                if source_type_from_sources == "case_paragraph":
+                if source_type_from_sources == "precedent_content":
                     new_detail = {
                         "name": doc_id if doc_id else "판례",
-                        "type": "case_paragraph",
+                        "type": "precedent_content",
                         "url": self._generate_case_url(doc_id),
                         "metadata": {
                             "doc_id": doc_id,

@@ -7,6 +7,19 @@ import logging.handlers
 import os
 from pathlib import Path
 
+# TRACE 레벨 추가 (DEBUG보다 낮은 레벨, 값: 5)
+if not hasattr(logging, 'TRACE'):
+    logging.TRACE = 5
+    logging.addLevelName(logging.TRACE, "TRACE")
+    
+    # Logger 클래스에 trace 메서드 추가
+    def trace(self, message, *args, **kwargs):
+        """TRACE 레벨 로그"""
+        if self.isEnabledFor(logging.TRACE):
+            self._log(logging.TRACE, message, args, **kwargs)
+    
+    logging.Logger.trace = trace
+
 # Windows에서 multiprocessing 시작 방식 명시적 설정 (uvicorn reload와의 호환성)
 if sys.platform == "win32":
     import multiprocessing
@@ -22,7 +35,7 @@ logging.getLogger('transformers').setLevel(logging.ERROR)
 logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
 logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
 logging.getLogger('torch').setLevel(logging.ERROR)
-logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.TRACE)  # proactor 로그 과다 방지
 
 # 로그 레벨 환경 변수 읽기 (기본값: INFO)
 log_level_str = os.getenv("LOG_LEVEL", "info").upper()
@@ -379,17 +392,25 @@ async def startup_event():
         print(f"[DEBUG] Startup event - Number of handlers: {len(root_logger.handlers)}")
         test_logger.info("✅ Startup event - Logging configured and enabled!")
         
-        # ChatService 초기화하여 로그 확인
-        try:
-            from api.services.chat_service import get_chat_service
-            test_logger.info("Initializing ChatService during startup to verify logging...")
-            chat_service = get_chat_service()
-            if chat_service.is_available():
-                test_logger.info("✅ ChatService initialized successfully during startup")
-            else:
-                test_logger.warning("⚠️  ChatService initialized but workflow service is not available")
-        except Exception as e:
-            test_logger.error(f"Failed to initialize ChatService during startup: {e}", exc_info=True)
+        # ✅ 백그라운드에서 비동기로 ChatService 초기화 시작 (서버 시작을 막지 않음)
+        async def warmup_chat_service():
+            """백그라운드에서 ChatService 초기화 (warmup)"""
+            try:
+                # 약간의 지연 후 시작 (서버 시작 완료 후)
+                await asyncio.sleep(1)
+                test_logger.info("🔥 Starting ChatService warmup in background...")
+                from api.services.chat_service import get_chat_service
+                chat_service = get_chat_service()
+                if chat_service.is_available():
+                    test_logger.info("✅ ChatService warmup completed successfully")
+                else:
+                    test_logger.warning("⚠️  ChatService warmup completed but workflow service is not available")
+            except Exception as e:
+                test_logger.warning(f"⚠️  ChatService warmup failed (non-critical): {e}")
+        
+        # 백그라운드 태스크로 실행 (서버 시작을 막지 않음)
+        asyncio.create_task(warmup_chat_service())
+        test_logger.info("ChatService warmup started in background (non-blocking)")
     except (asyncio.CancelledError, KeyboardInterrupt):
         # Windows에서 reload 시 startup 이벤트가 취소될 수 있음
         # 또는 프로세스 간 통신 중단 시 발생할 수 있음
